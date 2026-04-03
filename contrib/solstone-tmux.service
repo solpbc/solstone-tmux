@@ -1,0 +1,14 @@
+[Unit]
+Description=Solstone Tmux Terminal Observer
+After=basic.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/solstone-tmux run
+Restart=on-failure
+RestartSec=5
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Install]
+WantedBy=default.target

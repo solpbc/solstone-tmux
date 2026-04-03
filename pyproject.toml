@@ -1,0 +1,17 @@
+[project]
+name = "solstone-tmux"
+version = "0.1.0"
+description = "Standalone tmux terminal observer for solstone"
+readme = "README.md"
+license = "AGPL-3.0-only"
+requires-python = ">=3.10"
+dependencies = [
+    "requests",
+]
+
+[project.scripts]
+solstone-tmux = "solstone_tmux.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
