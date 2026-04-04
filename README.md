@@ -4,10 +4,12 @@ Standalone tmux terminal observer for [solstone](https://solpbc.org). Captures t
 
 ## Install
 
+Packages are not yet on PyPI. Install from source:
+
 ```bash
-pipx install solstone-tmux
-# or
-uv tool install solstone-tmux
+git clone https://github.com/solpbc/solstone-tmux.git
+cd solstone-tmux
+pipx install .
 ```
 
 ## Setup
