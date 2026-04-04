@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
+import subprocess
 import time
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -56,15 +58,34 @@ class UploadClient:
     def ensure_registered(self, config: Config) -> bool:
         """Ensure the client has a valid key, auto-registering if needed.
 
+        Tries sol CLI first (no server needed), falls back to HTTP.
         Returns True if a key is available.
         """
         if self._key:
             return True
+
+        # Try sol CLI registration first
+        name = self._stream or "solstone-tmux"
+        sol = shutil.which("sol")
+        if sol:
+            try:
+                result = subprocess.run(
+                    [sol, "remote", "--json", "create", name],
+                    capture_output=True, text=True, timeout=10,
+                )
+                if result.returncode == 0:
+                    data = json.loads(result.stdout)
+                    self._key = data["key"]
+                    self._persist_key(config, self._key)
+                    logger.info(f"CLI-registered as '{name}' (key: {self._key[:8]}...)")
+                    return True
+            except (subprocess.TimeoutExpired, json.JSONDecodeError, KeyError, OSError) as e:
+                logger.debug(f"CLI registration failed: {e}")
+
         if not self._url:
             return False
 
         url = f"{self._url}/app/remote/api/create"
-        name = self._stream or "solstone-tmux"
 
         for attempt, delay in enumerate(self._retry_backoff):
             try:

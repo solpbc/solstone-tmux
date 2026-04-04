@@ -97,16 +97,34 @@ def cmd_setup(args: argparse.Namespace) -> int:
     config.ensure_dirs()
     save_config(config)
 
-    # Auto-register
+    # Auto-register — try sol CLI first (no server needed), fall back to HTTP
     if not config.key:
-        print("Registering with server...")
-        client = UploadClient(config)
-        if client.ensure_registered(config):
-            # Reload config to pick up persisted key
-            config = load_config()
-            print(f"Registered (key: {config.key[:8]}...)")
-        else:
-            print("Warning: registration failed. Run setup again when server is available.")
+        sol = shutil.which("sol")
+        if sol:
+            print("Registering via sol CLI...")
+            try:
+                result = subprocess.run(
+                    [sol, "remote", "--json", "create", config.stream],
+                    capture_output=True, text=True, timeout=10,
+                )
+                if result.returncode == 0:
+                    data = json.loads(result.stdout)
+                    config.key = data["key"]
+                    save_config(config)
+                    print(f"Registered (key: {config.key[:8]}...)")
+                else:
+                    print(f"CLI registration failed, trying HTTP...")
+            except (subprocess.TimeoutExpired, json.JSONDecodeError, KeyError, OSError):
+                print("CLI registration failed, trying HTTP...")
+
+        if not config.key:
+            print("Registering with server...")
+            client = UploadClient(config)
+            if client.ensure_registered(config):
+                config = load_config()
+                print(f"Registered (key: {config.key[:8]}...)")
+            else:
+                print("Warning: registration failed. Run setup again when server is available.")
     else:
         print(f"Already registered (key: {config.key[:8]}...)")
 
