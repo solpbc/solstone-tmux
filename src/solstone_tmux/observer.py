@@ -197,7 +197,7 @@ class TmuxObserver:
 
         try:
             while self.running:
-                await asyncio.sleep(1)
+                await asyncio.sleep(5)
                 self.capture()
 
                 elapsed = time.monotonic() - self.start_at_mono
