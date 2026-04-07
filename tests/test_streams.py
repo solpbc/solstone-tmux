@@ -33,8 +33,8 @@ class TestStreamName:
     def test_host_with_qualifier(self):
         assert stream_name(host="archon", qualifier="tmux") == "archon.tmux"
 
-    def test_remote(self):
-        assert stream_name(remote="laptop") == "laptop"
+    def test_observer(self):
+        assert stream_name(observer="laptop") == "laptop"
 
     def test_host_domain_stripped(self):
         assert stream_name(host="ja1r.local", qualifier="tmux") == "ja1r.tmux"

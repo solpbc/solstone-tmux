@@ -104,7 +104,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
             print("Registering via sol CLI...")
             try:
                 result = subprocess.run(
-                    [sol, "remote", "--json", "create", config.stream],
+                    [sol, "observer", "--json", "create", config.stream],
                     capture_output=True, text=True, timeout=10,
                 )
                 if result.returncode == 0:

@@ -12,7 +12,7 @@ check if solstone-tmux is already installed and running:
 
 ```
 systemctl --user status solstone-tmux
-sol remote list
+sol observer list
 ```
 
 if it's already active and connected, you're done.
@@ -33,7 +33,7 @@ if it's already active and connected, you're done.
 
 2. register the observer with solstone and save the API key:
    ```
-   sol remote create solstone-tmux
+   sol observer create solstone-tmux
    ```
 
 3. write the config to `~/.local/share/solstone-tmux/config/config.json`:
@@ -53,7 +53,7 @@ if it's already active and connected, you're done.
 5. verify it's running and connected:
    ```
    systemctl --user status solstone-tmux
-   sol remote list
+   sol observer list
    ```
 
 ## notes

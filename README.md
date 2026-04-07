@@ -14,10 +14,10 @@ pipx install .
 
 ## Setup
 
-### 1. Register a remote observer on the solstone server
+### 1. Register an observer on the solstone server
 
 ```bash
-sol remote create solstone-tmux
+sol observer create solstone-tmux
 ```
 
 This prints the server URL and API key. You'll need both for the next step.
@@ -29,7 +29,7 @@ Create `~/.local/share/solstone-tmux/config/config.json`:
 ```json
 {
   "server_url": "http://localhost:8000",
-  "key": "<api-key-from-sol-remote-create>",
+  "key": "<api-key-from-sol-observer-create>",
   "stream": "<hostname>.tmux",
   "capture_interval": 5,
   "segment_interval": 300
@@ -53,7 +53,7 @@ This writes the unit file to `~/.config/systemd/user/solstone-tmux.service`, ena
 ```bash
 systemctl --user status solstone-tmux
 solstone-tmux status
-sol remote list  # should show the new remote as "connected"
+sol observer list  # should show the observer as "connected"
 ```
 
 ## Manual run
