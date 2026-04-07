@@ -9,6 +9,12 @@ dependencies = [
     "requests",
 ]
 
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "ruff",
+]
+
 [project.scripts]
 solstone-tmux = "solstone_tmux.cli:main"
 
