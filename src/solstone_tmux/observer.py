@@ -84,9 +84,7 @@ class TmuxObserver:
         if now - self.last_capture_time < self.capture_interval:
             return
 
-        active_sessions = self.tmux_capture.get_active_sessions(
-            self.capture_interval
-        )
+        active_sessions = self.tmux_capture.get_active_sessions(self.capture_interval)
         if not active_sessions:
             return
 

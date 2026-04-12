@@ -51,8 +51,14 @@ class TestTmuxCapture:
             windows=[],
             panes=[
                 PaneInfo(
-                    id="%0", index=0, left=0, top=0,
-                    width=80, height=24, active=True, content="hello",
+                    id="%0",
+                    index=0,
+                    left=0,
+                    top=0,
+                    width=80,
+                    height=24,
+                    active=True,
+                    content="hello",
                 )
             ],
         )
@@ -68,8 +74,14 @@ class TestTmuxCapture:
             windows=[],
             panes=[
                 PaneInfo(
-                    id="%0", index=0, left=0, top=0,
-                    width=80, height=24, active=True, content="hello",
+                    id="%0",
+                    index=0,
+                    left=0,
+                    top=0,
+                    width=80,
+                    height=24,
+                    active=True,
+                    content="hello",
                 )
             ],
         )
@@ -79,8 +91,14 @@ class TestTmuxCapture:
             windows=[],
             panes=[
                 PaneInfo(
-                    id="%0", index=0, left=0, top=0,
-                    width=80, height=24, active=True, content="world",
+                    id="%0",
+                    index=0,
+                    left=0,
+                    top=0,
+                    width=80,
+                    height=24,
+                    active=True,
+                    content="world",
                 )
             ],
         )

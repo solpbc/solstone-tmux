@@ -123,7 +123,10 @@ class TmuxCapture:
         """Get all windows for a session."""
         output = run_tmux_command(
             [
-                "list-windows", "-t", session, "-F",
+                "list-windows",
+                "-t",
+                session,
+                "-F",
                 "#{window_active} #{window_id} #{window_index} #{window_name}",
             ]
         )
@@ -157,7 +160,10 @@ class TmuxCapture:
         """Get all panes for a window with layout info."""
         output = run_tmux_command(
             [
-                "list-panes", "-t", window_id, "-F",
+                "list-panes",
+                "-t",
+                window_id,
+                "-F",
                 "#{pane_id} #{pane_index} #{pane_left} #{pane_top} #{pane_width} #{pane_height} #{pane_active}",
             ]
         )
@@ -191,9 +197,7 @@ class TmuxCapture:
 
     def capture_pane(self, pane_id: str) -> str:
         """Capture visible pane content with ANSI escape codes."""
-        output = run_tmux_command(
-            ["capture-pane", "-p", "-e", "-t", pane_id]
-        )
+        output = run_tmux_command(["capture-pane", "-p", "-e", "-t", pane_id])
         return output if output else ""
 
     def capture_session(self, session: str) -> CaptureResult | None:

@@ -16,14 +16,13 @@ import argparse
 import asyncio
 import json
 import logging
-import os
 import shutil
 import socket
 import subprocess
 import sys
 from pathlib import Path
 
-from .config import Config, load_config, save_config
+from .config import load_config, save_config
 from .streams import stream_name
 
 
@@ -46,9 +45,7 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     if not config.stream:
         try:
-            config.stream = stream_name(
-                host=socket.gethostname(), qualifier="tmux"
-            )
+            config.stream = stream_name(host=socket.gethostname(), qualifier="tmux")
         except ValueError as e:
             print(f"Error: {e}", file=sys.stderr)
             return 1
@@ -85,9 +82,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
     # Derive stream name
     if not config.stream:
         try:
-            config.stream = stream_name(
-                host=socket.gethostname(), qualifier="tmux"
-            )
+            config.stream = stream_name(host=socket.gethostname(), qualifier="tmux")
         except ValueError as e:
             print(f"Error deriving stream name: {e}", file=sys.stderr)
             return 1
@@ -105,7 +100,9 @@ def cmd_setup(args: argparse.Namespace) -> int:
             try:
                 result = subprocess.run(
                     [sol, "observer", "--json", "create", config.stream],
-                    capture_output=True, text=True, timeout=10,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
                 )
                 if result.returncode == 0:
                     data = json.loads(result.stdout)
@@ -113,7 +110,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
                     save_config(config)
                     print(f"Registered (key: {config.key[:8]}...)")
                 else:
-                    print(f"CLI registration failed, trying HTTP...")
+                    print("CLI registration failed, trying HTTP...")
             except (subprocess.TimeoutExpired, json.JSONDecodeError, KeyError, OSError):
                 print("CLI registration failed, trying HTTP...")
 
@@ -124,13 +121,17 @@ def cmd_setup(args: argparse.Namespace) -> int:
                 config = load_config()
                 print(f"Registered (key: {config.key[:8]}...)")
             else:
-                print("Warning: registration failed. Run setup again when server is available.")
+                print(
+                    "Warning: registration failed. Run setup again when server is available."
+                )
     else:
         print(f"Already registered (key: {config.key[:8]}...)")
 
     print(f"\nConfig saved to {config.config_path}")
     print(f"Captures will go to {config.captures_dir}")
-    print(f"\nRun 'solstone-tmux run' to start, or 'solstone-tmux install-service' for systemd.")
+    print(
+        "\nRun 'solstone-tmux run' to start, or 'solstone-tmux install-service' for systemd."
+    )
     return 0
 
 
@@ -224,9 +225,20 @@ def cmd_status(args: argparse.Namespace) -> int:
 
         size_mb = total_size / (1024 * 1024)
         print(f"Cache:  {captures_dir}")
-        print(f"        {segment_count} segments across {day_count} day(s), {size_mb:.1f} MB")
+        print(
+            f"        {segment_count} segments across {day_count} day(s), {size_mb:.1f} MB"
+        )
     else:
         print(f"Cache:  {captures_dir} (not created yet)")
+
+    # Retention policy
+    retention = config.cache_retention_days
+    if retention < 0:
+        print("Retain: forever")
+    elif retention == 0:
+        print("Retain: delete after sync")
+    else:
+        print(f"Retain: {retention} day(s)")
 
     # Synced days
     synced_path = config.state_dir / "synced_days.json"

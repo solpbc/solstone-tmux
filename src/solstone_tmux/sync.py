@@ -15,7 +15,8 @@ import json
 import logging
 import os
 import time
-from datetime import datetime
+import shutil
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -178,6 +179,113 @@ class SyncService:
                 self._synced_days.add(day)
                 self._save_synced_days()
 
+        # Cleanup old synced segments
+        if not self._circuit_open and self._running:
+            try:
+                await self._cleanup_synced_segments()
+            except Exception as e:
+                logger.error(f"Cleanup error: {e}", exc_info=True)
+
+    async def _cleanup_synced_segments(self) -> None:
+        """Delete synced segments older than cache_retention_days.
+
+        Triple-gated safety:
+        1. Day must be in _synced_days (fully synced locally)
+        2. Segment must be older than retention threshold (unless retention=0)
+        3. Segment must be confirmed present on server (fresh query)
+        """
+        retention = self._config.cache_retention_days
+        if retention < 0:
+            return
+
+        captures_dir = self._config.captures_dir
+        if not captures_dir.exists():
+            return
+
+        today = datetime.now().strftime("%Y%m%d")
+        if retention > 0:
+            cutoff = (datetime.now() - timedelta(days=retention)).strftime("%Y%m%d")
+        else:
+            cutoff = today  # 0 means delete immediately — all days qualify
+
+        deleted_total = 0
+
+        for day_dir in sorted(captures_dir.iterdir()):
+            if not day_dir.is_dir():
+                continue
+
+            day = day_dir.name
+
+            if not self._running:
+                break
+
+            # Gate 1: day must be in synced_days
+            if day not in self._synced_days:
+                continue
+
+            # Gate 2: day must be old enough (unless retention=0)
+            if retention > 0 and day >= cutoff:
+                continue
+
+            # Don't clean today's segments
+            if day == today:
+                continue
+
+            # Gate 3: fresh server confirmation
+            server_segments = await asyncio.to_thread(
+                self._client.get_server_segments, day
+            )
+            if server_segments is None:
+                logger.warning("Cleanup: skipping day %s — server unreachable", day)
+                continue
+
+            server_keys: set[str] = set()
+            for seg in server_segments:
+                server_keys.add(seg.get("key", ""))
+                if "original_key" in seg:
+                    server_keys.add(seg["original_key"])
+
+            deleted_day = 0
+
+            for stream_dir in day_dir.iterdir():
+                if not stream_dir.is_dir():
+                    continue
+
+                for seg_dir in sorted(stream_dir.iterdir()):
+                    if not seg_dir.is_dir():
+                        continue
+
+                    name = seg_dir.name
+                    # Never touch incomplete or failed
+                    if name.endswith(".incomplete") or name.endswith(".failed"):
+                        continue
+
+                    if name not in server_keys:
+                        logger.warning(
+                            "Cleanup: keeping %s/%s — not confirmed on server",
+                            day,
+                            name,
+                        )
+                        continue
+
+                    shutil.rmtree(seg_dir)
+                    logger.info("Cleanup: deleted %s/%s", day, name)
+                    deleted_day += 1
+
+                # Remove empty stream dir
+                if stream_dir.is_dir() and not any(stream_dir.iterdir()):
+                    stream_dir.rmdir()
+
+            # Remove empty day dir
+            if day_dir.is_dir() and not any(day_dir.iterdir()):
+                day_dir.rmdir()
+
+            if deleted_day:
+                deleted_total += deleted_day
+
+        if deleted_total:
+            logger.info("Cleanup: deleted %d segment(s) total", deleted_total)
+
     def _collect_segments(self, captures_dir: Path) -> dict[str, list[Path]]:
         """Collect completed segments grouped by day."""
         result: dict[str, list[Path]] = {}
@@ -236,7 +344,9 @@ class SyncService:
 
             if attempt < max_retries - 1:
                 delay = retry_delays[min(attempt, len(retry_delays) - 1)]
-                logger.info(f"Retrying {day}/{segment_key} in {delay}s (attempt {attempt + 2})")
+                logger.info(
+                    f"Retrying {day}/{segment_key} in {delay}s (attempt {attempt + 2})"
+                )
                 await asyncio.sleep(delay)
 
         logger.error(f"Upload failed after {max_retries} attempts: {day}/{segment_key}")

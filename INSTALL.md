@@ -45,6 +45,20 @@ if it's already active and connected, you're done.
    }
    ```
 
+   **optional: cache retention.** by default, synced segments are deleted after 7 days. to change this, add `cache_retention_days` to config.json:
+   - positive number: keep synced segments for that many days (default: `7`)
+   - `0`: delete immediately after confirmed sync
+   - `-1`: keep forever (never auto-delete)
+
+   ```json
+   {
+     "server_url": "http://localhost:5015",
+     "key": "THE_API_KEY_FROM_STEP_2",
+     "stream": "HOSTNAME.tmux",
+     "cache_retention_days": 7
+   }
+   ```
+
 4. install and start the systemd user service:
    ```
    solstone-tmux install-service

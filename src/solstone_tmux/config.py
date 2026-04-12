@@ -34,8 +34,11 @@ class Config:
     stream: str = ""
     capture_interval: int = DEFAULT_CAPTURE_INTERVAL
     segment_interval: int = DEFAULT_SEGMENT_INTERVAL
-    sync_retry_delays: list[int] = field(default_factory=lambda: list(DEFAULT_SYNC_RETRY_DELAYS))
+    sync_retry_delays: list[int] = field(
+        default_factory=lambda: list(DEFAULT_SYNC_RETRY_DELAYS)
+    )
     sync_max_retries: int = DEFAULT_SYNC_MAX_RETRIES
+    cache_retention_days: int = 7
     base_dir: Path = DEFAULT_BASE_DIR
 
     @property
@@ -87,6 +90,11 @@ def load_config(base_dir: Path | None = None) -> Config:
         config.sync_retry_delays = data["sync_retry_delays"]
     if "sync_max_retries" in data:
         config.sync_max_retries = data["sync_max_retries"]
+    if "cache_retention_days" in data:
+        try:
+            config.cache_retention_days = int(data["cache_retention_days"])
+        except (ValueError, TypeError):
+            pass
 
     return config
 
@@ -103,6 +111,7 @@ def save_config(config: Config) -> None:
         "segment_interval": config.segment_interval,
         "sync_retry_delays": config.sync_retry_delays,
         "sync_max_retries": config.sync_max_retries,
+        "cache_retention_days": config.cache_retention_days,
     }
 
     config_path = config.config_path

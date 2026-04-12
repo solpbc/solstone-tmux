@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright (c) 2026 sol pbc
 
-import json
 from pathlib import Path
 
 from solstone_tmux.config import Config, load_config, save_config
@@ -55,3 +54,20 @@ class TestConfig:
 
         mode = config.config_path.stat().st_mode & 0o777
         assert mode == 0o600
+
+    def test_cache_retention_days_roundtrip(self, tmp_path: Path):
+        config = Config(base_dir=tmp_path)
+        config.cache_retention_days = 14
+        save_config(config)
+
+        loaded = load_config(tmp_path)
+        assert loaded.cache_retention_days == 14
+
+    def test_cache_retention_days_default(self, tmp_path: Path):
+        """Existing configs without cache_retention_days default to 7."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir(parents=True)
+        (config_dir / "config.json").write_text('{"server_url": "http://test"}')
+
+        loaded = load_config(tmp_path)
+        assert loaded.cache_retention_days == 7
