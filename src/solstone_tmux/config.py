@@ -39,6 +39,7 @@ class Config:
     )
     sync_max_retries: int = DEFAULT_SYNC_MAX_RETRIES
     cache_retention_days: int = 7
+    status_indicator: bool = True
     base_dir: Path = DEFAULT_BASE_DIR
 
     @property
@@ -95,6 +96,8 @@ def load_config(base_dir: Path | None = None) -> Config:
             config.cache_retention_days = int(data["cache_retention_days"])
         except (ValueError, TypeError):
             pass
+    if "status_indicator" in data:
+        config.status_indicator = bool(data["status_indicator"])
 
     return config
 
@@ -112,6 +115,7 @@ def save_config(config: Config) -> None:
         "sync_retry_delays": config.sync_retry_delays,
         "sync_max_retries": config.sync_max_retries,
         "cache_retention_days": config.cache_retention_days,
+        "status_indicator": config.status_indicator,
     }
 
     config_path = config.config_path

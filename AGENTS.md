@@ -17,6 +17,7 @@ src/solstone_tmux/
     config.py           Config loading/persistence (~/.local/share/solstone-tmux/)
     capture.py          Tmux capture library (polls sessions, panes, deduplication)
     observer.py         Main capture loop with segment rotation
+    indicator.py        Tmux status-left indicator (☼ sync state display)
     streams.py          Stream name derivation (hostname.tmux convention)
     sync.py             Background sync service (uploads segments to server)
     upload.py           HTTP upload client for solstone ingest API

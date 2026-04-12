@@ -20,6 +20,7 @@ from pathlib import Path
 
 from .capture import TmuxCapture, write_captures_jsonl
 from .config import Config
+from . import indicator
 from .streams import stream_name
 from .sync import SyncService
 from .upload import UploadClient
@@ -183,6 +184,8 @@ class TmuxObserver:
             platform=PLATFORM,
             stream=self.stream,
         )
+        if self.config.status_indicator and self._sync:
+            indicator.update(self._sync.is_connected)
 
     async def main_loop(self):
         """Run the capture loop with background sync."""
@@ -222,6 +225,8 @@ class TmuxObserver:
         if self._client:
             self._client.stop()
             self._client = None
+        if self.config.status_indicator:
+            indicator.remove()
 
 
 async def async_run(config: Config) -> int:
@@ -240,6 +245,9 @@ async def async_run(config: Config) -> int:
     if not observer.setup():
         logger.error("Tmux observer setup failed")
         return 1
+
+    if config.status_indicator:
+        indicator.install()
 
     try:
         await observer.main_loop()

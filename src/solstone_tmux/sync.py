@@ -77,6 +77,11 @@ class SyncService:
         self._running = False
         self._trigger.set()
 
+    @property
+    def is_connected(self) -> bool:
+        """Whether sync is connected (server configured and circuit closed)."""
+        return bool(self._config.server_url) and not self._circuit_open
+
     async def run(self) -> None:
         """Main sync loop — waits for triggers, then syncs."""
         while self._running:

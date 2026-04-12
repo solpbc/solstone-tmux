@@ -70,6 +70,28 @@ if it's already active and connected, you're done.
    sol observer list
    ```
 
+## status bar indicator
+
+solstone-tmux shows a ☼ symbol at the left edge of your tmux status bar while running:
+
+- **yellow ☼** — observer active, sync connected
+- **grey ☼** — observer active, sync offline (server unreachable or not configured)
+- **absent** — observer not running
+
+the indicator is removed automatically on clean shutdown (SIGTERM, SIGINT). if the observer is killed with SIGKILL or the system crashes, the indicator may persist. to clear it manually:
+
+```
+tmux set -g @solstone ""
+```
+
+to disable the indicator entirely, add to config.json:
+
+```json
+{
+  "status_indicator": false
+}
+```
+
 ## notes
 
 - if pipx is not installed: `pip install --user pipx` or install via your package manager.

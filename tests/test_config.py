@@ -71,3 +71,20 @@ class TestConfig:
 
         loaded = load_config(tmp_path)
         assert loaded.cache_retention_days == 7
+
+    def test_status_indicator_roundtrip(self, tmp_path: Path):
+        config = Config(base_dir=tmp_path)
+        config.status_indicator = False
+        save_config(config)
+
+        loaded = load_config(tmp_path)
+        assert loaded.status_indicator is False
+
+    def test_status_indicator_default(self, tmp_path: Path):
+        """Existing configs without status_indicator default to True."""
+        config_dir = tmp_path / "config"
+        config_dir.mkdir(parents=True)
+        (config_dir / "config.json").write_text('{"server_url": "http://test"}')
+
+        loaded = load_config(tmp_path)
+        assert loaded.status_indicator is True

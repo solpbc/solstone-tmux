@@ -309,3 +309,29 @@ class TestCleanupSyncedSegments:
             await sync._cleanup_synced_segments()
 
         assert not (captures / "20260101" / "archon.tmux" / "120000_300").exists()
+
+
+class TestSyncServiceConnected:
+    """Test is_connected property."""
+
+    def test_connected_when_server_and_circuit_closed(self, tmp_path: Path):
+        config = Config(base_dir=tmp_path, server_url="http://localhost:5015")
+        config.ensure_dirs()
+        client = UploadClient(config)
+        sync = SyncService(config, client)
+        assert sync.is_connected is True
+
+    def test_disconnected_when_no_server(self, tmp_path: Path):
+        config = Config(base_dir=tmp_path)
+        config.ensure_dirs()
+        client = UploadClient(config)
+        sync = SyncService(config, client)
+        assert sync.is_connected is False
+
+    def test_disconnected_when_circuit_open(self, tmp_path: Path):
+        config = Config(base_dir=tmp_path, server_url="http://localhost:5015")
+        config.ensure_dirs()
+        client = UploadClient(config)
+        sync = SyncService(config, client)
+        sync._circuit_open = True
+        assert sync.is_connected is False
