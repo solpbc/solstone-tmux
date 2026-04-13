@@ -16,6 +16,7 @@ import argparse
 import asyncio
 import json
 import logging
+import os
 import shutil
 import socket
 import subprocess
@@ -142,6 +143,10 @@ def cmd_install_service(args: argparse.Namespace) -> int:
         print("Error: solstone-tmux not found on PATH", file=sys.stderr)
         print("Install with: pipx install solstone-tmux", file=sys.stderr)
         return 1
+    venv_bin = str(Path(binary).resolve().parent)
+    raw_path = os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin")
+    path_parts = [venv_bin] + [p for p in raw_path.split(":") if p]
+    service_path = ":".join(dict.fromkeys(path_parts))
 
     unit_dir = Path.home() / ".config" / "systemd" / "user"
     unit_dir.mkdir(parents=True, exist_ok=True)
@@ -154,6 +159,7 @@ After=basic.target
 
 [Service]
 Type=simple
+Environment=PATH={service_path}
 ExecStart={binary} run
 Restart=on-failure
 RestartSec=5

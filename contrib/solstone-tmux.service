@@ -4,6 +4,7 @@ After=basic.target
 
 [Service]
 Type=simple
+# Environment=PATH=... (injected at install time by solstone-tmux install-service)
 ExecStart=%h/.local/bin/solstone-tmux run
 Restart=on-failure
 RestartSec=5
