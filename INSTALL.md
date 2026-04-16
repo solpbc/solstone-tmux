@@ -17,58 +17,43 @@ sol observer list
 
 if it's already active and connected, you're done.
 
-## what to sort out together
+## install
 
-- **stream name.** this identifies the capture source. the convention is `hostname.tmux` (e.g., `fedora.tmux`).
-
-## install sequence
-
-1. if not already cloned, clone into solstone's observers directory and install with pipx:
+1. **clone and deploy.**
    ```
-   cd "$(sol root)/observers"
-   git clone https://github.com/solpbc/solstone-tmux.git
+   git clone https://github.com/solpbc/solstone-tmux.git solstone-tmux
    cd solstone-tmux
-   pipx install .
+   make deploy
    ```
+   this installs the `solstone-tmux` command via pipx and sets up the systemd user unit.
 
-2. register the observer with solstone and save the API key:
+2. **run setup.**
    ```
-   sol observer create solstone-tmux
+   solstone-tmux setup
    ```
+   this prompts for your solstone server URL, registers the observer, and writes the config file.
 
-3. write the config to `~/.local/share/solstone-tmux/config/config.json`:
-   ```json
-   {
-     "server_url": "http://localhost:5015",
-     "key": "THE_API_KEY_FROM_STEP_2",
-     "stream": "HOSTNAME.tmux"
-   }
+3. **verify.**
    ```
-
-   **optional: cache retention.** by default, synced segments are deleted after 7 days. to change this, add `cache_retention_days` to config.json:
-   - positive number: keep synced segments for that many days (default: `7`)
-   - `0`: delete immediately after confirmed sync
-   - `-1`: keep forever (never auto-delete)
-
-   ```json
-   {
-     "server_url": "http://localhost:5015",
-     "key": "THE_API_KEY_FROM_STEP_2",
-     "stream": "HOSTNAME.tmux",
-     "cache_retention_days": 7
-   }
-   ```
-
-4. install and start the systemd user service:
-   ```
-   solstone-tmux install-service
-   ```
-
-5. verify it's running and connected:
-   ```
+   solstone-tmux status
    systemctl --user status solstone-tmux
-   sol observer list
    ```
+
+## updating after a code change
+
+```
+git pull && make upgrade
+```
+
+`make upgrade` runs `make ci` first; if tests fail, the upgrade aborts before touching the installed service.
+
+## optional cache retention
+
+by default, synced segments are deleted after 7 days. to change this, add `cache_retention_days` to config.json:
+
+- positive number: keep synced segments for that many days (default: `7`)
+- `0`: delete immediately after confirmed sync
+- `-1`: keep forever (never auto-delete)
 
 ## status bar indicator
 

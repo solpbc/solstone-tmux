@@ -1,7 +1,12 @@
 # solstone-tmux Makefile
 # Standalone tmux terminal observer for solstone
 
-.PHONY: install test test-only format ci clean clean-install uninstall
+.PHONY: install test test-only format ci clean clean-install uninstall deploy upgrade service-restart service-status service-logs uninstall-service
+
+# Service deployment
+APP := solstone-tmux
+PIPX_FLAGS :=
+UNIT := solstone-tmux.service
 
 # Default target
 all: install
@@ -70,6 +75,41 @@ ci: .installed
 	@$(MAKE) test
 	@echo ""
 	@echo "All CI checks passed!"
+
+deploy:
+	@command -v pipx >/dev/null 2>&1 || { echo "pipx not found. Install with: sudo dnf install pipx  (or apt install pipx)"; exit 1; }
+	@echo "==> Installing $(APP) with pipx"
+	pipx install --force $(PIPX_FLAGS) .
+	# Never use editable pipx installs here — they couple the running service
+	# to the working tree; `git checkout` silently downgrades the deployed version.
+	@echo "==> Installing systemd user unit"
+	$(APP) install-service
+	@echo "==> Service status"
+	systemctl --user --no-pager status $(UNIT) | head
+
+upgrade: ci
+	@command -v pipx >/dev/null 2>&1 || { echo "pipx not found. Install with: sudo dnf install pipx  (or apt install pipx)"; exit 1; }
+	@echo "==> Upgrading $(APP) with pipx"
+	pipx install --force $(PIPX_FLAGS) .
+	@echo "==> Reloading systemd and restarting $(UNIT)"
+	systemctl --user daemon-reload
+	systemctl --user restart $(UNIT)
+	systemctl --user --no-pager status $(UNIT) | head
+
+service-restart:
+	systemctl --user restart $(UNIT)
+
+service-status:
+	systemctl --user --no-pager status $(UNIT)
+
+service-logs:
+	journalctl --user -u $(APP) -n 100 --no-pager -f
+
+uninstall-service:
+	-systemctl --user disable --now $(UNIT)
+	-rm -f $$HOME/.config/systemd/user/$(UNIT)
+	-systemctl --user daemon-reload
+	-pipx uninstall $(APP)
 
 # Clean build artifacts and caches
 clean:

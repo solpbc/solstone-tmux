@@ -21,6 +21,7 @@ import shutil
 import socket
 import subprocess
 import sys
+from importlib import resources
 from pathlib import Path
 
 from .config import load_config, save_config
@@ -152,25 +153,18 @@ def cmd_install_service(args: argparse.Namespace) -> int:
     unit_dir.mkdir(parents=True, exist_ok=True)
     unit_path = unit_dir / "solstone-tmux.service"
 
-    unit_content = f"""\
-[Unit]
-Description=Solstone Tmux Terminal Observer
-After=basic.target
+    template = (
+        resources.files("solstone_tmux")
+        .joinpath("contrib/solstone-tmux.service.in")
+        .read_text()
+    )
+    unit_content = template.replace("{BINARY}", binary).replace("{PATH}", service_path)
+    unit_bytes = unit_content.encode()
+    if unit_path.exists() and unit_path.read_bytes() == unit_bytes and not args.force:
+        print("Unit unchanged; nothing to do")
+        return 0
 
-[Service]
-Type=simple
-Environment=PATH={service_path}
-ExecStart={binary} run
-Restart=on-failure
-RestartSec=5
-StartLimitIntervalSec=300
-StartLimitBurst=5
-
-[Install]
-WantedBy=default.target
-"""
-
-    unit_path.write_text(unit_content)
+    unit_path.write_bytes(unit_bytes)
     print(f"Wrote {unit_path}")
 
     # Reload, enable, start
@@ -180,6 +174,11 @@ WantedBy=default.target
             ["systemctl", "--user", "enable", "--now", "solstone-tmux.service"],
             check=True,
         )
+        if args.force:
+            subprocess.run(
+                ["systemctl", "--user", "restart", "solstone-tmux.service"],
+                check=True,
+            )
         print("Service enabled and started.")
         subprocess.run(
             ["systemctl", "--user", "status", "solstone-tmux.service"],
@@ -295,7 +294,12 @@ def main() -> None:
     subparsers.add_parser("setup", help="Interactive configuration")
 
     # install-service
-    subparsers.add_parser("install-service", help="Install systemd user service")
+    install_parser = subparsers.add_parser(
+        "install-service", help="Install systemd user service"
+    )
+    install_parser.add_argument(
+        "--force", action="store_true", help="Always rewrite unit and restart service."
+    )
 
     # status
     subparsers.add_parser("status", help="Show capture and sync state")

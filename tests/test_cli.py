@@ -25,7 +25,7 @@ class TestInstallServicePath:
             monkeypatch.delenv("PATH", raising=False)
 
         with patch("solstone_tmux.cli.subprocess.run"):
-            cmd_install_service(argparse.Namespace())
+            cmd_install_service(argparse.Namespace(force=False))
 
         unit_path = tmp_path / ".config" / "systemd" / "user" / "solstone-tmux.service"
         return unit_path.read_text()
