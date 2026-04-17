@@ -1,7 +1,7 @@
 # solstone-tmux Makefile
 # Standalone tmux terminal observer for solstone
 
-.PHONY: install test test-only format ci clean clean-install uninstall deploy upgrade service-restart service-status service-logs uninstall-service
+.PHONY: install test test-only format ci clean clean-install uninstall install-service service-restart service-status service-logs uninstall-service
 
 # Service deployment
 APP := solstone-tmux
@@ -76,24 +76,21 @@ ci: .installed
 	@echo ""
 	@echo "All CI checks passed!"
 
-deploy:
-	@command -v pipx >/dev/null 2>&1 || { echo "pipx not found. Install with: sudo dnf install pipx  (or apt install pipx)"; exit 1; }
-	@echo "==> Installing $(APP) with pipx"
-	pipx install --force $(PIPX_FLAGS) .
-	# Never use editable pipx installs here — they couple the running service
-	# to the working tree; `git checkout` silently downgrades the deployed version.
-	@echo "==> Installing systemd user unit"
-	$(APP) install-service
-	@echo "==> Service status"
-	systemctl --user --no-pager status $(UNIT) | head
-
-upgrade: ci
-	@command -v pipx >/dev/null 2>&1 || { echo "pipx not found. Install with: sudo dnf install pipx  (or apt install pipx)"; exit 1; }
-	@echo "==> Upgrading $(APP) with pipx"
-	pipx install --force $(PIPX_FLAGS) .
-	@echo "==> Reloading systemd and restarting $(UNIT)"
-	systemctl --user daemon-reload
-	systemctl --user restart $(UNIT)
+install-service: .installed
+	@set -e; \
+	command -v pipx >/dev/null 2>&1 || { echo "pipx not found. Install with: sudo dnf install pipx  (or apt install pipx)"; exit 1; }; \
+	mode="$$($(PYTHON) -m solstone_tmux.install_guard install)"; \
+	echo "$$mode"; \
+	case "$$mode" in \
+		*"fresh install"*) ;; \
+		*) $(MAKE) ci ;; \
+	esac; \
+	echo "==> Installing $(APP) with pipx"; \
+	pipx install --force $(PIPX_FLAGS) .; \
+	$(PYTHON) -m solstone_tmux.install_guard write-marker --repo-root "$(CURDIR)"; \
+	echo "==> Installing systemd user unit"; \
+	PATH="$$HOME/.local/bin:$$PATH" $(APP) install-service; \
+	echo "==> Service status"; \
 	systemctl --user --no-pager status $(UNIT) | head
 
 service-restart:
@@ -105,11 +102,13 @@ service-status:
 service-logs:
 	journalctl --user -u $(APP) -n 100 --no-pager -f
 
-uninstall-service:
+uninstall-service: .installed
+	$(PYTHON) -m solstone_tmux.install_guard uninstall
 	-systemctl --user disable --now $(UNIT)
 	-rm -f $$HOME/.config/systemd/user/$(UNIT)
 	-systemctl --user daemon-reload
 	-pipx uninstall $(APP)
+	$(PYTHON) -m solstone_tmux.install_guard remove-marker
 
 # Clean build artifacts and caches
 clean:
@@ -120,10 +119,14 @@ clean:
 	find . -type f -name "*.pyc" -delete 2>/dev/null || true
 	rm -f .installed
 
-# Remove venv and all artifacts
-uninstall: clean
-	@echo "Removing virtual environment..."
-	rm -rf $(VENV)
+uninstall:
+	@echo "ERROR: 'make uninstall' is ambiguous."
+	@echo "  Run 'make uninstall-service' to remove the installed service and pipx package."
+	@echo "  Run 'make clean' to remove build artifacts and the dev venv."
+	@exit 1
 
 # Clean everything and reinstall
-clean-install: uninstall install
+clean-install: clean
+	@echo "Removing virtual environment..."
+	rm -rf $(VENV)
+	@$(MAKE) install

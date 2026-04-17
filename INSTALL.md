@@ -19,11 +19,11 @@ if it's already active and connected, you're done.
 
 ## install
 
-1. **clone and deploy.**
+1. **clone and install the service.**
    ```
    git clone https://github.com/solpbc/solstone-tmux.git solstone-tmux
    cd solstone-tmux
-   make deploy
+   make install-service
    ```
    this installs the `solstone-tmux` command via pipx and sets up the systemd user unit.
 
@@ -42,10 +42,10 @@ if it's already active and connected, you're done.
 ## updating after a code change
 
 ```
-git pull && make upgrade
+git pull && make install-service
 ```
 
-`make upgrade` runs `make ci` first; if tests fail, the upgrade aborts before touching the installed service.
+`make install-service` skips CI for a fresh install, but runs `make ci` before upgrading an existing owned install. if tests fail, the upgrade aborts before touching the installed service.
 
 ## optional cache retention
 

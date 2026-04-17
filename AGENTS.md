@@ -41,7 +41,8 @@ make test-only TEST="-k test_function_name" # Run tests matching a pattern
 make format         # Auto-format and lint with ruff
 make ci             # Full CI: format check + lint + tests
 make clean          # Remove build artifacts and caches
-make uninstall      # Remove venv and all artifacts
+make install-service # Smart install or upgrade of the systemd service (guard-checked)
+make uninstall-service # Remove the installed service and pipx package (guard-checked)
 make clean-install  # Clean everything and reinstall from scratch
 ```
 

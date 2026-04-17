@@ -160,10 +160,6 @@ def cmd_install_service(args: argparse.Namespace) -> int:
     )
     unit_content = template.replace("{BINARY}", binary).replace("{PATH}", service_path)
     unit_bytes = unit_content.encode()
-    if unit_path.exists() and unit_path.read_bytes() == unit_bytes and not args.force:
-        print("Unit unchanged; nothing to do")
-        return 0
-
     unit_path.write_bytes(unit_bytes)
     print(f"Wrote {unit_path}")
 
@@ -174,11 +170,10 @@ def cmd_install_service(args: argparse.Namespace) -> int:
             ["systemctl", "--user", "enable", "--now", "solstone-tmux.service"],
             check=True,
         )
-        if args.force:
-            subprocess.run(
-                ["systemctl", "--user", "restart", "solstone-tmux.service"],
-                check=True,
-            )
+        subprocess.run(
+            ["systemctl", "--user", "restart", "solstone-tmux.service"],
+            check=True,
+        )
         print("Service enabled and started.")
         subprocess.run(
             ["systemctl", "--user", "status", "solstone-tmux.service"],
@@ -294,12 +289,7 @@ def main() -> None:
     subparsers.add_parser("setup", help="Interactive configuration")
 
     # install-service
-    install_parser = subparsers.add_parser(
-        "install-service", help="Install systemd user service"
-    )
-    install_parser.add_argument(
-        "--force", action="store_true", help="Always rewrite unit and restart service."
-    )
+    subparsers.add_parser("install-service", help="Install systemd user service")
 
     # status
     subparsers.add_parser("status", help="Show capture and sync state")
