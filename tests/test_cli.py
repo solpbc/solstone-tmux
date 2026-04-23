@@ -132,3 +132,21 @@ class TestInstallServicePath:
                 break
         else:
             raise AssertionError("No Environment=PATH= line found")
+
+    def test_start_limit_keys_in_unit_section(self, tmp_path, monkeypatch):
+        """StartLimit keys are rendered in [Unit], not [Service]."""
+        binary = tmp_path / "venv" / "bin" / "solstone-tmux"
+        binary.parent.mkdir(parents=True)
+        binary.touch()
+
+        content = self._run_install(tmp_path, monkeypatch, binary, "/usr/bin:/bin")
+        sections = [chunk.lstrip("[") for chunk in content.split("\n[")]
+        unit_chunk = next(chunk for chunk in sections if chunk.startswith("Unit]"))
+        service_chunk = next(
+            chunk for chunk in sections if chunk.startswith("Service]")
+        )
+
+        assert "StartLimitIntervalSec=300" in unit_chunk
+        assert "StartLimitBurst=5" in unit_chunk
+        assert "StartLimitIntervalSec" not in service_chunk
+        assert "StartLimitBurst" not in service_chunk
