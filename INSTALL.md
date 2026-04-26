@@ -1,6 +1,6 @@
 # installing solstone-tmux
 
-these instructions are for a coding agent and human working together. solstone-tmux captures all active tmux sessions and panes every 5 seconds. lightweight, pure python, no system dependencies. works alongside a desktop observer or standalone.
+these instructions are for a coding agent and human working together. solstone-tmux experiences your tmux sessions along with you — every 5 seconds it takes in what's on each pane. lightweight, pure python, no system dependencies. works alongside a desktop observer or standalone.
 
 solstone must already be installed and running. if it isn't, start there: https://solstone.app/install
 
@@ -80,4 +80,4 @@ to disable the indicator entirely, add to config.json:
 ## notes
 
 - if pipx is not installed: `pip install --user pipx` or install via your package manager.
-- captures work offline — segments sync when the server becomes available.
+- the observer works offline — segments sync when the server becomes available.

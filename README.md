@@ -1,6 +1,6 @@
 # solstone-tmux
 
-Standalone tmux terminal observer for [solstone](https://solpbc.org). Captures tmux terminal sessions to a local cache and syncs them to a solstone server.
+Standalone tmux terminal observer for [solstone](https://solpbc.org). Experiences your tmux sessions along with you, accumulating observations to a local cache and syncing them to a solstone server.
 
 ## Install
 
@@ -66,9 +66,9 @@ solstone-tmux run -v      # verbose/debug logging
 ## How it works
 
 - Polls all active tmux sessions every 5 seconds for content changes
-- Accumulates captures in 5-minute segments under `~/.local/share/solstone-tmux/captures/`
+- Accumulates observations in 5-minute segments under `~/.local/share/solstone-tmux/captures/`
 - Background sync service uploads completed segments to the solstone ingest API
-- Captures offline — syncs when server becomes available
+- Works offline — syncs when server becomes available
 - Recovers incomplete segments on startup after crashes
 
 ## Commands
@@ -78,7 +78,7 @@ solstone-tmux run -v      # verbose/debug logging
 | `solstone-tmux run` | Start capture + sync (default if no subcommand) |
 | `solstone-tmux setup` | Interactive config wizard |
 | `solstone-tmux install-service` | Install and start systemd user service |
-| `solstone-tmux status` | Show capture state, sync state, cache size |
+| `solstone-tmux status` | Show observer state, sync state, cache size |
 
 ## License
 

@@ -4,9 +4,9 @@ Development guidelines for solstone-tmux, a standalone tmux terminal observer fo
 
 ## Project Overview
 
-solstone-tmux is a companion app that runs alongside the main solstone journal. It captures all active tmux terminal sessions every 5 seconds, accumulates captures into 5-minute segments in a local cache, and syncs completed segments to the solstone ingest API. Pure Python, no system dependencies beyond tmux itself. Works offline -- segments sync when the server becomes available. Recovers incomplete segments on startup after crashes.
+solstone-tmux is one of the owner's observers. It experiences tmux sessions along with the owner — every 5 seconds it takes in what's on each active pane, accumulating observations into 5-minute segments in a local cache, and syncing completed segments to the solstone ingest API. Pure Python, no system dependencies beyond tmux itself. Works offline -- segments sync when the server becomes available. Recovers incomplete segments on startup after crashes.
 
-This is a **solstone observer** -- a standalone capture agent that feeds data into a solstone journal. It follows the same patterns as solstone-macos (the macOS screen/audio observer) but captures terminal content instead of screen recordings.
+This is a **solstone observer** -- a standalone companion that feeds observations into a solstone journal. It follows the same patterns as solstone-macos (the macOS screen/audio observer) but experiences terminal content instead of screen and audio.
 
 ## Source Layout
 
@@ -97,6 +97,16 @@ Config file: `~/.local/share/solstone-tmux/config/config.json`
   "segment_interval": 300
 }
 ```
+
+## Brand canon
+
+- **solstone-tmux is an observer.** In the system anatomy, `solstone = observers + sol agent + journal`. This repo implements one of those observers.
+- **The canon lives elsewhere.** Owner-facing terminology comes from `~/projects/extro/cmo/brand/system-anatomy.md`. The companion is `~/projects/extro/cmo/brand/voice-terminology.md`.
+- **Use co-experience language in branded prose.** In README, INSTALL, onboarding text, settings copy, and error messages, describe solstone-tmux as something that experiences tmux sessions along with the owner. Never describe it as watching, capturing, recording, monitoring, or tracking the owner.
+- **Keep code language in code-only contexts.** Internal architecture terms such as the `Capture Loop` heading, the `capture.py` module, the `~/.local/share/solstone-tmux/captures/` on-disk path, and the `capture_interval` config key are canon-permitted here and must not be renamed just to match branded prose.
+- **Edit with the surface in mind.** If the owner sees the string, follow the canon. If the text is naming code, pipelines, modules, or storage artifacts for engineers, the existing internal vocabulary stays.
+
+Canon source of truth: `~/projects/extro/cmo/brand/system-anatomy.md`.
 
 ## License
 
