@@ -4,6 +4,8 @@ these instructions are for a coding agent and human working together. solstone-t
 
 solstone must already be installed and running. if it isn't, start there: https://solstone.app/install
 
+> **most users should run `sol observer install --platform tmux` from the solstone host instead of following this file by hand.** that one command handles the clone, the build, the registration, and the systemd unit — including a `--dry-run` mode to preview every step. the instructions below are for developers building from source or troubleshooting the install.
+
 ## before you begin
 
 if `sol` is not in PATH, check `~/.local/bin/sol` or use `.venv/bin/sol` inside the solstone repo.
