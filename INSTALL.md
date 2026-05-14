@@ -8,7 +8,7 @@ solstone must already be installed and running. if it isn't, start there: https:
 
 ## before you begin
 
-if `sol` is not in PATH, check `~/.local/bin/sol` or use `.venv/bin/sol` inside the solstone repo.
+if `sol` is not in PATH, check `~/.local/bin/sol`.
 
 check if solstone-tmux is already installed and running:
 
