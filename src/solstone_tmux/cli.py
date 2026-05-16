@@ -74,11 +74,11 @@ def cmd_setup(args: argparse.Namespace) -> int:
 
     # Prompt for server URL
     default_url = config.server_url or ""
-    url = input(f"Solstone server URL [{default_url}]: ").strip()
+    url = input(f"Solstone journal URL [{default_url}]: ").strip()
     if url:
         config.server_url = url
     elif not config.server_url:
-        print("Error: server URL is required", file=sys.stderr)
+        print("Error: journal URL is required", file=sys.stderr)
         return 1
 
     # Derive stream name
@@ -117,14 +117,14 @@ def cmd_setup(args: argparse.Namespace) -> int:
                 print("CLI registration failed, trying HTTP...")
 
         if not config.key:
-            print("Registering with server...")
+            print("Registering with your journal...")
             client = UploadClient(config)
             if client.ensure_registered(config):
                 config = load_config()
                 print(f"Registered (key: {config.key[:8]}...)")
             else:
                 print(
-                    "Warning: registration failed. Run setup again when server is available."
+                    "Warning: registration failed. Run setup again when your journal is available."
                 )
     else:
         print(f"Already registered (key: {config.key[:8]}...)")
@@ -192,7 +192,7 @@ def cmd_status(args: argparse.Namespace) -> int:
     config = load_config()
 
     print(f"Config: {config.config_path}")
-    print(f"Server: {config.server_url or '(not configured)'}")
+    print(f"Journal: {config.server_url or '(not configured)'}")
     print(f"Key:    {config.key[:8] + '...' if config.key else '(not registered)'}")
     print(f"Stream: {config.stream or '(not set)'}")
     print()

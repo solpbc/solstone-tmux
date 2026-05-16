@@ -33,7 +33,7 @@ if it's already active and connected, you're done.
    ```
    solstone-tmux setup
    ```
-   this prompts for your solstone server URL, registers the observer, and writes the config file.
+   this prompts for your solstone journal URL, registers the observer, and writes the config file.
 
 3. **verify.**
    ```
@@ -62,7 +62,7 @@ by default, synced segments are deleted after 7 days. to change this, add `cache
 solstone-tmux shows a ☼ symbol at the left edge of your tmux status bar while running:
 
 - **yellow ☼** — observer active, sync connected
-- **grey ☼** — observer active, sync offline (server unreachable or not configured)
+- **grey ☼** — observer active, sync offline (journal unreachable or not configured)
 - **absent** — observer not running
 
 the indicator is removed automatically on clean shutdown (SIGTERM, SIGINT). if the observer is killed with SIGKILL or the system crashes, the indicator may persist. to clear it manually:
@@ -82,4 +82,4 @@ to disable the indicator entirely, add to config.json:
 ## notes
 
 - if pipx is not installed: `pip install --user pipx` or install via your package manager.
-- the observer works offline — segments sync when the server becomes available.
+- the observer works offline — segments sync when your journal becomes available.
