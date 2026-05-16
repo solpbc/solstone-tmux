@@ -38,7 +38,7 @@ Create `~/.local/share/solstone-tmux/config/config.json`:
 
 Set `stream` to `<your-hostname>.tmux` (e.g., `fedora.tmux`, `archon.tmux`). This matches the stream naming convention used by the built-in observers.
 
-Alternatively, `solstone-tmux setup` runs an interactive wizard that prompts for the journal URL and auto-registers.
+Alternatively, `solstone-tmux setup` runs an interactive wizard that prompts for your journal URL and auto-registers.
 
 ### 3. Install the systemd service
 
@@ -67,8 +67,8 @@ solstone-tmux run -v      # verbose/debug logging
 
 - Polls all active tmux sessions every 5 seconds for content changes
 - Accumulates observations in 5-minute segments under `~/.local/share/solstone-tmux/captures/`
-- Syncs completed segments to your journal in the background
-- Works offline — syncs when your journal becomes available
+- Background sync service uploads completed segments to your journal
+- Works offline — syncs when your journal is reachable
 - Recovers incomplete segments on startup after crashes
 
 ## Commands

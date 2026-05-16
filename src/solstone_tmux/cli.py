@@ -74,7 +74,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
 
     # Prompt for server URL
     default_url = config.server_url or ""
-    url = input(f"Solstone journal URL [{default_url}]: ").strip()
+    url = input(f"Your journal URL [{default_url}]: ").strip()
     if url:
         config.server_url = url
     elif not config.server_url:
@@ -124,7 +124,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
                 print(f"Registered (key: {config.key[:8]}...)")
             else:
                 print(
-                    "Warning: registration failed. Run setup again when your journal is available."
+                    "Warning: registration failed. Run setup again when your journal is reachable."
                 )
     else:
         print(f"Already registered (key: {config.key[:8]}...)")
