@@ -100,7 +100,7 @@ Config file: `~/.local/share/solstone-tmux/config/config.json`
 
 ## Brand canon
 
-- **solstone-tmux is an observer.** In the system anatomy, `solstone = observers + sol agent + journal`. This repo implements one of those observers.
+- **solstone-tmux is an observer.** Owner-facing, `solstone = observers + your journal` — sol is the keeper who lives in and tends your journal, not a separately enumerated part. In the architecture/engineering register the same system is `observers + sol agent + journal`, where the keeper runs as `sol agent`. This repo implements one of those observers.
 - **The canon lives elsewhere.** Owner-facing terminology comes from sol pbc's internal brand canon (system anatomy + voice terminology guides). This repo's branded prose follows it; the canon itself is not vendored here.
 - **Use co-experience language in branded prose.** In README, INSTALL, onboarding text, settings copy, and error messages, describe solstone-tmux as something that experiences tmux sessions along with the owner. Never describe it as watching, capturing, recording, monitoring, or tracking the owner.
 - **Keep code language in code-only contexts.** Internal architecture terms such as the `Capture Loop` heading, the `capture.py` module, the `~/.local/share/solstone-tmux/captures/` on-disk path, and the `capture_interval` config key are canon-permitted here and must not be renamed just to match branded prose.
