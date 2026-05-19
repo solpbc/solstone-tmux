@@ -108,6 +108,38 @@ Config file: `~/.local/share/solstone-tmux/config/config.json`
 
 Canon source of truth: sol pbc's internal brand canon (system-anatomy guide).
 
+## Releasing
+
+solstone-tmux is released to PyPI via an operator-driven script. There is no
+CI/CD: every cut is hand-run from a clean tree.
+
+Tokens live in the operator's vault — never in the repo. Export the appropriate
+token before running:
+
+- `PYPI_TOKEN` for production (`make release`)
+- `TESTPYPI_TOKEN` for dry-run uploads to TestPyPI (`make release-test`)
+
+Cut steps (operator):
+
+1. Bump `version = "x.y.z"` in `pyproject.toml` and the matching `__version__`
+   in `src/solstone_tmux/__init__.py`.
+2. Add a new `## [x.y.z] - YYYY-MM-DD` block to `CHANGELOG.md`. Mirror the
+   existing `0.1.0` block as the template — plain owner-facing voice; no
+   surveillance verbs (see `## Brand canon`).
+3. Commit the version bump + changelog on a clean tree.
+4. `TESTPYPI_TOKEN=… make release-test` — uploads to TestPyPI only. No tag,
+   no GitHub Release. Use this to sanity-check the artifacts.
+5. `PYPI_TOKEN=… make release` — builds, uploads to PyPI, creates `vX.Y.Z`
+   tag, pushes the tag, and creates a GitHub Release with the sdist + wheel
+   attached and the matching CHANGELOG block as release notes.
+
+If `gh release create` fails after the PyPI upload, the script prints the
+exact `gh release create …` command to re-run manually. PyPI versions are
+immutable, so do not re-bump on failure — just complete the GitHub side.
+
+The `scripts/extract_changelog.sh` helper pulls a single version block out of
+`CHANGELOG.md`. It is unit-tested in `tests/test_release.py`.
+
 ## License
 
 AGPL-3.0-only. Copyright (c) 2026 sol pbc.

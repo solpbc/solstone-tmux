@@ -1,7 +1,7 @@
 # solstone-tmux Makefile
 # Standalone tmux terminal observer for solstone
 
-.PHONY: install test test-only format ci clean clean-install uninstall install-service service-restart service-status service-logs uninstall-service
+.PHONY: install test test-only format ci clean clean-install uninstall install-service service-restart service-status service-logs uninstall-service release release-test
 
 # Service deployment
 APP := solstone-tmux
@@ -124,6 +124,12 @@ uninstall:
 	@echo "  Run 'make uninstall-service' to remove the installed service and pipx package."
 	@echo "  Run 'make clean' to remove build artifacts and the dev venv."
 	@exit 1
+
+release:
+	@scripts/release.sh
+
+release-test:
+	@scripts/release.sh --test
 
 # Clean everything and reinstall
 clean-install: clean
