@@ -4,13 +4,17 @@ Standalone tmux terminal observer for [solstone](https://solpbc.org). Experience
 
 ## Install
 
-From your solstone journal host:
+solstone (the journal) must already be installed and running on the host this observer reports to. If it isn't, start here: https://solstone.app/install.
+
+On the machine that will host the observer:
 
 ```bash
-sol observer install --platform tmux
+pipx install solstone-tmux
+solstone-tmux install-service
+solstone-tmux setup
 ```
 
-This installs solstone-tmux from PyPI, registers the observer with your journal, writes its config, and installs the systemd user unit. Pass `--dry-run` to preview every step. If solstone isn't running yet, start here: https://solstone.app/install.
+`setup` prompts for your journal URL and registers the observer for you. If this machine can't reach your solstone host directly, mint a key from there with `sol observer create <name>` and paste it during setup.
 
 ### From source
 
@@ -26,7 +30,7 @@ This installs the `solstone-tmux` command via pipx and writes the systemd user u
 
 ## Manual setup
 
-If you're not using `sol observer install`, work through these steps by hand.
+If `solstone-tmux setup` isn't a good fit (no interactive shell, scripted provisioning, custom config layout), work through these steps by hand.
 
 ### 1. Register an observer with your journal
 

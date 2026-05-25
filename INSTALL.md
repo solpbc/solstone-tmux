@@ -4,7 +4,7 @@ these instructions are for a coding agent and human working together. solstone-t
 
 solstone must already be installed and running. if it isn't, start there: https://solstone.app/install
 
-> **most owners should run `sol observer install --platform tmux` from the solstone host instead of following this file by hand.** that one command installs solstone-tmux from PyPI by name, registers the observer, writes its config, and installs the systemd unit — including a `--dry-run` mode to preview every step. the instructions below are for developers building from source or troubleshooting the install.
+> **most owners install solstone-tmux from PyPI in three commands** on the machine that will host the observer: `pipx install solstone-tmux`, `solstone-tmux install-service`, then `solstone-tmux setup` (which prompts for your journal URL and auto-registers). if the observer machine can't reach your solstone host, mint a key from there first with `sol observer create <name>` and paste it during setup. the instructions below are for developers building from source or troubleshooting the install.
 
 ## before you begin
 
