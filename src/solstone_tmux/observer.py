@@ -63,6 +63,13 @@ class TmuxObserver:
             logger.error("Tmux not available")
             return False
 
+        self._client = UploadClient(self.config)
+        if self.config.server_url:
+            self._client.ensure_registered(self.config)
+
+        # The journal owns the stream once registered; fall back to a local
+        # derivation so capture still works before/without a reachable journal.
+        self.stream = self.config.stream
         if not self.stream:
             try:
                 self.stream = stream_name(host=HOST, qualifier="tmux")
@@ -70,10 +77,6 @@ class TmuxObserver:
             except ValueError as e:
                 logger.error(f"Failed to derive stream name: {e}")
                 return False
-
-        self._client = UploadClient(self.config)
-        if self.config.server_url:
-            self._client.ensure_registered(self.config)
 
         self._sync = SyncService(self.config, self._client)
         logger.info(f"Observer initialized: stream={self.stream}")
@@ -182,7 +185,6 @@ class TmuxObserver:
             tmux=tmux_info,
             host=HOST,
             platform=PLATFORM,
-            stream=self.stream,
         )
         if self.config.status_indicator and self._sync:
             indicator.update(self._sync.is_connected)

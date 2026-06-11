@@ -45,13 +45,6 @@ def cmd_run(args: argparse.Namespace) -> int:
     config = load_config()
     config.ensure_dirs()
 
-    if not config.stream:
-        try:
-            config.stream = stream_name(host=socket.gethostname(), qualifier="tmux")
-        except ValueError as e:
-            print(f"Error: {e}", file=sys.stderr)
-            return 1
-
     if args.interval:
         config.segment_interval = args.interval
 
@@ -81,53 +74,34 @@ def cmd_setup(args: argparse.Namespace) -> int:
         print("Error: journal URL is required", file=sys.stderr)
         return 1
 
-    # Derive stream name
+    # Save config before registration (so URL is persisted)
+    config.ensure_dirs()
+    save_config(config)
+
+    # Register over HTTP — the journal mints the key and locks the stream.
+    if not config.key:
+        print("Registering with your journal...")
+        client = UploadClient(config)
+        if client.ensure_registered(config):
+            config = load_config()
+            print(f"Registered (key: {config.key[:8]}...)")
+        else:
+            print(
+                "Warning: registration failed. Run setup again when your journal is reachable."
+            )
+    else:
+        print(f"Already registered (key: {config.key[:8]}...)")
+
+    # The journal owns the stream once registered; derive a local fallback so
+    # capture still works before/without a reachable journal.
     if not config.stream:
         try:
             config.stream = stream_name(host=socket.gethostname(), qualifier="tmux")
         except ValueError as e:
             print(f"Error deriving stream name: {e}", file=sys.stderr)
             return 1
+        save_config(config)
     print(f"Stream: {config.stream}")
-
-    # Save config before registration (so URL is persisted)
-    config.ensure_dirs()
-    save_config(config)
-
-    # Auto-register — try sol CLI first (no server needed), fall back to HTTP
-    if not config.key:
-        sol = shutil.which("sol")
-        if sol:
-            print("Registering via sol CLI...")
-            try:
-                result = subprocess.run(
-                    [sol, "observer", "--json", "create", config.stream],
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
-                )
-                if result.returncode == 0:
-                    data = json.loads(result.stdout)
-                    config.key = data["key"]
-                    save_config(config)
-                    print(f"Registered (key: {config.key[:8]}...)")
-                else:
-                    print("CLI registration failed, trying HTTP...")
-            except (subprocess.TimeoutExpired, json.JSONDecodeError, KeyError, OSError):
-                print("CLI registration failed, trying HTTP...")
-
-        if not config.key:
-            print("Registering with your journal...")
-            client = UploadClient(config)
-            if client.ensure_registered(config):
-                config = load_config()
-                print(f"Registered (key: {config.key[:8]}...)")
-            else:
-                print(
-                    "Warning: registration failed. Run setup again when your journal is reachable."
-                )
-    else:
-        print(f"Already registered (key: {config.key[:8]}...)")
 
     print(f"\nConfig saved to {config.config_path}")
     print(f"Captures will go to {config.captures_dir}")
