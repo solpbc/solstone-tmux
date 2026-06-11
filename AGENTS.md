@@ -82,7 +82,7 @@ The `SyncService` runs as a background `asyncio` task. It walks cached days newe
 
 ### Registration
 
-Observer registration tries `sol observer create` via CLI first (works without a running server if sol is on PATH), falling back to HTTP registration at the server's `/app/observer/api/create` endpoint.
+On first run the observer self-registers over HTTP directly to the journal's `/app/observer/register` endpoint, sending a descriptor (`platform`, `hostname`, `stream_type`, `version`). The journal returns a handle, which is cached in the config and presented as an `Authorization: Bearer` token on every later upload. Registration runs once — a cached handle is reused.
 
 ## Config
 
