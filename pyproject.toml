@@ -1,6 +1,6 @@
 [project]
 name = "solstone-tmux"
-version = "0.2.0"
+version = "0.3.0"
 description = "Standalone tmux terminal observer for solstone"
 readme = "README.md"
 license = "AGPL-3.0-only"

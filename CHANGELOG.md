@@ -4,6 +4,13 @@ All notable changes to solstone-tmux will be documented in this file.
 
 Format adapted from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.3.0] - 2026-06-14
+
+### Changed
+- setup no longer asks for a journal url — the observer connects to your
+  journal automatically. if your journal runs on another machine you reach
+  directly, set its address with `solstone-tmux setup --server-url <url>`.
+
 ## [0.2.0] - 2026-06-13
 
 ### Added
