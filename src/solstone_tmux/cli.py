@@ -24,7 +24,7 @@ import sys
 from importlib import resources
 from pathlib import Path
 
-from .config import load_config, save_config
+from .config import DEFAULT_SERVER_URL, load_config, save_config
 from .streams import stream_name
 
 
@@ -65,14 +65,10 @@ def cmd_setup(args: argparse.Namespace) -> int:
 
     config = load_config()
 
-    # Prompt for server URL
-    default_url = config.server_url or ""
-    url = input(f"Your journal URL [{default_url}]: ").strip()
-    if url:
-        config.server_url = url
-    elif not config.server_url:
-        print("Error: journal URL is required", file=sys.stderr)
-        return 1
+    # Resolve the journal URL: an explicit --server-url wins, then any saved
+    # URL, otherwise the local link default. Under pure-PL the journal is
+    # reached over the localhost link, so no URL needs to be typed.
+    config.server_url = args.server_url or config.server_url or DEFAULT_SERVER_URL
 
     # Save config before registration (so URL is persisted)
     config.ensure_dirs()
@@ -260,7 +256,13 @@ def main() -> None:
     )
 
     # setup
-    subparsers.add_parser("setup", help="Interactive configuration")
+    setup_parser = subparsers.add_parser("setup", help="Interactive configuration")
+    setup_parser.add_argument(
+        "--server-url",
+        dest="server_url",
+        default=None,
+        help="Legacy direct-to-remote journal URL (overrides the localhost default)",
+    )
 
     # install-service
     subparsers.add_parser("install-service", help="Install systemd user service")

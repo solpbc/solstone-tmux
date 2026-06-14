@@ -4,7 +4,7 @@ these instructions are for a coding agent and human working together. solstone-t
 
 solstone must already be installed and running. if it isn't, start there: https://solstone.app/install
 
-> **most owners install solstone-tmux from PyPI in three commands** on the machine that will host the observer: `pipx install solstone-tmux`, `solstone-tmux install-service`, then `solstone-tmux setup` (which prompts for your journal URL and auto-registers). if the observer machine can't reach your solstone host, mint a key from there first with `sol observer create <name>` and paste it during setup. the instructions below are for developers building from source or troubleshooting the install.
+> **most owners install solstone-tmux from PyPI in three commands** on the machine that will host the observer: `pipx install solstone-tmux`, `solstone-tmux install-service`, then `solstone-tmux setup` (which registers against your journal over the local `http://localhost:5015` link — no URL to type). if the observer machine reaches your solstone host directly instead, run `solstone-tmux setup --server-url <journal-url>`. the instructions below are for developers building from source or troubleshooting the install.
 
 ## before you begin
 
@@ -35,7 +35,7 @@ the steps below install solstone-tmux from a local clone — the developer-from-
    ```
    solstone-tmux setup
    ```
-   this prompts for your journal URL, registers the observer, and writes the config file.
+   this registers the observer against your journal over the local `http://localhost:5015` link and writes the config file. pass `--server-url <journal-url>` for a direct-to-remote journal.
 
 3. **verify.**
    ```

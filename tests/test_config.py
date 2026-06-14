@@ -9,7 +9,7 @@ from solstone_tmux.config import Config, load_config, save_config
 class TestConfig:
     def test_defaults(self):
         config = Config()
-        assert config.server_url == ""
+        assert config.server_url == "http://localhost:5015"
         assert config.key == ""
         assert config.capture_interval == 5
         assert config.segment_interval == 300
@@ -35,7 +35,7 @@ class TestConfig:
 
     def test_load_missing(self, tmp_path: Path):
         config = load_config(tmp_path)
-        assert config.server_url == ""
+        assert config.server_url == "http://localhost:5015"
         assert config.key == ""
 
     def test_load_corrupt(self, tmp_path: Path):
@@ -44,7 +44,7 @@ class TestConfig:
         (config_dir / "config.json").write_text("not json!")
 
         config = load_config(tmp_path)
-        assert config.server_url == ""
+        assert config.server_url == "http://localhost:5015"
 
     def test_permissions(self, tmp_path: Path):
         config = Config(base_dir=tmp_path)

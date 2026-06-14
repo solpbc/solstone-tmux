@@ -322,7 +322,7 @@ class TestSyncServiceConnected:
         assert sync.is_connected is True
 
     def test_disconnected_when_no_server(self, tmp_path: Path):
-        config = Config(base_dir=tmp_path)
+        config = Config(base_dir=tmp_path, server_url="")
         config.ensure_dirs()
         client = UploadClient(config)
         sync = SyncService(config, client)

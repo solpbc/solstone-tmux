@@ -23,13 +23,14 @@ DEFAULT_CAPTURE_INTERVAL = 5
 DEFAULT_SEGMENT_INTERVAL = 300
 DEFAULT_SYNC_RETRY_DELAYS = [5, 30, 120, 300]
 DEFAULT_SYNC_MAX_RETRIES = 10
+DEFAULT_SERVER_URL = "http://localhost:5015"
 
 
 @dataclass
 class Config:
     """Configuration for the tmux observer."""
 
-    server_url: str = ""
+    server_url: str = DEFAULT_SERVER_URL
     key: str = ""
     stream: str = ""
     capture_interval: int = DEFAULT_CAPTURE_INTERVAL
@@ -82,7 +83,7 @@ def load_config(base_dir: Path | None = None) -> Config:
         logger.warning(f"Failed to load config from {config_path}: {e}")
         return config
 
-    config.server_url = data.get("server_url", "")
+    config.server_url = data.get("server_url", DEFAULT_SERVER_URL)
     config.key = data.get("key", "")
     config.stream = data.get("stream", "")
     config.capture_interval = data.get("capture_interval", DEFAULT_CAPTURE_INTERVAL)

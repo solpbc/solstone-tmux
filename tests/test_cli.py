@@ -4,7 +4,65 @@
 import argparse
 from unittest.mock import patch
 
-from solstone_tmux.cli import cmd_install_service
+from solstone_tmux.cli import cmd_install_service, cmd_setup
+from solstone_tmux.config import Config, load_config, save_config
+
+
+class TestSetup:
+    class FakeClient:
+        instances = []
+
+        def __init__(self, config):
+            self.server_url = config.server_url
+            TestSetup.FakeClient.instances.append(self)
+
+        def ensure_registered(self, config):
+            return False
+
+    def _wire_setup(self, tmp_path, monkeypatch):
+        self.FakeClient.instances = []
+        monkeypatch.setattr(
+            "solstone_tmux.cli.load_config", lambda: load_config(tmp_path)
+        )
+        monkeypatch.setattr("solstone_tmux.cli.save_config", save_config)
+        monkeypatch.setattr("solstone_tmux.upload.UploadClient", self.FakeClient)
+        monkeypatch.setattr(
+            "solstone_tmux.cli.stream_name", lambda **kw: "testhost.tmux"
+        )
+
+    def test_setup_defaults_to_localhost(self, tmp_path, monkeypatch, capsys):
+        self._wire_setup(tmp_path, monkeypatch)
+        args = argparse.Namespace(server_url=None)
+
+        assert cmd_setup(args) == 0
+
+        config = load_config(tmp_path)
+        assert config.server_url == "http://localhost:5015"
+        assert self.FakeClient.instances[0].server_url == "http://localhost:5015"
+        captured = capsys.readouterr()
+        assert "journal URL is required" not in captured.out
+        assert "journal URL is required" not in captured.err
+
+    def test_setup_server_url_override(self, tmp_path, monkeypatch):
+        self._wire_setup(tmp_path, monkeypatch)
+        args = argparse.Namespace(server_url="http://192.168.1.50:5015")
+
+        assert cmd_setup(args) == 0
+
+        config = load_config(tmp_path)
+        assert config.server_url == "http://192.168.1.50:5015"
+        assert self.FakeClient.instances[0].server_url == "http://192.168.1.50:5015"
+
+    def test_setup_preserves_existing_url(self, tmp_path, monkeypatch):
+        config = Config(base_dir=tmp_path, server_url="http://192.168.1.50:5015")
+        save_config(config)
+        self._wire_setup(tmp_path, monkeypatch)
+        args = argparse.Namespace(server_url=None)
+
+        assert cmd_setup(args) == 0
+
+        config = load_config(tmp_path)
+        assert config.server_url == "http://192.168.1.50:5015"
 
 
 class TestInstallServicePath:

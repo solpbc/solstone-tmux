@@ -14,7 +14,7 @@ solstone-tmux install-service
 solstone-tmux setup
 ```
 
-`setup` prompts for your journal URL and registers the observer for you. If this machine can't reach your solstone host directly, mint a key from there with `sol observer create <name>` and paste it during setup.
+`setup` registers the observer against your journal over the local `http://localhost:5015` link, so there's no URL to type. If this machine reaches your solstone host directly instead, run `solstone-tmux setup --server-url <journal-url>`.
 
 ### From source
 
@@ -46,7 +46,7 @@ Create `~/.local/share/solstone-tmux/config/config.json`:
 
 ```json
 {
-  "server_url": "http://localhost:8000",
+  "server_url": "http://localhost:5015",
   "key": "<api-key-from-sol-observer-create>",
   "stream": "<hostname>.tmux",
   "capture_interval": 5,
@@ -56,7 +56,7 @@ Create `~/.local/share/solstone-tmux/config/config.json`:
 
 Set `stream` to `<your-hostname>.tmux` (e.g., `fedora.tmux`, `archon.tmux`). This matches the stream naming convention used by the built-in observers.
 
-Alternatively, `solstone-tmux setup` runs an interactive wizard that prompts for your journal URL and auto-registers.
+Alternatively, `solstone-tmux setup` registers against your journal automatically — over the local `http://localhost:5015` link by default, or pass `--server-url` for a direct-to-remote journal.
 
 ### 3. Install the systemd service
 
