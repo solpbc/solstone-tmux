@@ -4,6 +4,11 @@ All notable changes to solstone-tmux will be documented in this file.
 
 Format adapted from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.3.1] - 2026-06-15
+
+### Changed
+- a tmux observer running on a machine that reaches your journal over your private link now streams cleanly to that journal. it sends its own handle so the journal can tell which stream it is, kept separate from the machine's link identity. an observer on the same machine as your journal is unaffected.
+
 ## [0.3.0] - 2026-06-14
 
 ### Changed
