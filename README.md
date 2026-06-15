@@ -35,7 +35,7 @@ If `solstone-tmux setup` isn't a good fit (no interactive shell, scripted provis
 ### 1. Register an observer with your journal
 
 ```bash
-sol observer create solstone-tmux
+journal observer create solstone-tmux
 ```
 
 This prints the journal URL and API key. You'll need both for the next step.
@@ -47,7 +47,7 @@ Create `~/.local/share/solstone-tmux/config/config.json`:
 ```json
 {
   "server_url": "http://localhost:5015",
-  "key": "<api-key-from-sol-observer-create>",
+  "key": "<api-key-from-journal-observer-create>",
   "stream": "<hostname>.tmux",
   "capture_interval": 5,
   "segment_interval": 300
@@ -71,7 +71,7 @@ This writes the unit file to `~/.config/systemd/user/solstone-tmux.service`, ena
 ```bash
 systemctl --user status solstone-tmux
 solstone-tmux status
-sol observer list  # should show the observer as "connected"
+journal observer list  # should show the observer as "connected"
 ```
 
 ## Manual run

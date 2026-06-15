@@ -14,7 +14,7 @@ check if solstone-tmux is already installed and running:
 
 ```
 systemctl --user status solstone-tmux
-sol observer list
+journal observer list
 ```
 
 if it's already active and connected, you're done.
