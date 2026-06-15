@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 
 UPLOAD_TIMEOUT = 300
 EVENT_TIMEOUT = 30
+OBSERVER_HEADER = "X-Solstone-Observer"
 
 
 class UploadResult(NamedTuple):
@@ -145,7 +146,10 @@ class UploadClient:
                     url,
                     data=data,
                     files=files_data,
-                    headers={"Authorization": f"Bearer {self._key}"},
+                    headers={
+                        OBSERVER_HEADER: self._key,
+                        "Authorization": f"Bearer {self._key}",
+                    },
                     timeout=UPLOAD_TIMEOUT,
                 )
 
@@ -195,7 +199,10 @@ class UploadClient:
         try:
             resp = self._session.get(
                 url,
-                headers={"Authorization": f"Bearer {self._key}"},
+                headers={
+                    OBSERVER_HEADER: self._key,
+                    "Authorization": f"Bearer {self._key}",
+                },
                 timeout=EVENT_TIMEOUT,
             )
             if resp.status_code == 200:
@@ -222,7 +229,10 @@ class UploadClient:
             resp = self._session.post(
                 url,
                 json=payload,
-                headers={"Authorization": f"Bearer {self._key}"},
+                headers={
+                    OBSERVER_HEADER: self._key,
+                    "Authorization": f"Bearer {self._key}",
+                },
                 timeout=EVENT_TIMEOUT,
             )
             if resp.status_code == 200:

@@ -89,6 +89,7 @@ def test_upload_segment_keyless_bearer_no_stream(tmp_path):
     assert call.args[0] == "http://localhost:5015/app/observer/ingest"
     assert "/ingest/MYKEY123" not in call.args[0]
     assert call.kwargs["headers"]["Authorization"] == "Bearer MYKEY123"
+    assert call.kwargs["headers"]["X-Solstone-Observer"] == "MYKEY123"
     data = call.kwargs["data"]
     assert "meta" not in data and "stream" not in data
 
@@ -110,6 +111,7 @@ def test_relay_event_keyless_bearer_no_stream(tmp_path):
     assert call.args[0].endswith("/app/observer/ingest/event")
     assert "/ingest/MYKEY123" not in call.args[0]
     assert call.kwargs["headers"]["Authorization"] == "Bearer MYKEY123"
+    assert call.kwargs["headers"]["X-Solstone-Observer"] == "MYKEY123"
     payload = call.kwargs["json"]
     assert payload["tract"] == "observe" and payload["event"] == "status"
     assert "stream" not in payload
@@ -133,4 +135,5 @@ def test_get_server_segments_keyless_bearer_no_stream_param(tmp_path):
     assert call.args[0].endswith("/app/observer/ingest/segments/20260610")
     assert "/ingest/MYKEY123" not in call.args[0]
     assert call.kwargs["headers"]["Authorization"] == "Bearer MYKEY123"
+    assert call.kwargs["headers"]["X-Solstone-Observer"] == "MYKEY123"
     assert "params" not in call.kwargs
