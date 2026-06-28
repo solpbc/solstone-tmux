@@ -6,7 +6,12 @@ from unittest.mock import Mock
 import requests
 import solstone_tmux
 from solstone_tmux.config import Config, load_config
-from solstone_tmux.upload import UploadClient
+from solstone_tmux.upload import (
+    FAILURE_AUTH,
+    FAILURE_CLIENT_CONTRACT,
+    FAILURE_TRANSIENT,
+    UploadClient,
+)
 
 
 def test_register_posts_descriptor_and_persists(tmp_path):
@@ -120,6 +125,82 @@ def test_upload_segment_rejected_has_safe_http_reason(tmp_path):
     assert response_text not in result.reason
 
 
+def test_upload_segment_422_is_client_contract_and_not_retried(tmp_path):
+    config = Config(
+        base_dir=tmp_path, server_url="http://localhost:5015", key="MYKEY123"
+    )
+    config.sync_max_retries = 3
+    config.sync_retry_delays = [0]
+    config.ensure_dirs()
+    seg = tmp_path / "seg"
+    seg.mkdir()
+    f = seg / "tmux_main_screen.jsonl"
+    f.write_text("{}\n")
+    client = UploadClient(config)
+    client._session = Mock()
+    client._session.post = Mock(
+        return_value=Mock(status_code=422, json=lambda: {}, text="schema mismatch")
+    )
+
+    result = client.upload_segment("20260610", "120000_300", [f])
+
+    assert result.success is False
+    assert result.reason == "http_422"
+    assert result.status_code == 422
+    assert result.failure_class == FAILURE_CLIENT_CONTRACT
+    assert client.last_failure == result
+    assert client._session.post.call_count == 1
+
+
+def test_upload_segment_500_is_transient_and_retried(tmp_path):
+    config = Config(
+        base_dir=tmp_path, server_url="http://localhost:5015", key="MYKEY123"
+    )
+    config.sync_max_retries = 2
+    config.sync_retry_delays = [0]
+    config.ensure_dirs()
+    seg = tmp_path / "seg"
+    seg.mkdir()
+    f = seg / "tmux_main_screen.jsonl"
+    f.write_text("{}\n")
+    client = UploadClient(config)
+    client._session = Mock()
+    client._session.post = Mock(
+        return_value=Mock(status_code=500, json=lambda: {}, text="server down")
+    )
+
+    result = client.upload_segment("20260610", "120000_300", [f])
+
+    assert result.success is False
+    assert result.reason == "http_500"
+    assert result.status_code == 500
+    assert result.failure_class == FAILURE_TRANSIENT
+    assert client._session.post.call_count == 2
+
+
+def test_upload_segment_max_retries_zero_still_attempts_once(tmp_path):
+    config = Config(
+        base_dir=tmp_path, server_url="http://localhost:5015", key="MYKEY123"
+    )
+    config.sync_max_retries = 0
+    config.sync_retry_delays = []
+    config.ensure_dirs()
+    seg = tmp_path / "seg"
+    seg.mkdir()
+    f = seg / "tmux_main_screen.jsonl"
+    f.write_text("{}\n")
+    client = UploadClient(config)
+    client._session = Mock()
+    client._session.post = Mock(
+        return_value=Mock(status_code=200, json=lambda: {"status": "ok"}, text="")
+    )
+
+    result = client.upload_segment("20260610", "120000_300", [f])
+
+    assert result.success is True
+    assert client._session.post.call_count == 1
+
+
 def test_upload_segment_request_exception_reason_is_class_name(tmp_path):
     config = Config(
         base_dir=tmp_path, server_url="http://localhost:5015", key="MYKEY123"
@@ -139,6 +220,24 @@ def test_upload_segment_request_exception_reason_is_class_name(tmp_path):
 
     assert result.success is False
     assert result.reason == "Timeout"
+    assert result.failure_class == FAILURE_TRANSIENT
+    assert result.exception_class == "Timeout"
+
+
+def test_get_server_segments_401_is_auth_failure(tmp_path):
+    config = Config(
+        base_dir=tmp_path, server_url="http://localhost:5015", key="MYKEY123"
+    )
+    config.ensure_dirs()
+    client = UploadClient(config)
+    client._session = Mock()
+    client._session.get = Mock(return_value=Mock(status_code=401, text="bad key"))
+
+    assert client.get_server_segments("20260610") is None
+    assert client.last_failure is not None
+    assert client.last_failure.reason == "http_401"
+    assert client.last_failure.status_code == 401
+    assert client.last_failure.failure_class == FAILURE_AUTH
 
 
 def test_relay_event_keyless_bearer_no_stream(tmp_path):

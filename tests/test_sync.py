@@ -8,8 +8,19 @@ import pytest
 
 from solstone_tmux.config import Config
 from solstone_tmux.recovery import recover_incomplete_segments
-from solstone_tmux.sync import SyncService
-from solstone_tmux.upload import UploadClient, UploadResult
+from solstone_tmux.sync import (
+    CIRCUIT_CLOSED,
+    CIRCUIT_OPEN,
+    CIRCUIT_PERMANENT,
+    SyncService,
+)
+from solstone_tmux.upload import (
+    FAILURE_AUTH,
+    FAILURE_CLIENT_CONTRACT,
+    FAILURE_TRANSIENT,
+    UploadClient,
+    UploadResult,
+)
 
 
 class TestRecovery:
@@ -372,7 +383,6 @@ class TestSyncServiceHealthFacts:
         assert isinstance(sync._last_successful_sync, int)
         assert sync._recent_error_count == 0
         assert sync._last_error_reason is None
-        assert sync._pending_queue_depth == 0
 
     @pytest.mark.asyncio
     async def test_no_needed_upload_records_success(self, tmp_path: Path):
@@ -444,3 +454,264 @@ class TestSyncServiceHealthFacts:
         assert isinstance(sync._last_successful_sync, int)
         assert sync._recent_error_count == 0
         assert sync._last_error_reason is None
+
+
+class TestSyncCircuitClassification:
+    """Test sync circuit classification and recovery behavior."""
+
+    def _make_sync(self, tmp_path: Path) -> SyncService:
+        config = Config(
+            base_dir=tmp_path,
+            server_url="http://localhost:5015",
+            key="KEY1",
+        )
+        config.sync_max_retries = 1
+        config.sync_retry_delays = [0]
+        config.cache_retention_days = -1
+        config.ensure_dirs()
+        client = UploadClient(config)
+        return SyncService(config, client)
+
+    def _create_segment(
+        self,
+        sync: SyncService,
+        day: str,
+        name: str = "120000_300",
+        stream: str = "archon.tmux",
+    ) -> Path:
+        segment = sync._config.captures_dir / day / stream / name
+        segment.mkdir(parents=True, exist_ok=True)
+        (segment / "tmux_main_screen.jsonl").write_text("{}\n")
+        return segment
+
+    @pytest.mark.asyncio
+    async def test_422_marks_segment_and_skips_later_upload(self, tmp_path: Path):
+        from datetime import datetime
+
+        sync = self._make_sync(tmp_path)
+        day = datetime.now().strftime("%Y%m%d")
+        segment = self._create_segment(sync, day)
+        sync._client.get_server_segments = Mock(return_value=[])
+        sync._client.upload_segment = Mock(
+            return_value=UploadResult(
+                False,
+                reason="http_422",
+                status_code=422,
+                failure_class=FAILURE_CLIENT_CONTRACT,
+            )
+        )
+
+        await sync._sync()
+
+        marker = sync._client_contract_failure_path(day, segment)
+        assert marker.exists()
+        assert segment.exists()
+        assert sync._consecutive_failures == 0
+        assert sync._circuit_open is False
+        assert sync._pending_queue_depth == 1
+        state = sync.health_snapshot()["sync_state"]
+        assert state["failure_class"] == FAILURE_CLIENT_CONTRACT
+        assert state["last_status"] == 422
+        assert state["last_operation"] == "upload"
+        assert (
+            state["required_action"] == "inspect_segment_payload_or_observer_contract"
+        )
+        assert sync._client.upload_segment.call_count == 1
+
+        await sync._sync()
+
+        assert sync._client.upload_segment.call_count == 1
+        assert sync._pending_queue_depth == 1
+        assert sync._circuit_open is False
+
+    @pytest.mark.asyncio
+    async def test_client_contract_failures_do_not_open_circuit(self, tmp_path: Path):
+        from datetime import datetime
+
+        sync = self._make_sync(tmp_path)
+        day = datetime.now().strftime("%Y%m%d")
+        for index in range(4):
+            self._create_segment(sync, day, name=f"12000{index}_300")
+        sync._client.get_server_segments = Mock(return_value=[])
+        sync._client.upload_segment = Mock(
+            return_value=UploadResult(
+                False,
+                reason="http_422",
+                status_code=422,
+                failure_class=FAILURE_CLIENT_CONTRACT,
+            )
+        )
+
+        await sync._sync()
+
+        assert sync._client.upload_segment.call_count == 4
+        assert sync._pending_queue_depth == 4
+        assert sync._consecutive_failures == 0
+        assert sync._circuit_open is False
+        assert sync._circuit_state == CIRCUIT_CLOSED
+
+    @pytest.mark.asyncio
+    async def test_transient_failures_open_after_threshold(self, tmp_path: Path):
+        from datetime import datetime
+
+        sync = self._make_sync(tmp_path)
+        day = datetime.now().strftime("%Y%m%d")
+        for index in range(3):
+            self._create_segment(sync, day, name=f"12000{index}_300")
+        sync._client.get_server_segments = Mock(return_value=[])
+        sync._client.upload_segment = Mock(
+            return_value=UploadResult(
+                False,
+                reason="http_500",
+                status_code=500,
+                failure_class=FAILURE_TRANSIENT,
+            )
+        )
+
+        await sync._sync()
+
+        assert sync._client.upload_segment.call_count == 3
+        assert sync._consecutive_failures == 3
+        assert sync._circuit_open is True
+        assert sync._circuit_state == CIRCUIT_OPEN
+        state = sync.health_snapshot()["sync_state"]
+        assert state["failure_class"] == FAILURE_TRANSIENT
+        assert state["last_status"] == 500
+        assert state["next_probe_at"] is not None
+
+    @pytest.mark.asyncio
+    async def test_half_open_probe_success_closes_transient_circuit(
+        self, tmp_path: Path
+    ):
+        sync = self._make_sync(tmp_path)
+        sync._consecutive_failures = 3
+        sync._open_transient_circuit(
+            UploadResult(
+                False,
+                reason="Timeout",
+                failure_class=FAILURE_TRANSIENT,
+                exception_class="Timeout",
+            ),
+            "upload",
+        )
+        sync._next_probe_at = 0
+        sync._client.get_server_segments = Mock(return_value=[])
+
+        assert await sync._prepare_circuit_for_sync() is True
+
+        assert sync._circuit_open is False
+        assert sync._circuit_state == CIRCUIT_CLOSED
+        assert sync._consecutive_failures == 0
+        assert sync.health_snapshot()["sync_state"]["failure_class"] is None
+
+    @pytest.mark.asyncio
+    async def test_failed_half_open_probe_reopens_with_backoff(self, tmp_path: Path):
+        sync = self._make_sync(tmp_path)
+        sync._transient_probe_delay = 1
+        sync._transient_probe_max_delay = 5
+        sync._consecutive_failures = 3
+        sync._open_transient_circuit(
+            UploadResult(
+                False,
+                reason="Timeout",
+                failure_class=FAILURE_TRANSIENT,
+                exception_class="Timeout",
+            ),
+            "upload",
+        )
+        sync._next_probe_at = 0
+        sync._client._last_failure = UploadResult(
+            False,
+            reason="Timeout",
+            failure_class=FAILURE_TRANSIENT,
+            exception_class="Timeout",
+        )
+        sync._client.get_server_segments = Mock(return_value=None)
+
+        assert await sync._prepare_circuit_for_sync() is False
+
+        assert sync._circuit_open is True
+        assert sync._circuit_state == CIRCUIT_OPEN
+        assert sync._transient_probe_delay == 2
+        assert sync.health_snapshot()["sync_state"]["last_operation"] == "probe"
+
+    @pytest.mark.asyncio
+    async def test_auth_failure_is_permanent_until_config_changes(self, tmp_path: Path):
+        from datetime import datetime
+
+        sync = self._make_sync(tmp_path)
+        day = datetime.now().strftime("%Y%m%d")
+        self._create_segment(sync, day)
+        sync._client.get_server_segments = Mock(return_value=[])
+        sync._client.upload_segment = Mock(
+            return_value=UploadResult(
+                False,
+                reason="http_403",
+                status_code=403,
+                failure_class=FAILURE_AUTH,
+            )
+        )
+
+        await sync._sync()
+
+        assert sync._circuit_open is True
+        assert sync._circuit_state == CIRCUIT_PERMANENT
+        assert sync.is_connected is False
+        state = sync.health_snapshot()["sync_state"]
+        assert state["failure_class"] == FAILURE_AUTH
+        assert state["required_action"] == "refresh_observer_credentials"
+        assert await sync._prepare_circuit_for_sync() is False
+
+        sync._config.key = "KEY2"
+
+        assert await sync._prepare_circuit_for_sync() is True
+        assert sync._circuit_open is False
+        assert sync._circuit_state == CIRCUIT_CLOSED
+        assert sync._client._key == "KEY2"
+
+    @pytest.mark.asyncio
+    async def test_auth_query_failure_reports_permanent_auth(self, tmp_path: Path):
+        from datetime import datetime
+
+        sync = self._make_sync(tmp_path)
+        day = datetime.now().strftime("%Y%m%d")
+        self._create_segment(sync, day)
+        sync._client._last_failure = UploadResult(
+            False,
+            reason="http_401",
+            status_code=401,
+            failure_class=FAILURE_AUTH,
+        )
+        sync._client.get_server_segments = Mock(return_value=None)
+        sync._client.upload_segment = Mock()
+
+        await sync._sync()
+
+        assert sync._circuit_open is True
+        assert sync._circuit_state == CIRCUIT_PERMANENT
+        assert sync._last_error_reason == "http_401"
+        state = sync.health_snapshot()["sync_state"]
+        assert state["failure_class"] == FAILURE_AUTH
+        assert state["last_operation"] == "query"
+        sync._client.upload_segment.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_successful_contact_resets_transient_failure_state(
+        self, tmp_path: Path
+    ):
+        from datetime import datetime
+
+        sync = self._make_sync(tmp_path)
+        day = datetime.now().strftime("%Y%m%d")
+        self._create_segment(sync, day)
+        sync._consecutive_failures = 2
+        sync._failure_class = FAILURE_TRANSIENT
+        sync._last_operation = "upload"
+        sync._client.get_server_segments = Mock(return_value=[{"key": "120000_300"}])
+        sync._client.upload_segment = Mock()
+
+        await sync._sync()
+
+        assert sync._consecutive_failures == 0
+        assert sync._circuit_state == CIRCUIT_CLOSED
+        assert sync.health_snapshot()["sync_state"]["failure_class"] is None

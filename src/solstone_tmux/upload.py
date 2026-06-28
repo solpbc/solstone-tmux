@@ -27,12 +27,30 @@ logger = logging.getLogger(__name__)
 UPLOAD_TIMEOUT = 300
 EVENT_TIMEOUT = 30
 OBSERVER_HEADER = "X-Solstone-Observer"
+FAILURE_AUTH = "auth"
+FAILURE_CLIENT_CONTRACT = "client_contract"
+FAILURE_CONFIGURATION = "configuration"
+FAILURE_TRANSIENT = "transient"
 
 
 class UploadResult(NamedTuple):
     success: bool
     duplicate: bool = False
     reason: str | None = None
+    status_code: int | None = None
+    failure_class: str | None = None
+    exception_class: str | None = None
+
+
+def classify_http_failure(status_code: int) -> str:
+    """Classify observer HTTP failures for sync circuit behavior."""
+    if status_code in (401, 403):
+        return FAILURE_AUTH
+    if status_code in (408, 429) or status_code >= 500:
+        return FAILURE_TRANSIENT
+    if 400 <= status_code < 500:
+        return FAILURE_CLIENT_CONTRACT
+    return FAILURE_TRANSIENT
 
 
 class UploadClient:
@@ -44,7 +62,8 @@ class UploadClient:
         self._revoked = False
         self._session = requests.Session()
         self._retry_backoff = config.sync_retry_delays[:3] or [1, 5, 15]
-        self._max_retries = min(config.sync_max_retries, 3)
+        self._max_retries = max(1, min(config.sync_max_retries, 3))
+        self._last_failure: UploadResult | None = None
 
     @property
     def is_revoked(self) -> bool:
@@ -53,6 +72,28 @@ class UploadClient:
     @property
     def is_registered(self) -> bool:
         return bool(self._key)
+
+    @property
+    def last_failure(self) -> UploadResult | None:
+        """Most recent upload/query failure metadata."""
+        return self._last_failure
+
+    def refresh_config(self, config: Config) -> None:
+        """Refresh cached connection credentials after config changes."""
+        next_url = config.server_url.rstrip("/") if config.server_url else ""
+        next_key = config.key
+        if next_url != self._url or next_key != self._key:
+            self._url = next_url
+            self._key = next_key
+            self._revoked = False
+            self._last_failure = None
+
+    def _record_failure(self, result: UploadResult) -> UploadResult:
+        self._last_failure = result
+        return result
+
+    def _clear_failure(self) -> None:
+        self._last_failure = None
 
     def _persist_registration(self, config: Config, key: str, name: str) -> None:
         """Save the minted key and journal-locked stream back to config."""
@@ -122,14 +163,21 @@ class UploadClient:
     ) -> UploadResult:
         """Upload a segment's files to the ingest server."""
         if self._revoked or not self._key or not self._url:
-            return UploadResult(
-                False, reason="revoked" if self._revoked else "not_configured"
+            return self._record_failure(
+                UploadResult(
+                    False,
+                    reason="revoked" if self._revoked else "not_configured",
+                    failure_class=(
+                        FAILURE_AUTH if self._revoked else FAILURE_CONFIGURATION
+                    ),
+                )
             )
 
         url = f"{self._url}/app/observer/ingest"
         last_reason = "upload_failed"
 
-        for attempt, delay in enumerate(self._retry_backoff):
+        for attempt in range(self._max_retries):
+            delay = self._retry_backoff[min(attempt, len(self._retry_backoff) - 1)]
             file_handles = []
             files_data = []
             try:
@@ -144,7 +192,13 @@ class UploadClient:
                     )
 
                 if not files_data:
-                    return UploadResult(False, reason="not_configured")
+                    return self._record_failure(
+                        UploadResult(
+                            False,
+                            reason="not_configured",
+                            failure_class=FAILURE_CONFIGURATION,
+                        )
+                    )
 
                 data: dict[str, Any] = {"day": day, "segment": segment}
                 if meta:
@@ -164,22 +218,40 @@ class UploadClient:
                 if response.status_code == 200:
                     resp_data = response.json()
                     is_duplicate = resp_data.get("status") == "duplicate"
+                    self._clear_failure()
                     return UploadResult(True, duplicate=is_duplicate)
-                if response.status_code in (400, 401, 403):
+
+                failure_class = classify_http_failure(response.status_code)
+                result = UploadResult(
+                    False,
+                    reason=f"http_{response.status_code}",
+                    status_code=response.status_code,
+                    failure_class=failure_class,
+                )
+                if failure_class != FAILURE_TRANSIENT:
                     if response.status_code == 403:
                         self._revoked = True
                     logger.error(
                         f"Upload rejected ({response.status_code}): {response.text}"
                     )
-                    return UploadResult(False, reason=f"http_{response.status_code}")
+                    return self._record_failure(result)
 
                 last_reason = f"http_{response.status_code}"
+                self._record_failure(result)
                 logger.warning(
                     f"Upload attempt {attempt + 1} failed: "
                     f"{response.status_code} {response.text}"
                 )
             except requests.RequestException as e:
                 last_reason = type(e).__name__
+                self._record_failure(
+                    UploadResult(
+                        False,
+                        reason=last_reason,
+                        failure_class=FAILURE_TRANSIENT,
+                        exception_class=last_reason,
+                    )
+                )
                 logger.warning(f"Upload attempt {attempt + 1} failed: {e}")
             finally:
                 for fh in file_handles:
@@ -188,13 +260,16 @@ class UploadClient:
                     except Exception:
                         pass
 
-            if attempt < len(self._retry_backoff) - 1:
+            if attempt < self._max_retries - 1:
                 time.sleep(delay)
 
         logger.error(
-            f"Upload failed after {len(self._retry_backoff)} attempts: {day}/{segment}"
+            f"Upload failed after {self._max_retries} attempts: {day}/{segment}"
         )
-        return UploadResult(False, reason=last_reason)
+        return self._record_failure(
+            self._last_failure
+            or UploadResult(False, reason=last_reason, failure_class=FAILURE_TRANSIENT)
+        )
 
     def get_server_segments(self, day: str) -> list[dict] | None:
         """Query server for segments on a given day.
@@ -202,6 +277,15 @@ class UploadClient:
         Returns list of segment dicts, or None on failure.
         """
         if self._revoked or not self._key or not self._url:
+            self._record_failure(
+                UploadResult(
+                    False,
+                    reason="revoked" if self._revoked else "not_configured",
+                    failure_class=(
+                        FAILURE_AUTH if self._revoked else FAILURE_CONFIGURATION
+                    ),
+                )
+            )
             return None
 
         url = f"{self._url}/app/observer/ingest/segments/{day}"
@@ -216,16 +300,34 @@ class UploadClient:
                 timeout=EVENT_TIMEOUT,
             )
             if resp.status_code == 200:
+                self._clear_failure()
                 return resp.json()
-            if resp.status_code in (401, 403):
+            failure_class = classify_http_failure(resp.status_code)
+            if failure_class == FAILURE_AUTH:
                 if resp.status_code == 403:
                     self._revoked = True
                 logger.error(f"Segments query rejected ({resp.status_code})")
-                return None
-            logger.warning(f"Segments query failed: {resp.status_code}")
+            else:
+                logger.warning(f"Segments query failed: {resp.status_code}")
+            self._record_failure(
+                UploadResult(
+                    False,
+                    reason=f"http_{resp.status_code}",
+                    status_code=resp.status_code,
+                    failure_class=failure_class,
+                )
+            )
             return None
         except requests.RequestException as e:
             logger.debug(f"Segments query failed: {e}")
+            self._record_failure(
+                UploadResult(
+                    False,
+                    reason=type(e).__name__,
+                    failure_class=FAILURE_TRANSIENT,
+                    exception_class=type(e).__name__,
+                )
+            )
             return None
 
     def relay_event(self, tract: str, event: str, **fields: Any) -> bool:

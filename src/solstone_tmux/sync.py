@@ -20,9 +20,23 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from .config import Config
-from .upload import UploadClient, UploadResult
+from .upload import (
+    FAILURE_AUTH,
+    FAILURE_CLIENT_CONTRACT,
+    FAILURE_CONFIGURATION,
+    FAILURE_TRANSIENT,
+    UploadClient,
+    UploadResult,
+    classify_http_failure,
+)
 
 logger = logging.getLogger(__name__)
+
+CIRCUIT_CLOSED = "closed"
+CIRCUIT_OPEN = "open"
+CIRCUIT_HALF_OPEN = "half_open"
+CIRCUIT_PERMANENT = "permanent"
+TRANSIENT_FAILURE_THRESHOLD = 3
 
 
 class SyncService:
@@ -34,6 +48,20 @@ class SyncService:
         self._synced_days: set[str] = set()
         self._consecutive_failures = 0
         self._circuit_open = False
+        self._circuit_state = CIRCUIT_CLOSED
+        self._failure_class: str | None = None
+        self._last_status_code: int | None = None
+        self._last_exception_class: str | None = None
+        self._last_operation: str | None = None
+        self._next_probe_at: float | None = None
+        self._required_action: str | None = None
+        self._permanent_config_signature: tuple[str, str] | None = None
+        first_probe_delay = (
+            self._config.sync_retry_delays[0] if self._config.sync_retry_delays else 60
+        )
+        self._transient_probe_initial_delay = max(0, first_probe_delay)
+        self._transient_probe_delay = self._transient_probe_initial_delay
+        self._transient_probe_max_delay = max(self._transient_probe_initial_delay, 300)
         self._last_full_sync: float = 0
         self._running = True
         self._trigger = asyncio.Event()
@@ -83,12 +111,17 @@ class SyncService:
     @property
     def is_connected(self) -> bool:
         """Whether sync is connected (server configured and circuit closed)."""
-        return bool(self._config.server_url) and not self._circuit_open
+        return (
+            bool(self._config.server_url)
+            and not self._circuit_open
+            and self._circuit_state != CIRCUIT_PERMANENT
+        )
 
     def _record_sync_success(self) -> None:
         self._last_successful_sync = int(time.time() * 1000)
         self._recent_error_count = 0
         self._last_error_reason = None
+        self._clear_circuit_state()
 
     def _record_sync_error(self, reason: str) -> None:
         self._recent_error_count = min(99, self._recent_error_count + 1)
@@ -100,7 +133,240 @@ class SyncService:
             "pending_queue_depth": self._pending_queue_depth,
             "recent_error_count": self._recent_error_count,
             "last_error_reason": self._last_error_reason,
+            "sync_state": self._sync_state_snapshot(),
         }
+
+    def _sync_state_snapshot(self) -> dict:
+        return {
+            "circuit_state": self._circuit_state,
+            "failure_class": self._failure_class,
+            "last_status": self._last_status_code,
+            "last_exception": self._last_exception_class,
+            "last_operation": self._last_operation,
+            "next_probe_at": self._next_probe_at,
+            "required_action": self._required_action,
+            "consecutive_transient_failures": self._consecutive_failures,
+        }
+
+    def _config_signature(self) -> tuple[str, str]:
+        return (self._config.server_url or "", self._config.key or "")
+
+    def _refresh_client_config(self) -> None:
+        refresh = getattr(self._client, "refresh_config", None)
+        if refresh:
+            refresh(self._config)
+
+    def _clear_circuit_state(self) -> None:
+        self._consecutive_failures = 0
+        self._circuit_open = False
+        self._circuit_state = CIRCUIT_CLOSED
+        self._failure_class = None
+        self._last_status_code = None
+        self._last_exception_class = None
+        self._last_operation = None
+        self._next_probe_at = None
+        self._required_action = None
+        self._permanent_config_signature = None
+        self._transient_probe_delay = self._transient_probe_initial_delay
+
+    def _clear_transient_failure_state(self) -> None:
+        self._consecutive_failures = 0
+        self._transient_probe_delay = self._transient_probe_initial_delay
+        if self._failure_class == FAILURE_TRANSIENT:
+            self._circuit_open = False
+            self._circuit_state = CIRCUIT_CLOSED
+            self._failure_class = None
+            self._last_status_code = None
+            self._last_exception_class = None
+            self._last_operation = None
+            self._next_probe_at = None
+            self._required_action = None
+
+    def _failure_result_for_client(self, fallback_reason: str) -> UploadResult:
+        result = getattr(self._client, "last_failure", None)
+        if isinstance(result, UploadResult):
+            return result
+        return UploadResult(
+            False, reason=fallback_reason, failure_class=FAILURE_TRANSIENT
+        )
+
+    def _failure_class_for_result(self, result: UploadResult) -> str:
+        if result.failure_class:
+            return result.failure_class
+        if result.reason in {"revoked"}:
+            return FAILURE_AUTH
+        if result.reason == "not_configured":
+            return FAILURE_CONFIGURATION
+        if result.reason and result.reason.startswith("http_"):
+            try:
+                return classify_http_failure(int(result.reason.removeprefix("http_")))
+            except ValueError:
+                pass
+        return FAILURE_TRANSIENT
+
+    def _status_code_for_result(self, result: UploadResult) -> int | None:
+        if result.status_code is not None:
+            return result.status_code
+        if result.reason and result.reason.startswith("http_"):
+            try:
+                return int(result.reason.removeprefix("http_"))
+            except ValueError:
+                return None
+        return None
+
+    def _required_action_for_failure(self, failure_class: str) -> str | None:
+        if failure_class == FAILURE_AUTH:
+            return "refresh_observer_credentials"
+        if failure_class == FAILURE_CONFIGURATION:
+            return "configure_sync_server_or_key"
+        if failure_class == FAILURE_CLIENT_CONTRACT:
+            return "inspect_segment_payload_or_observer_contract"
+        return None
+
+    def _record_failure_state(self, result: UploadResult, operation: str) -> str:
+        failure_class = self._failure_class_for_result(result)
+        self._failure_class = failure_class
+        self._last_status_code = self._status_code_for_result(result)
+        self._last_exception_class = result.exception_class
+        self._last_operation = operation
+        self._required_action = self._required_action_for_failure(failure_class)
+        return failure_class
+
+    def _open_transient_circuit(
+        self,
+        result: UploadResult,
+        operation: str,
+        *,
+        increase_backoff: bool = False,
+    ) -> None:
+        if increase_backoff:
+            self._transient_probe_delay = min(
+                max(1, self._transient_probe_delay * 2),
+                self._transient_probe_max_delay,
+            )
+        self._record_failure_state(result, operation)
+        self._failure_class = FAILURE_TRANSIENT
+        self._circuit_open = True
+        self._circuit_state = CIRCUIT_OPEN
+        self._next_probe_at = time.time() + self._transient_probe_delay
+        logger.error(
+            "Circuit breaker OPEN: %d consecutive transient failures; "
+            "next probe in %ss",
+            self._consecutive_failures,
+            self._transient_probe_delay,
+        )
+
+    def _open_permanent_circuit(self, result: UploadResult, operation: str) -> None:
+        self._record_failure_state(result, operation)
+        self._circuit_open = True
+        self._circuit_state = CIRCUIT_PERMANENT
+        self._next_probe_at = None
+        self._permanent_config_signature = self._config_signature()
+        logger.error(
+            "Sync circuit permanent until config changes: %s",
+            self._required_action or "operator_action_required",
+        )
+
+    def _handle_failure_result(self, result: UploadResult, operation: str) -> bool:
+        failure_class = self._record_failure_state(result, operation)
+        if failure_class == FAILURE_TRANSIENT:
+            self._consecutive_failures += 1
+            if self._consecutive_failures >= TRANSIENT_FAILURE_THRESHOLD:
+                self._open_transient_circuit(result, operation)
+                return True
+            return False
+        if failure_class in {FAILURE_AUTH, FAILURE_CONFIGURATION}:
+            self._open_permanent_circuit(result, operation)
+            return True
+        return False
+
+    async def _prepare_circuit_for_sync(self) -> bool:
+        self._refresh_client_config()
+        if self._circuit_state == CIRCUIT_PERMANENT:
+            if self._config_signature() != self._permanent_config_signature:
+                logger.info("Sync config changed; clearing permanent circuit")
+                self._clear_circuit_state()
+                return True
+            logger.warning("Permanent sync circuit open — skipping sync")
+            return False
+
+        if self._circuit_open:
+            if (
+                self._circuit_state == CIRCUIT_OPEN
+                and self._failure_class == FAILURE_TRANSIENT
+            ):
+                now = time.time()
+                if self._next_probe_at is not None and now < self._next_probe_at:
+                    logger.warning("Transient sync circuit open — waiting for probe")
+                    return False
+                return await self._probe_transient_circuit()
+
+            logger.warning("Circuit breaker open — skipping sync")
+            return False
+
+        return True
+
+    async def _probe_transient_circuit(self) -> bool:
+        self._circuit_state = CIRCUIT_HALF_OPEN
+        self._last_operation = "probe"
+        today = datetime.now().strftime("%Y%m%d")
+        server_segments = await asyncio.to_thread(
+            self._client.get_server_segments, today
+        )
+        if server_segments is not None:
+            logger.info("Transient sync circuit probe succeeded")
+            self._clear_circuit_state()
+            return True
+
+        result = self._failure_result_for_client("probe_failed")
+        failure_class = self._failure_class_for_result(result)
+        if failure_class == FAILURE_TRANSIENT:
+            self._open_transient_circuit(result, "probe", increase_backoff=True)
+            return False
+        if failure_class in {FAILURE_AUTH, FAILURE_CONFIGURATION}:
+            self._open_permanent_circuit(result, "probe")
+            return False
+
+        self._record_failure_state(result, "probe")
+        self._circuit_open = False
+        self._circuit_state = CIRCUIT_CLOSED
+        self._next_probe_at = None
+        return False
+
+    def _client_contract_failure_path(self, day: str, segment_dir: Path) -> Path:
+        return (
+            self._config.state_dir
+            / "client_contract_failures"
+            / day
+            / segment_dir.parent.name
+            / f"{segment_dir.name}.json"
+        )
+
+    def _has_client_contract_failure(self, day: str, segment_dir: Path) -> bool:
+        return self._client_contract_failure_path(day, segment_dir).exists()
+
+    def _mark_client_contract_failure(
+        self, day: str, segment_dir: Path, result: UploadResult
+    ) -> None:
+        marker = self._client_contract_failure_path(day, segment_dir)
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        data = {
+            "day": day,
+            "stream": segment_dir.parent.name,
+            "segment": segment_dir.name,
+            "segment_path": str(segment_dir),
+            "reason": result.reason,
+            "status_code": self._status_code_for_result(result),
+            "recorded_at": int(time.time() * 1000),
+        }
+        tmp = marker.with_suffix(f".{os.getpid()}.tmp")
+        try:
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, sort_keys=True)
+                f.write("\n")
+            os.rename(str(tmp), str(marker))
+        except OSError as e:
+            logger.warning("Failed to record client/contract failure marker: %s", e)
 
     async def run(self) -> None:
         """Main sync loop — waits for triggers, then syncs."""
@@ -117,8 +383,7 @@ class SyncService:
                 if not self._running:
                     break
 
-                if self._circuit_open:
-                    logger.warning("Circuit breaker open — skipping sync")
+                if not await self._prepare_circuit_for_sync():
                     continue
 
                 # Force full sync daily
@@ -136,6 +401,9 @@ class SyncService:
 
     async def _sync(self, force_full: bool = False) -> None:
         """Walk days newest-to-oldest and upload missing segments."""
+        if not await self._prepare_circuit_for_sync():
+            return
+
         captures_dir = self._config.captures_dir
         if not captures_dir.exists():
             self._pending_queue_depth = 0
@@ -150,7 +418,9 @@ class SyncService:
             return
 
         contacted = False
+        query_failed = False
         upload_failed = False
+        client_contract_pending = False
         fail_reason: str | None = None
         pending = 0
 
@@ -170,9 +440,20 @@ class SyncService:
             )
             if server_segments is None:
                 logger.warning(f"Failed to query server for day {day}")
+                failure = self._failure_result_for_client("server_unreachable")
+                query_failed = True
+                fail_reason = failure.reason or "server_unreachable"
+                if (
+                    self._handle_failure_result(failure, "query")
+                    and self._circuit_state == CIRCUIT_OPEN
+                ):
+                    fail_reason = "circuit_open"
                 pending += len(local_segments)
+                if self._circuit_open:
+                    break
                 continue
             contacted = True
+            self._clear_transient_failure_state()
 
             # Build lookup
             server_keys: set[str] = set()
@@ -192,22 +473,44 @@ class SyncService:
                     continue
 
                 any_needed_upload = True
+                if self._has_client_contract_failure(day, segment_dir):
+                    pending += 1
+                    client_contract_pending = True
+                    self._record_failure_state(
+                        UploadResult(
+                            False,
+                            reason="client_contract_recorded",
+                            failure_class=FAILURE_CLIENT_CONTRACT,
+                        ),
+                        "upload",
+                    )
+                    logger.warning(
+                        "Skipping previously rejected client/contract segment: %s/%s",
+                        day,
+                        segment_key,
+                    )
+                    continue
+
                 result = await self._upload_segment(day, segment_dir)
 
                 if not result.success:
-                    self._consecutive_failures += 1
                     upload_failed = True
                     fail_reason = result.reason or "upload_failed"
                     pending += 1
-                    if self._consecutive_failures >= 3:
-                        self._circuit_open = True
-                        logger.error(
-                            "Circuit breaker OPEN: 3 consecutive failures across segments"
-                        )
+
+                    failure_class = self._failure_class_for_result(result)
+                    if failure_class == FAILURE_CLIENT_CONTRACT:
+                        client_contract_pending = True
+                        self._mark_client_contract_failure(day, segment_dir, result)
+
+                    if (
+                        self._handle_failure_result(result, "upload")
+                        and self._circuit_state == CIRCUIT_OPEN
+                    ):
                         fail_reason = "circuit_open"
                         break
                 else:
-                    self._consecutive_failures = 0
+                    self._clear_transient_failure_state()
 
             # Mark past days as synced if nothing needed upload
             if day != today and not any_needed_upload:
@@ -215,8 +518,10 @@ class SyncService:
                 self._save_synced_days()
 
         self._pending_queue_depth = pending
-        if upload_failed:
+        if upload_failed or query_failed:
             self._record_sync_error(fail_reason or "upload_failed")
+        elif client_contract_pending:
+            self._last_error_reason = self._last_error_reason or "client_contract"
         elif contacted:
             self._record_sync_success()
         else:
@@ -365,8 +670,8 @@ class SyncService:
         if not files:
             return UploadResult(True)  # Nothing to upload
 
-        retry_delays = self._config.sync_retry_delays
-        max_retries = self._config.sync_max_retries
+        retry_delays = self._config.sync_retry_delays or [0]
+        max_retries = max(1, self._config.sync_max_retries)
         result = UploadResult(False, reason="upload_failed")
 
         for attempt in range(max_retries):
@@ -381,8 +686,21 @@ class SyncService:
             # Non-retryable errors
             if self._client.is_revoked:
                 logger.error("Client revoked — disabling sync")
-                self._circuit_open = True
-                return UploadResult(False, reason="revoked")
+                return UploadResult(False, reason="revoked", failure_class=FAILURE_AUTH)
+
+            failure_class = self._failure_class_for_result(result)
+            if failure_class in {
+                FAILURE_AUTH,
+                FAILURE_CONFIGURATION,
+                FAILURE_CLIENT_CONTRACT,
+            }:
+                logger.error(
+                    "Upload rejected without retry: %s/%s (%s)",
+                    day,
+                    segment_key,
+                    result.reason or failure_class,
+                )
+                return result
 
             if attempt < max_retries - 1:
                 delay = retry_delays[min(attempt, len(retry_delays) - 1)]
