@@ -80,6 +80,8 @@ Segments live under `~/.local/share/solstone-tmux/captures/YYYYMMDD/stream/HHMMS
 
 The `SyncService` runs as a background `asyncio` task. It walks cached days newest-to-oldest, queries the server for existing segments, and uploads missing ones. A circuit breaker opens after 3 consecutive failures.
 
+`SyncService` keeps the sync-related health facts in memory. The observer rides an 8-field diagnostics beacon on each `observe.status` event: `name`, `stream_type`, `version`, `uptime`, `last_successful_sync`, `pending_queue_depth`, `recent_error_count`, and `last_error_reason`. The beacon excludes observed-user data. Journal-side health may independently report ingest rejections separate from this observer-side beacon.
+
 ### Registration
 
 On first run the observer self-registers over HTTP directly to the journal's `/app/observer/register` endpoint, sending a descriptor (`platform`, `hostname`, `stream_type`, `version`). The journal returns a handle, which is cached in the config and presented as an `Authorization: Bearer` token on every later upload. Registration runs once — a cached handle is reused.

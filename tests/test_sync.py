@@ -2,14 +2,14 @@
 # Copyright (c) 2026 sol pbc
 
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
 from solstone_tmux.config import Config
 from solstone_tmux.recovery import recover_incomplete_segments
 from solstone_tmux.sync import SyncService
-from solstone_tmux.upload import UploadClient
+from solstone_tmux.upload import UploadClient, UploadResult
 
 
 class TestRecovery:
@@ -335,3 +335,112 @@ class TestSyncServiceConnected:
         sync = SyncService(config, client)
         sync._circuit_open = True
         assert sync.is_connected is False
+
+
+class TestSyncServiceHealthFacts:
+    """Test in-memory sync health facts."""
+
+    def _make_sync(self, tmp_path: Path) -> SyncService:
+        config = Config(base_dir=tmp_path, server_url="http://localhost:5015")
+        config.sync_max_retries = 1
+        config.sync_retry_delays = [0]
+        config.cache_retention_days = -1
+        config.ensure_dirs()
+        client = UploadClient(config)
+        return SyncService(config, client)
+
+    def _create_segment(
+        self, sync: SyncService, day: str, stream: str = "archon.tmux"
+    ) -> Path:
+        segment = sync._config.captures_dir / day / stream / "120000_300"
+        segment.mkdir(parents=True, exist_ok=True)
+        (segment / "tmux_main_screen.jsonl").write_text("{}\n")
+        return segment
+
+    @pytest.mark.asyncio
+    async def test_successful_upload_records_success(self, tmp_path: Path):
+        from datetime import datetime
+
+        sync = self._make_sync(tmp_path)
+        day = datetime.now().strftime("%Y%m%d")
+        self._create_segment(sync, day)
+        sync._client.get_server_segments = Mock(return_value=[])
+        sync._client.upload_segment = Mock(return_value=UploadResult(True))
+
+        await sync._sync()
+
+        assert isinstance(sync._last_successful_sync, int)
+        assert sync._recent_error_count == 0
+        assert sync._last_error_reason is None
+        assert sync._pending_queue_depth == 0
+
+    @pytest.mark.asyncio
+    async def test_no_needed_upload_records_success(self, tmp_path: Path):
+        from datetime import datetime
+
+        sync = self._make_sync(tmp_path)
+        day = datetime.now().strftime("%Y%m%d")
+        self._create_segment(sync, day)
+        sync._client.get_server_segments = Mock(return_value=[{"key": "120000_300"}])
+        sync._client.upload_segment = Mock()
+
+        await sync._sync()
+
+        assert isinstance(sync._last_successful_sync, int)
+        assert sync._recent_error_count == 0
+        assert sync._last_error_reason is None
+        assert sync._pending_queue_depth == 0
+        sync._client.upload_segment.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_upload_failure_records_error(self, tmp_path: Path):
+        from datetime import datetime
+
+        sync = self._make_sync(tmp_path)
+        day = datetime.now().strftime("%Y%m%d")
+        self._create_segment(sync, day)
+        sync._client.get_server_segments = Mock(return_value=[])
+        sync._client.upload_segment = Mock(
+            return_value=UploadResult(False, reason="http_500")
+        )
+
+        await sync._sync()
+
+        assert sync._last_successful_sync is None
+        assert sync._recent_error_count == 1
+        assert sync._last_error_reason == "http_500"
+        assert sync._pending_queue_depth == 1
+
+    @pytest.mark.asyncio
+    async def test_server_unreachable_records_error(self, tmp_path: Path):
+        from datetime import datetime
+
+        sync = self._make_sync(tmp_path)
+        day = datetime.now().strftime("%Y%m%d")
+        self._create_segment(sync, day)
+        sync._client.get_server_segments = Mock(return_value=None)
+        sync._client.upload_segment = Mock()
+
+        await sync._sync()
+
+        assert sync._last_successful_sync is None
+        assert sync._recent_error_count >= 1
+        assert sync._last_error_reason == "server_unreachable"
+        assert sync._pending_queue_depth == 1
+        sync._client.upload_segment.assert_not_called()
+
+    def test_health_recorders_clamp_truncate_and_reset(self, tmp_path: Path):
+        sync = self._make_sync(tmp_path)
+
+        for _ in range(150):
+            sync._record_sync_error("x" * 500)
+
+        assert sync._recent_error_count == 99
+        assert len(sync._last_error_reason) == 200
+        assert sync._last_successful_sync is None
+
+        sync._record_sync_success()
+
+        assert isinstance(sync._last_successful_sync, int)
+        assert sync._recent_error_count == 0
+        assert sync._last_error_reason is None

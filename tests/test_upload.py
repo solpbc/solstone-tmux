@@ -3,6 +3,7 @@
 
 from unittest.mock import Mock
 
+import requests
 import solstone_tmux
 from solstone_tmux.config import Config, load_config
 from solstone_tmux.upload import UploadClient
@@ -92,6 +93,52 @@ def test_upload_segment_keyless_bearer_no_stream(tmp_path):
     assert call.kwargs["headers"]["X-Solstone-Observer"] == "MYKEY123"
     data = call.kwargs["data"]
     assert "meta" not in data and "stream" not in data
+
+
+def test_upload_segment_rejected_has_safe_http_reason(tmp_path):
+    config = Config(
+        base_dir=tmp_path, server_url="http://localhost:5015", key="MYKEY123"
+    )
+    config.sync_max_retries = 1
+    config.sync_retry_delays = [0]
+    config.ensure_dirs()
+    seg = tmp_path / "seg"
+    seg.mkdir()
+    f = seg / "tmux_main_screen.jsonl"
+    f.write_text("{}\n")
+    client = UploadClient(config)
+    response_text = "secret-project /tmp/private response body"
+    client._session = Mock()
+    client._session.post = Mock(
+        return_value=Mock(status_code=400, json=lambda: {}, text=response_text)
+    )
+
+    result = client.upload_segment("20260610", "120000_300", [f])
+
+    assert result.success is False
+    assert result.reason == "http_400"
+    assert response_text not in result.reason
+
+
+def test_upload_segment_request_exception_reason_is_class_name(tmp_path):
+    config = Config(
+        base_dir=tmp_path, server_url="http://localhost:5015", key="MYKEY123"
+    )
+    config.sync_max_retries = 1
+    config.sync_retry_delays = [0]
+    config.ensure_dirs()
+    seg = tmp_path / "seg"
+    seg.mkdir()
+    f = seg / "tmux_main_screen.jsonl"
+    f.write_text("{}\n")
+    client = UploadClient(config)
+    client._session = Mock()
+    client._session.post = Mock(side_effect=requests.Timeout("secret-project"))
+
+    result = client.upload_segment("20260610", "120000_300", [f])
+
+    assert result.success is False
+    assert result.reason == "Timeout"
 
 
 def test_relay_event_keyless_bearer_no_stream(tmp_path):

@@ -32,6 +32,7 @@ OBSERVER_HEADER = "X-Solstone-Observer"
 class UploadResult(NamedTuple):
     success: bool
     duplicate: bool = False
+    reason: str | None = None
 
 
 class UploadClient:
@@ -48,6 +49,10 @@ class UploadClient:
     @property
     def is_revoked(self) -> bool:
         return self._revoked
+
+    @property
+    def is_registered(self) -> bool:
+        return bool(self._key)
 
     def _persist_registration(self, config: Config, key: str, name: str) -> None:
         """Save the minted key and journal-locked stream back to config."""
@@ -117,9 +122,12 @@ class UploadClient:
     ) -> UploadResult:
         """Upload a segment's files to the ingest server."""
         if self._revoked or not self._key or not self._url:
-            return UploadResult(False)
+            return UploadResult(
+                False, reason="revoked" if self._revoked else "not_configured"
+            )
 
         url = f"{self._url}/app/observer/ingest"
+        last_reason = "upload_failed"
 
         for attempt, delay in enumerate(self._retry_backoff):
             file_handles = []
@@ -136,7 +144,7 @@ class UploadClient:
                     )
 
                 if not files_data:
-                    return UploadResult(False)
+                    return UploadResult(False, reason="not_configured")
 
                 data: dict[str, Any] = {"day": day, "segment": segment}
                 if meta:
@@ -163,13 +171,15 @@ class UploadClient:
                     logger.error(
                         f"Upload rejected ({response.status_code}): {response.text}"
                     )
-                    return UploadResult(False)
+                    return UploadResult(False, reason=f"http_{response.status_code}")
 
+                last_reason = f"http_{response.status_code}"
                 logger.warning(
                     f"Upload attempt {attempt + 1} failed: "
                     f"{response.status_code} {response.text}"
                 )
             except requests.RequestException as e:
+                last_reason = type(e).__name__
                 logger.warning(f"Upload attempt {attempt + 1} failed: {e}")
             finally:
                 for fh in file_handles:
@@ -184,7 +194,7 @@ class UploadClient:
         logger.error(
             f"Upload failed after {len(self._retry_backoff)} attempts: {day}/{segment}"
         )
-        return UploadResult(False)
+        return UploadResult(False, reason=last_reason)
 
     def get_server_segments(self, day: str) -> list[dict] | None:
         """Query server for segments on a given day.

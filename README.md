@@ -86,6 +86,7 @@ solstone-tmux run -v      # verbose/debug logging
 - Polls all active tmux sessions every 5 seconds for content changes
 - Accumulates observations in 5-minute segments under `~/.local/share/solstone-tmux/captures/`
 - Background sync service uploads completed segments to your journal
+- Emits a diagnostics-only health beacon to your journal that intentionally excludes pane content and tmux session names
 - Works offline — syncs when your journal is reachable
 - Recovers incomplete segments on startup after crashes
 

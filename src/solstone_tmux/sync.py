@@ -14,13 +14,13 @@ import asyncio
 import json
 import logging
 import os
-import time
 import shutil
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
 from .config import Config
-from .upload import UploadClient
+from .upload import UploadClient, UploadResult
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +37,10 @@ class SyncService:
         self._last_full_sync: float = 0
         self._running = True
         self._trigger = asyncio.Event()
+        self._last_successful_sync: int | None = None
+        self._recent_error_count = 0
+        self._last_error_reason: str | None = None
+        self._pending_queue_depth = 0
 
         # Load synced days cache
         self._load_synced_days()
@@ -81,6 +85,23 @@ class SyncService:
         """Whether sync is connected (server configured and circuit closed)."""
         return bool(self._config.server_url) and not self._circuit_open
 
+    def _record_sync_success(self) -> None:
+        self._last_successful_sync = int(time.time() * 1000)
+        self._recent_error_count = 0
+        self._last_error_reason = None
+
+    def _record_sync_error(self, reason: str) -> None:
+        self._recent_error_count = min(99, self._recent_error_count + 1)
+        self._last_error_reason = (reason or "error")[:200]
+
+    def health_snapshot(self) -> dict:
+        return {
+            "last_successful_sync": self._last_successful_sync,
+            "pending_queue_depth": self._pending_queue_depth,
+            "recent_error_count": self._recent_error_count,
+            "last_error_reason": self._last_error_reason,
+        }
+
     async def run(self) -> None:
         """Main sync loop — waits for triggers, then syncs."""
         while self._running:
@@ -117,6 +138,7 @@ class SyncService:
         """Walk days newest-to-oldest and upload missing segments."""
         captures_dir = self._config.captures_dir
         if not captures_dir.exists():
+            self._pending_queue_depth = 0
             return
 
         today = datetime.now().strftime("%Y%m%d")
@@ -124,13 +146,16 @@ class SyncService:
         # Collect segments by day
         segments_by_day = self._collect_segments(captures_dir)
         if not segments_by_day:
+            self._pending_queue_depth = 0
             return
 
-        for day in sorted(segments_by_day.keys(), reverse=True):
-            if not self._running:
-                break
+        contacted = False
+        upload_failed = False
+        fail_reason: str | None = None
+        pending = 0
 
-            if self._circuit_open:
+        for day in sorted(segments_by_day.keys(), reverse=True):
+            if not self._running or self._circuit_open:
                 break
 
             # Skip past days already fully synced (unless forcing)
@@ -145,7 +170,9 @@ class SyncService:
             )
             if server_segments is None:
                 logger.warning(f"Failed to query server for day {day}")
+                pending += len(local_segments)
                 continue
+            contacted = True
 
             # Build lookup
             server_keys: set[str] = set()
@@ -165,15 +192,19 @@ class SyncService:
                     continue
 
                 any_needed_upload = True
-                success = await self._upload_segment(day, segment_dir)
+                result = await self._upload_segment(day, segment_dir)
 
-                if not success:
+                if not result.success:
                     self._consecutive_failures += 1
+                    upload_failed = True
+                    fail_reason = result.reason or "upload_failed"
+                    pending += 1
                     if self._consecutive_failures >= 3:
                         self._circuit_open = True
                         logger.error(
                             "Circuit breaker OPEN: 3 consecutive failures across segments"
                         )
+                        fail_reason = "circuit_open"
                         break
                 else:
                     self._consecutive_failures = 0
@@ -182,6 +213,14 @@ class SyncService:
             if day != today and not any_needed_upload:
                 self._synced_days.add(day)
                 self._save_synced_days()
+
+        self._pending_queue_depth = pending
+        if upload_failed:
+            self._record_sync_error(fail_reason or "upload_failed")
+        elif contacted:
+            self._record_sync_success()
+        else:
+            self._record_sync_error("server_unreachable")
 
         # Cleanup old synced segments
         if not self._circuit_open and self._running:
@@ -319,15 +358,16 @@ class SyncService:
 
         return result
 
-    async def _upload_segment(self, day: str, segment_dir: Path) -> bool:
+    async def _upload_segment(self, day: str, segment_dir: Path) -> UploadResult:
         """Upload a single segment with retry logic."""
         segment_key = segment_dir.name
         files = [f for f in segment_dir.iterdir() if f.is_file()]
         if not files:
-            return True  # Nothing to upload
+            return UploadResult(True)  # Nothing to upload
 
         retry_delays = self._config.sync_retry_delays
         max_retries = self._config.sync_max_retries
+        result = UploadResult(False, reason="upload_failed")
 
         for attempt in range(max_retries):
             result = await asyncio.to_thread(
@@ -336,13 +376,13 @@ class SyncService:
 
             if result.success:
                 logger.info(f"Uploaded: {day}/{segment_key} ({len(files)} files)")
-                return True
+                return result
 
             # Non-retryable errors
             if self._client.is_revoked:
                 logger.error("Client revoked — disabling sync")
                 self._circuit_open = True
-                return False
+                return UploadResult(False, reason="revoked")
 
             if attempt < max_retries - 1:
                 delay = retry_delays[min(attempt, len(retry_delays) - 1)]
@@ -352,4 +392,4 @@ class SyncService:
                 await asyncio.sleep(delay)
 
         logger.error(f"Upload failed after {max_retries} attempts: {day}/{segment_key}")
-        return False
+        return result

@@ -18,6 +18,7 @@ import socket
 import time
 from pathlib import Path
 
+from . import __version__
 from .capture import TmuxCapture, write_captures_jsonl
 from .config import Config
 from . import indicator
@@ -51,10 +52,10 @@ class TmuxObserver:
         self._sync: SyncService | None = None
         self.start_at = time.time()
         self.start_at_mono = time.monotonic()
+        self.process_start_mono = time.monotonic()
         self.segment_dir: Path | None = None
         self.captures: list[dict] = []
         self.capture_id = 0
-        self.sessions_seen: set[str] = set()
         self.last_capture_time: float = 0
 
     def setup(self) -> bool:
@@ -96,8 +97,6 @@ class TmuxObserver:
 
         for session_info in active_sessions:
             session = session_info["session"]
-            self.sessions_seen.add(session)
-
             result = self.tmux_capture.capture_changed(session)
             if not result:
                 continue
@@ -114,7 +113,6 @@ class TmuxObserver:
         """Reset per-segment capture tracking."""
         self.captures = []
         self.capture_id = 0
-        self.sessions_seen = set()
         self.tmux_capture.reset_hashes()
         self.last_capture_time = 0
 
@@ -167,27 +165,31 @@ class TmuxObserver:
         self.segment_dir = segment_dir
 
     def emit_status(self):
-        """Emit observe.status with current tmux capture state (fire-and-forget)."""
-        if not self._client:
-            return
-
-        elapsed = int(time.monotonic() - self.start_at_mono)
-        tmux_info = {
-            "capturing": True,
-            "captures": len(self.captures),
-            "sessions": sorted(self.sessions_seen),
-            "window_elapsed_seconds": elapsed,
-        }
-        self._client.relay_event(
-            "observe",
-            "status",
-            mode="tmux",
-            tmux=tmux_info,
-            host=HOST,
-            platform=PLATFORM,
-        )
+        """Emit the observe.status health beacon (fire-and-forget, diagnostics only)."""
+        if self._client and self._client.is_registered:
+            try:
+                self._client.relay_event(
+                    "observe", "status", **self._build_status_fields()
+                )
+            except Exception:
+                logger.debug("Status beacon emission failed", exc_info=True)
         if self.config.status_indicator and self._sync:
             indicator.update(self._sync.is_connected)
+
+    def _build_status_fields(self) -> dict:
+        health = self._sync.health_snapshot() if self._sync else {}
+        return {
+            "host": HOST,
+            "platform": PLATFORM,
+            "name": self.config.stream,
+            "stream_type": "tmux",
+            "version": __version__,
+            "uptime": int(time.monotonic() - self.process_start_mono),
+            "last_successful_sync": health.get("last_successful_sync"),
+            "pending_queue_depth": health.get("pending_queue_depth", 0),
+            "recent_error_count": health.get("recent_error_count", 0),
+            "last_error_reason": health.get("last_error_reason"),
+        }
 
     async def main_loop(self):
         """Run the capture loop with background sync."""
