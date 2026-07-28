@@ -116,7 +116,7 @@ fn launchd_install_and_uninstall_argv_are_exact() {
         .assert_finished()
         .expect("uninstall invocations");
     assert!(!artifact_path(&fixture.home).exists());
-    assert!(!fixture.config_root().join("local-observer.json").exists());
+    assert!(!fixture.config_root().join(STATE_FILENAME).exists());
 }
 
 #[test]
@@ -448,37 +448,15 @@ fn unchanged_launchd_plist_bootstraps_absent_job_without_rewrite() {
     let inode_before = fs::metadata(&artifact)
         .expect("desired plist metadata")
         .ino();
-    let runner = FixtureRunner::new([
-        expected(
+    let runner = FixtureRunner::new(
+        [expected(
             ServiceOperation::LaunchdPrint,
             vec!["print".into(), target().into()],
             command_output(&[], b"service not loaded", 3),
-        ),
-        expected(
-            ServiceOperation::LaunchdEnable,
-            vec!["enable".into(), target().into()],
-            output([]),
-        ),
-        expected(
-            ServiceOperation::LaunchdBootstrap,
-            vec![
-                "bootstrap".into(),
-                domain().into(),
-                artifact.clone().into_os_string(),
-            ],
-            output([]),
-        ),
-        expected(
-            ServiceOperation::LaunchdKickstart,
-            vec!["kickstart".into(), "-k".into(), target().into()],
-            output([]),
-        ),
-        expected(
-            ServiceOperation::LaunchdPrint,
-            vec!["print".into(), target().into()],
-            output(b"loaded\n"),
-        ),
-    ]);
+        )]
+        .into_iter()
+        .chain(launchd_install_expectations(&fixture)),
+    );
 
     fixture.controller(&runner).install_blocking();
 
