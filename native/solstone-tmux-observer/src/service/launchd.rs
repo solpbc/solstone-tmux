@@ -72,16 +72,19 @@ pub async fn prepare_install(
 ) -> Result<PreparedInstall, ServiceError> {
     let path = artifact_path(home);
     let bytes = render(binary, service_path)?;
-    let unchanged = validate_regular_file(&path, Some(OWNERSHIP_MARKER))?
+    let present = validate_regular_file(&path, Some(OWNERSHIP_MARKER))?;
+    let unchanged = present
         && std::fs::read(&path).map_err(|source| ServiceError::Io {
             path: path.clone(),
             source,
         })? == bytes;
 
     if !unchanged {
-        let output = bootout(runner, user_id, &path).await?;
-        if output.status != 0 && !reports_absent(&output) {
-            return Err(manager_error("launchd bootout", &output));
+        if present {
+            let output = bootout(runner, user_id, &path).await?;
+            if output.status != 0 && !reports_absent(&output) {
+                return Err(manager_error("launchd bootout", &output));
+            }
         }
         install_artifact(&path, &bytes)?;
         require_success(
