@@ -7,6 +7,8 @@ use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::os::unix::fs::{MetadataExt, symlink};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use solstone_tmux_observer::command::{
     CommandError, CommandInvocation, CommandOperation, CommandOutput, CommandRunner,
@@ -15,15 +17,18 @@ use solstone_tmux_observer::command::{
 use solstone_tmux_observer::paths::PlatformKind;
 use solstone_tmux_observer::service::launchd::{LABEL, artifact_path, render};
 use solstone_tmux_observer::service::{
-    COMMAND_TIMEOUT, LocalObserver, STATE_FILENAME, ServiceController, TMUX_NOT_FOUND,
+    COMMAND_TIMEOUT, LocalObserver, STATE_FILENAME, ServiceController, ServiceError, ServiceStatus,
+    TMUX_NOT_FOUND,
 };
 use support::{
-    ExpectedInvocation, FakeEnvironment, FixtureRunner, TestDirectory, command_output,
-    create_executable, output,
+    ExpectedInvocation, FakeEnvironment, FixtureOutcome, FixtureRunner, TestDirectory,
+    command_output, create_executable, launchd_absent, output,
 };
 
 const USER_ID: u32 = 501;
 const STATUS_FIVE_ERROR: &[u8] = b"Boot-out failed: 5: Input/output error";
+const RUNNING: &[u8] = include_bytes!("data/launchd/running.txt");
+const QUIESCENT: &[u8] = include_bytes!("data/launchd/loaded-not-running.txt");
 
 #[test]
 fn launchd_plist_has_required_keys() {
@@ -80,10 +85,7 @@ fn launchd_xml_and_arguments_handle_spaces_and_metacharacters() {
     let run = plist[arguments..]
         .find("<string>run</string>")
         .expect("run argument");
-    assert!(
-        binary < run,
-        "binary and run must be separate ordered arguments"
-    );
+    assert!(binary < run);
 }
 
 #[test]
@@ -94,33 +96,37 @@ fn launchd_install_and_uninstall_argv_are_exact() {
     install_runner
         .assert_finished()
         .expect("install invocations");
-    for call in install_runner.calls() {
+
+    let uninstall_runner = FixtureRunner::new(vec![
+        disable(output([])),
+        print(running()),
+        kill(output([])),
+        print(running()),
+        print(quiescent()),
+        bootout(&fixture, output([])),
+    ]);
+    fixture.controller(&uninstall_runner).uninstall_blocking();
+    uninstall_runner
+        .assert_finished()
+        .expect("uninstall invocations");
+
+    let calls = install_runner
+        .calls()
+        .into_iter()
+        .chain(uninstall_runner.calls());
+    for call in calls {
         assert!(
             call.args
                 .iter()
                 .all(|arg| !arg.to_string_lossy().contains("solstone-tmux.service"))
         );
     }
-
-    let uninstall_runner = FixtureRunner::new([expected(
-        ServiceOperation::LaunchdBootout,
-        vec![
-            "bootout".into(),
-            domain().into(),
-            artifact_path(&fixture.home).into_os_string(),
-        ],
-        output([]),
-    )]);
-    fixture.controller(&uninstall_runner).uninstall_blocking();
-    uninstall_runner
-        .assert_finished()
-        .expect("uninstall invocations");
     assert!(!artifact_path(&fixture.home).exists());
     assert!(!fixture.config_root().join(STATE_FILENAME).exists());
 }
 
 #[test]
-fn launchd_first_install_skips_bootout_and_persists_before_bootstrap() {
+fn launchd_first_install_skips_stop_and_persists_before_bootstrap() {
     let fixture = ServiceFixture::new("launchd-first-install", true);
     let artifact = artifact_path(&fixture.home);
     let state_path = fixture.config_root().join(STATE_FILENAME);
@@ -130,17 +136,11 @@ fn launchd_first_install_skips_bootout_and_persists_before_bootstrap() {
         inner: FixtureRunner::new(launchd_install_expectations(&fixture)),
         inspect: Box::new(move |invocation| match invocation.operation {
             CommandOperation::Service(ServiceOperation::LaunchdEnable) => {
-                assert_eq!(
-                    fs::read(&artifact).expect("plist before enable"),
-                    desired_bytes
-                );
+                assert_eq!(fs::read(&artifact).expect("plist"), desired_bytes);
                 assert!(!state_path.exists());
             }
             CommandOperation::Service(ServiceOperation::LaunchdBootstrap) => {
-                assert_eq!(
-                    fs::read(&artifact).expect("plist before bootstrap"),
-                    desired_bytes
-                );
+                assert_eq!(fs::read(&artifact).expect("plist"), desired_bytes);
                 assert_local_observer(&state_path, &expected_tmux);
             }
             _ => {}
@@ -149,496 +149,983 @@ fn launchd_first_install_skips_bootout_and_persists_before_bootstrap() {
 
     fixture.controller(&runner).install_blocking();
 
-    runner
-        .inner
-        .assert_finished()
-        .expect("first-install invocations");
-    let calls = runner.inner.calls();
-    assert_eq!(calls.len(), 3);
-    assert!(
-        !calls.iter().any(|call| matches!(
-            call.operation,
-            CommandOperation::Service(ServiceOperation::LaunchdBootout)
-        )),
-        "first install must not boot out an absent job"
-    );
+    runner.inner.assert_finished().expect("first install");
+    assert_eq!(runner.inner.calls().len(), 3);
+    assert!(!runner.inner.calls().iter().any(is_stop_operation));
 }
 
 #[test]
-fn unowned_launchd_artifact_is_rejected_before_manager_mutation() {
-    let fixture = ServiceFixture::new("launchd-unowned-uninstall", true);
+fn launchd_replacement_stops_running_job_before_write() {
+    let fixture = ServiceFixture::new("launchd-replacement-running", true);
+    let (old_bytes, old_inode) = write_old_plist(&fixture);
+    let desired_bytes = expected_plist_bytes(&fixture);
+    let state_path = fixture.config_root().join(STATE_FILENAME);
+    let expected_tmux = fs::canonicalize(&fixture.tmux).expect("canonical tmux");
     let artifact = artifact_path(&fixture.home);
-    fs::create_dir_all(artifact.parent().expect("plist parent")).expect("plist parent");
-    fs::write(&artifact, b"<plist><string>owner label</string></plist>\n").expect("owner plist");
+    let inspected_artifact = artifact.clone();
+    let inspected_old = old_bytes.clone();
+    let inspected_desired = desired_bytes.clone();
+    let call_index = Arc::new(AtomicUsize::new(0));
+    let inspected_index = Arc::clone(&call_index);
+    let runner = InspectingRunner {
+        inner: FixtureRunner::new(vec![
+            disable(output([])),
+            print(running()),
+            kill(output([])),
+            print(running()),
+            print(quiescent()),
+            bootout(&fixture, output([])),
+            enable(output([])),
+            bootstrap(&fixture, output([])),
+            print(running()),
+        ]),
+        inspect: Box::new(move |invocation| {
+            let index = inspected_index.fetch_add(1, Ordering::Relaxed);
+            if index < 6 {
+                assert_artifact(
+                    &inspected_artifact,
+                    &inspected_old,
+                    old_inode,
+                    "during graceful stop",
+                );
+                assert!(!state_path.exists(), "state must not precede prepare");
+            } else if invocation.operation
+                == CommandOperation::Service(ServiceOperation::LaunchdEnable)
+            {
+                assert_eq!(
+                    fs::read(&inspected_artifact).expect("new plist"),
+                    inspected_desired
+                );
+                assert!(!state_path.exists(), "state is persisted after prepare");
+            } else {
+                assert_eq!(
+                    fs::read(&inspected_artifact).expect("new plist"),
+                    inspected_desired
+                );
+                assert_local_observer(&state_path, &expected_tmux);
+            }
+        }),
+    };
+
+    fixture.controller(&runner).install_blocking();
+
+    runner.inner.assert_finished().expect("replacement");
+    assert_eq!(call_index.load(Ordering::Relaxed), 9);
+    assert_eq!(fs::read(artifact).expect("new plist"), desired_bytes);
+}
+
+#[test]
+fn launchd_replacement_stops_quiescent_and_absent_jobs_without_signal() {
+    for (label, inspected, tail) in [
+        (
+            "replacement-quiescent",
+            print(quiescent()),
+            vec![bootout_placeholder(absent())],
+        ),
+        (
+            "replacement-absent",
+            print(absent()),
+            Vec::<ExpectedInvocation>::new(),
+        ),
+    ] {
+        let fixture = ServiceFixture::new(label, true);
+        let (old_bytes, old_inode) = write_old_plist(&fixture);
+        let mut expectations = vec![disable(output([])), inspected];
+        expectations.extend(tail.into_iter().map(|mut item| {
+            item.invocation.args[2] = artifact_path(&fixture.home).into_os_string();
+            item
+        }));
+        let protected = expectations.len();
+        expectations.extend(launchd_install_expectations(&fixture));
+        let runner = inspecting_preserved_runner(
+            &fixture,
+            expectations,
+            protected,
+            &old_bytes,
+            old_inode,
+            None,
+        );
+
+        fixture.controller(&runner).install_blocking();
+
+        runner.inner.assert_finished().expect(label);
+        assert!(
+            !runner
+                .inner
+                .calls()
+                .iter()
+                .any(|call| call.operation
+                    == CommandOperation::Service(ServiceOperation::LaunchdKill))
+        );
+    }
+}
+
+#[test]
+fn launchd_uninstall_handles_running_quiescent_absent_and_missing_plist() {
+    for (label, expectations, protected) in [
+        (
+            "uninstall-running",
+            vec![
+                disable(output([])),
+                print(running()),
+                kill(output([])),
+                print(quiescent()),
+                bootout_placeholder(output([])),
+            ],
+            5,
+        ),
+        (
+            "uninstall-quiescent",
+            vec![
+                disable(output([])),
+                print(quiescent()),
+                bootout_placeholder(output([])),
+            ],
+            3,
+        ),
+        (
+            "uninstall-absent",
+            vec![disable(output([])), print(absent())],
+            2,
+        ),
+    ] {
+        let fixture = ServiceFixture::new(label, true);
+        let runner = FixtureRunner::new(launchd_install_expectations(&fixture));
+        fixture.controller(&runner).install_blocking();
+        runner.assert_finished().expect("initial install");
+        let artifact = artifact_path(&fixture.home);
+        let bytes = fs::read(&artifact).expect("owned plist");
+        let inode = fs::metadata(&artifact).expect("owned plist").ino();
+        let state_path = fixture.config_root().join(STATE_FILENAME);
+        let state = fs::read(&state_path).expect("local state");
+        let expectations = expectations.into_iter().map(|mut item| {
+            if item.invocation.operation
+                == CommandOperation::Service(ServiceOperation::LaunchdBootout)
+            {
+                item.invocation.args[2] = artifact.clone().into_os_string();
+            }
+            item
+        });
+        let runner = inspecting_preserved_runner(
+            &fixture,
+            expectations.collect(),
+            protected,
+            &bytes,
+            inode,
+            Some(&state),
+        );
+
+        fixture.controller(&runner).uninstall_blocking();
+
+        runner.inner.assert_finished().expect(label);
+        assert!(!artifact.exists(), "{label}: plist removed");
+        assert!(!state_path.exists(), "{label}: state removed");
+    }
+
+    let fixture = ServiceFixture::new("uninstall-missing", true);
+    fs::create_dir_all(fixture.config_root()).expect("config root");
+    fs::write(
+        fixture.config_root().join(STATE_FILENAME),
+        b"{\"tmux_path\":\"/previous/tmux\"}\n",
+    )
+    .expect("state");
     let runner = FixtureRunner::default();
+    fixture.controller(&runner).uninstall_blocking();
+    assert!(runner.calls().is_empty());
+    assert!(!fixture.config_root().join(STATE_FILENAME).exists());
+}
+
+#[test]
+fn launchd_kill_absence_race_still_confirms_quiescence() {
+    for (label, confirmation, expects_bootout) in [
+        ("kill-race-quiescent", print(quiescent()), true),
+        ("kill-race-absent", print(absent()), false),
+    ] {
+        let fixture = ServiceFixture::new(label, true);
+        let (old_bytes, inode) = write_old_plist(&fixture);
+        let mut expectations = vec![
+            disable(output([])),
+            print(running()),
+            kill(absent()),
+            confirmation,
+        ];
+        if expects_bootout {
+            expectations.push(bootout(&fixture, output([])));
+        }
+        let protected = expectations.len();
+        expectations.extend(launchd_install_expectations(&fixture));
+        let runner =
+            inspecting_preserved_runner(&fixture, expectations, protected, &old_bytes, inode, None);
+
+        fixture.controller(&runner).install_blocking();
+
+        runner.inner.assert_finished().expect(label);
+        assert_eq!(
+            runner
+                .inner
+                .calls()
+                .iter()
+                .filter(|call| call.operation
+                    == CommandOperation::Service(ServiceOperation::LaunchdPrint))
+                .count(),
+            3,
+            "{label}: decision, confirmation, and final print"
+        );
+    }
+}
+
+#[test]
+fn launchd_quiescence_timeout_has_exactly_one_hundred_post_kill_prints() {
+    let fixture = ServiceFixture::new("launchd-timeout", true);
+    let (old_bytes, inode) = write_old_plist(&fixture);
+    let previous_state = write_previous_state(&fixture);
+    let mut expectations = vec![disable(output([])), print(running()), kill(output([]))];
+    expectations.extend((0..100).map(|_| print(running())));
+    expectations.push(enable(output([])));
+    let runner = inspecting_preserved_runner(
+        &fixture,
+        expectations,
+        103,
+        &old_bytes,
+        inode,
+        Some(&previous_state),
+    );
+
+    let runtime = runtime();
+    let error = runtime
+        .block_on(async {
+            tokio::time::pause();
+            fixture.controller(&runner).0.install().await
+        })
+        .expect_err("live job must time out");
+
+    assert!(error.to_string().contains("still reports a live pid"));
+    assert!(error.to_string().contains("after 5 seconds"));
+    assert!(
+        error
+            .to_string()
+            .contains("solstone-tmux-observer install-service")
+    );
+    runner.inner.assert_finished().expect("timeout queue");
+    let calls = runner.inner.calls();
+    assert_eq!(
+        calls
+            .iter()
+            .filter(
+                |call| call.operation == CommandOperation::Service(ServiceOperation::LaunchdPrint)
+            )
+            .count(),
+        101
+    );
+    assert!(
+        !calls
+            .iter()
+            .any(|call| call.operation
+                == CommandOperation::Service(ServiceOperation::LaunchdBootout))
+    );
+    assert_preserved_after_failure(&fixture, &old_bytes, inode, &previous_state);
+}
+
+#[test]
+fn launchd_graceful_stop_failures_reenable_and_preserve_artifacts() {
+    let cases = vec![
+        (
+            "disable",
+            vec![
+                disable(command_output(&[], b"disable failed", 5)),
+                enable(output([])),
+            ],
+            "launchd disable failed",
+            1,
+        ),
+        (
+            "inspect",
+            vec![
+                disable(output([])),
+                print(command_output(&[], b"print failed", 5)),
+                enable(output([])),
+            ],
+            "launchd stop inspection failed",
+            2,
+        ),
+        (
+            "kill-status",
+            vec![
+                disable(output([])),
+                print(running()),
+                kill(command_output(&[], b"kill failed", 5)),
+                enable(output([])),
+            ],
+            "launchd kill failed",
+            3,
+        ),
+        (
+            "kill-command",
+            vec![
+                disable(output([])),
+                print(running()),
+                kill(FixtureOutcome::SpawnFailure),
+                enable(output([])),
+            ],
+            "could not start command",
+            3,
+        ),
+        (
+            "poll",
+            vec![
+                disable(output([])),
+                print(running()),
+                kill(output([])),
+                print(command_output(&[], b"poll failed", 5)),
+                enable(output([])),
+            ],
+            "launchd quiescence check failed",
+            4,
+        ),
+        (
+            "bootout",
+            vec![
+                disable(output([])),
+                print(quiescent()),
+                bootout_placeholder(command_output(&[], STATUS_FIVE_ERROR, 5)),
+                enable(output([])),
+            ],
+            "launchd bootout failed",
+            3,
+        ),
+    ];
+
+    for (label, expectations, primary_message, protected) in cases {
+        let fixture = ServiceFixture::new(label, true);
+        let (old_bytes, inode) = write_old_plist(&fixture);
+        let previous_state = write_previous_state(&fixture);
+        let expectations = expectations.into_iter().map(|mut item| {
+            if item.invocation.operation
+                == CommandOperation::Service(ServiceOperation::LaunchdBootout)
+            {
+                item.invocation.args[2] = artifact_path(&fixture.home).into_os_string();
+            }
+            item
+        });
+        let runner = inspecting_preserved_runner(
+            &fixture,
+            expectations.collect(),
+            protected,
+            &old_bytes,
+            inode,
+            Some(&previous_state),
+        );
+
+        let error = runtime()
+            .block_on(fixture.controller(&runner).0.install())
+            .expect_err("graceful stop failure");
+
+        assert!(
+            error.to_string().contains(primary_message),
+            "{label}: {error}"
+        );
+        runner.inner.assert_finished().expect(label);
+        assert_preserved_after_failure(&fixture, &old_bytes, inode, &previous_state);
+    }
+}
+
+#[test]
+fn launchd_uninstall_failure_preserves_plist_and_state() {
+    let fixture = ServiceFixture::new("uninstall-failure", true);
+    let first = FixtureRunner::new(launchd_install_expectations(&fixture));
+    fixture.controller(&first).install_blocking();
+    first.assert_finished().expect("initial install");
+    let artifact = artifact_path(&fixture.home);
+    let bytes = fs::read(&artifact).expect("plist");
+    let inode = fs::metadata(&artifact).expect("plist").ino();
+    let state = fs::read(fixture.config_root().join(STATE_FILENAME)).expect("state");
+    let runner = inspecting_preserved_runner(
+        &fixture,
+        vec![
+            disable(output([])),
+            print(running()),
+            kill(command_output(&[], b"kill failed", 5)),
+            enable(output([])),
+        ],
+        3,
+        &bytes,
+        inode,
+        Some(&state),
+    );
 
     let error = runtime()
         .block_on(fixture.controller(&runner).0.uninstall())
-        .expect_err("unowned plist must be rejected");
+        .expect_err("uninstall stop failure");
 
-    assert!(
-        error
-            .to_string()
-            .contains("invalid or unowned service artifact")
-    );
-    assert!(runner.calls().is_empty());
+    assert!(error.to_string().contains("launchd kill failed"));
+    runner.inner.assert_finished().expect("uninstall failure");
+    assert_preserved_after_failure(&fixture, &bytes, inode, &state);
+}
+
+#[test]
+fn launchd_recovery_error_reports_both_failures_and_retry_command() {
+    for (label, uninstall, expectations, retry_command) in [
+        (
+            "combined-install",
+            false,
+            vec![
+                disable(command_output(&[], b"primary failure", 5)),
+                enable(command_output(&[], b"re-enable failure", 5)),
+            ],
+            "install-service",
+        ),
+        (
+            "combined-uninstall",
+            true,
+            vec![
+                disable(output([])),
+                print(running()),
+                kill(command_output(&[], b"primary failure", 5)),
+                enable(command_output(&[], b"re-enable failure", 5)),
+            ],
+            "uninstall-service",
+        ),
+    ] {
+        let fixture = ServiceFixture::new(label, true);
+        let (old_bytes, inode) = write_old_plist(&fixture);
+        let previous_state = write_previous_state(&fixture);
+        let runner = inspecting_preserved_runner(
+            &fixture,
+            expectations,
+            if uninstall { 3 } else { 1 },
+            &old_bytes,
+            inode,
+            Some(&previous_state),
+        );
+
+        let result = if uninstall {
+            runtime().block_on(fixture.controller(&runner).0.uninstall())
+        } else {
+            runtime().block_on(fixture.controller(&runner).0.install())
+        };
+        let error = result.expect_err("combined launchd recovery failure");
+
+        let ServiceError::LaunchdRecovery {
+            primary,
+            reenable,
+            retry_command: actual_retry,
+        } = &error
+        else {
+            panic!("expected LaunchdRecovery, got {error:?}");
+        };
+        assert!(primary.to_string().contains("primary failure"));
+        assert!(reenable.to_string().contains("re-enable failure"));
+        assert_eq!(*actual_retry, retry_command);
+        let message = error.to_string();
+        assert!(message.contains("launchd re-enable recovery also failed"));
+        assert!(message.contains("launchd crash restart may remain disabled"));
+        assert!(message.contains(LABEL));
+        assert!(message.contains(&format!("rerun solstone-tmux-observer {retry_command}")));
+        assert!(!message.contains("rolled back"));
+        assert_eq!(
+            std::error::Error::source(&error)
+                .expect("primary source")
+                .to_string(),
+            primary.to_string()
+        );
+        runner.inner.assert_finished().expect(label);
+        assert_preserved_after_failure(&fixture, &old_bytes, inode, &previous_state);
+    }
+}
+
+#[test]
+fn launchd_replacement_enable_failure_occurs_after_successful_stop() {
+    let fixture = ServiceFixture::new("replacement-enable-failure", true);
+    let (old_bytes, old_inode) = write_old_plist(&fixture);
+    let previous_state = write_previous_state(&fixture);
+    let desired = expected_plist_bytes(&fixture);
+    let artifact = artifact_path(&fixture.home);
+    let state_path = fixture.config_root().join(STATE_FILENAME);
+    let inspected_artifact = artifact.clone();
+    let runner = InspectingRunner {
+        inner: FixtureRunner::new(vec![
+            disable(output([])),
+            print(quiescent()),
+            bootout(&fixture, output([])),
+            enable(command_output(&[], b"enable failed", 5)),
+        ]),
+        inspect: Box::new(move |invocation| {
+            if invocation.operation == CommandOperation::Service(ServiceOperation::LaunchdEnable) {
+                assert_eq!(fs::read(&inspected_artifact).expect("new plist"), desired);
+                assert_eq!(fs::read(&state_path).expect("prior state"), previous_state);
+            } else {
+                assert_artifact(&inspected_artifact, &old_bytes, old_inode, "during stop");
+                assert_eq!(fs::read(&state_path).expect("prior state"), previous_state);
+            }
+        }),
+    };
+
+    let error = runtime()
+        .block_on(fixture.controller(&runner).0.install())
+        .expect_err("normal enable failure");
+
+    assert!(error.to_string().contains("launchd enable failed"));
+    assert!(!matches!(error, ServiceError::LaunchdRecovery { .. }));
+    runner
+        .inner
+        .assert_finished()
+        .expect("normal enable failure");
     assert_eq!(
-        fs::read(artifact).expect("owner plist preserved"),
-        b"<plist><string>owner label</string></plist>\n"
+        fs::read(artifact).expect("replacement plist"),
+        expected_plist_bytes(&fixture)
     );
 }
 
 #[test]
-fn launchd_replacement_boots_out_before_write() {
-    let fixture = ServiceFixture::new("launchd-order", true);
+fn unchanged_running_job_is_enabled_and_rechecked_without_restart_or_rewrite() {
+    let fixture = ServiceFixture::new("unchanged-running", true);
+    let first = FixtureRunner::new(launchd_install_expectations(&fixture));
+    fixture.controller(&first).install_blocking();
+    first.assert_finished().expect("first install");
     let artifact = artifact_path(&fixture.home);
+    let desired = expected_plist_bytes(&fixture);
+    let inode = fs::metadata(&artifact).expect("plist").ino();
     let state_path = fixture.config_root().join(STATE_FILENAME);
-    fs::create_dir_all(artifact.parent().expect("plist parent")).expect("plist parent");
-    let old_bytes =
-        render(Path::new("/old/solstone-tmux-observer"), OsStr::new("/old")).expect("old plist");
-    fs::write(&artifact, &old_bytes).expect("write old plist");
-    let desired_bytes = expected_plist_bytes(&fixture);
-    let expected_tmux = fs::canonicalize(&fixture.tmux).expect("canonical tmux");
-    let inspected_artifact = artifact.clone();
-    let inspected_old_bytes = old_bytes.clone();
-    let inspected_desired_bytes = desired_bytes.clone();
+    let expected_tmux = fs::canonicalize(&fixture.tmux).expect("tmux");
     let runner = InspectingRunner {
-        inner: FixtureRunner::new(
-            [expected(
-                ServiceOperation::LaunchdBootout,
-                vec![
-                    "bootout".into(),
-                    domain().into(),
-                    artifact.clone().into_os_string(),
-                ],
-                command_output(&[], b"service not loaded", 3),
-            )]
-            .into_iter()
-            .chain(launchd_install_expectations(&fixture)),
-        ),
-        inspect: Box::new(move |invocation| match invocation.operation {
-            CommandOperation::Service(ServiceOperation::LaunchdBootout) => {
-                assert_eq!(
-                    fs::read(&inspected_artifact).expect("plist before bootout"),
-                    inspected_old_bytes
-                );
-            }
-            CommandOperation::Service(ServiceOperation::LaunchdEnable) => {
-                assert_eq!(
-                    fs::read(&inspected_artifact).expect("plist before enable"),
-                    inspected_desired_bytes
-                );
-            }
-            CommandOperation::Service(ServiceOperation::LaunchdBootstrap) => {
-                assert_eq!(
-                    fs::read(&inspected_artifact).expect("plist before bootstrap"),
-                    inspected_desired_bytes
-                );
-                assert_local_observer(&state_path, &expected_tmux);
-            }
-            _ => {}
+        inner: FixtureRunner::new(vec![
+            print(running()),
+            enable(output([])),
+            print(output(stdout_with_pid("98765"))),
+        ]),
+        inspect: Box::new(move |_| {
+            assert_artifact(&artifact, &desired, inode, "unchanged running");
+            assert_local_observer(&state_path, &expected_tmux);
         }),
     };
 
     fixture.controller(&runner).install_blocking();
 
-    runner
-        .inner
-        .assert_finished()
-        .expect("replacement invocations");
-    assert_eq!(
-        fs::read(artifact).expect("new plist"),
-        desired_bytes,
-        "replacement must install the exact desired plist"
-    );
+    runner.inner.assert_finished().expect("idempotent install");
+    let calls = runner.inner.calls();
+    assert_eq!(calls.len(), 3);
+    assert!(!calls.iter().any(|call| matches!(
+        call.operation,
+        CommandOperation::Service(
+            ServiceOperation::LaunchdDisable
+                | ServiceOperation::LaunchdKill
+                | ServiceOperation::LaunchdBootout
+                | ServiceOperation::LaunchdBootstrap
+        )
+    )));
 }
 
 #[test]
-fn launchd_replacement_bootout_error_preserves_artifacts() {
-    let fixture = ServiceFixture::new("launchd-bootout-error", true);
+fn unchanged_quiescent_job_boots_out_without_disable_then_restarts() {
+    let fixture = ServiceFixture::new("unchanged-quiescent", true);
+    write_desired_plist(&fixture);
     let artifact = artifact_path(&fixture.home);
-    fs::create_dir_all(artifact.parent().expect("plist parent")).expect("plist parent");
-    let old_bytes =
-        render(Path::new("/old/solstone-tmux-observer"), OsStr::new("/old")).expect("old plist");
-    fs::write(&artifact, &old_bytes).expect("write old plist");
+    let desired = expected_plist_bytes(&fixture);
+    let inode = fs::metadata(&artifact).expect("plist").ino();
     let state_path = fixture.config_root().join(STATE_FILENAME);
-    fs::create_dir_all(fixture.config_root()).expect("config root");
-    let previous_state = b"{\"tmux_path\":\"/previous/tmux\"}\n";
-    fs::write(&state_path, previous_state).expect("previous local observer");
-    let runner = FixtureRunner::new([expected(
-        ServiceOperation::LaunchdBootout,
-        vec![
-            "bootout".into(),
-            domain().into(),
-            artifact.clone().into_os_string(),
-        ],
-        command_output(&[], STATUS_FIVE_ERROR, 5),
-    )]);
+    let expected_tmux = fs::canonicalize(&fixture.tmux).expect("tmux");
+    let runner = InspectingRunner {
+        inner: FixtureRunner::new(vec![
+            print(quiescent()),
+            bootout(&fixture, output([])),
+            enable(output([])),
+            bootstrap(&fixture, output([])),
+            print(running()),
+        ]),
+        inspect: Box::new(move |_| {
+            assert_artifact(&artifact, &desired, inode, "unchanged quiescent");
+            assert_local_observer(&state_path, &expected_tmux);
+        }),
+    };
+
+    fixture.controller(&runner).install_blocking();
+
+    runner.inner.assert_finished().expect("quiescent restart");
+    assert!(!runner.inner.calls().iter().any(|call| matches!(
+        call.operation,
+        CommandOperation::Service(ServiceOperation::LaunchdDisable | ServiceOperation::LaunchdKill)
+    )));
+}
+
+#[test]
+fn unchanged_quiescent_bootout_failure_has_no_reenable_recovery() {
+    let fixture = ServiceFixture::new("unchanged-quiescent-failure", true);
+    write_desired_plist(&fixture);
+    let artifact = artifact_path(&fixture.home);
+    let bytes = fs::read(&artifact).expect("plist");
+    let inode = fs::metadata(&artifact).expect("plist").ino();
+    let previous_state = write_previous_state(&fixture);
+    let state_path = fixture.config_root().join(STATE_FILENAME);
+    let expected_tmux = fs::canonicalize(&fixture.tmux).expect("tmux");
+    let inspected_artifact = artifact.clone();
+    let inspected_bytes = bytes.clone();
+    let runner = InspectingRunner {
+        inner: FixtureRunner::new(vec![
+            print(quiescent()),
+            bootout(&fixture, command_output(&[], STATUS_FIVE_ERROR, 5)),
+        ]),
+        inspect: Box::new(move |_| {
+            assert_artifact(
+                &inspected_artifact,
+                &inspected_bytes,
+                inode,
+                "unchanged bootout failure",
+            );
+            assert_local_observer(&state_path, &expected_tmux);
+        }),
+    };
 
     let error = runtime()
         .block_on(fixture.controller(&runner).0.install())
-        .expect_err("bootout failure must fail replacement");
+        .expect_err("bootout failure");
 
     assert!(error.to_string().contains("launchd bootout failed"));
+    assert_eq!(runner.inner.calls().len(), 2);
+    runner.inner.assert_finished().expect("no recovery enable");
+    assert_preserved_after_failure(&fixture, &bytes, inode, &previous_state);
+}
+
+#[test]
+fn unchanged_absent_job_enables_and_bootstraps_without_rewrite() {
+    let fixture = ServiceFixture::new("unchanged-absent", true);
+    write_desired_plist(&fixture);
+    let artifact = artifact_path(&fixture.home);
+    let desired = expected_plist_bytes(&fixture);
+    let inode = fs::metadata(&artifact).expect("plist").ino();
+    let runner = FixtureRunner::new(vec![
+        print(absent()),
+        enable(output([])),
+        bootstrap(&fixture, output([])),
+        print(running()),
+    ]);
+
+    fixture.controller(&runner).install_blocking();
+
+    runner.assert_finished().expect("absent restart");
+    assert_artifact(&artifact, &desired, inode, "unchanged absent");
+    assert!(!runner.calls().iter().any(is_stop_operation));
+}
+
+#[test]
+fn unchanged_running_and_absent_enable_failures_restore_previous_state() {
+    for (label, first_print) in [
+        ("running-enable-failure", print(running())),
+        ("absent-enable-failure", print(absent())),
+    ] {
+        let fixture = ServiceFixture::new(label, true);
+        write_desired_plist(&fixture);
+        let artifact = artifact_path(&fixture.home);
+        let bytes = fs::read(&artifact).expect("plist");
+        let inode = fs::metadata(&artifact).expect("plist").ino();
+        let previous_state = write_previous_state(&fixture);
+        let state_path = fixture.config_root().join(STATE_FILENAME);
+        let expected_tmux = fs::canonicalize(&fixture.tmux).expect("tmux");
+        let inspected_artifact = artifact.clone();
+        let inspected_bytes = bytes.clone();
+        let runner = InspectingRunner {
+            inner: FixtureRunner::new(vec![
+                first_print,
+                enable(command_output(&[], b"enable failed", 5)),
+            ]),
+            inspect: Box::new(move |_| {
+                assert_artifact(
+                    &inspected_artifact,
+                    &inspected_bytes,
+                    inode,
+                    "unchanged enable failure",
+                );
+                assert_local_observer(&state_path, &expected_tmux);
+            }),
+        };
+
+        let error = runtime()
+            .block_on(fixture.controller(&runner).0.install())
+            .expect_err("enable failure");
+
+        assert!(error.to_string().contains("launchd enable failed"));
+        runner.inner.assert_finished().expect(label);
+        assert_preserved_after_failure(&fixture, &bytes, inode, &previous_state);
+    }
+}
+
+#[test]
+fn unchanged_initial_print_failure_restores_previous_state() {
+    let fixture = ServiceFixture::new("unchanged-print-failure", true);
+    write_desired_plist(&fixture);
+    let artifact = artifact_path(&fixture.home);
+    let bytes = fs::read(&artifact).expect("plist");
+    let inode = fs::metadata(&artifact).expect("plist").ino();
+    let previous_state = write_previous_state(&fixture);
+    let state_path = fixture.config_root().join(STATE_FILENAME);
+    let expected_tmux = fs::canonicalize(&fixture.tmux).expect("tmux");
+    let inspected_artifact = artifact.clone();
+    let inspected_bytes = bytes.clone();
+    let runner = InspectingRunner {
+        inner: FixtureRunner::new(vec![print(command_output(&[], STATUS_FIVE_ERROR, 5))]),
+        inspect: Box::new(move |_| {
+            assert_artifact(
+                &inspected_artifact,
+                &inspected_bytes,
+                inode,
+                "unchanged print failure",
+            );
+            assert_local_observer(&state_path, &expected_tmux);
+        }),
+    };
+
+    let error = runtime()
+        .block_on(fixture.controller(&runner).0.install())
+        .expect_err("loaded check failure");
+
+    assert!(error.to_string().contains("launchd loaded check failed"));
+    runner.inner.assert_finished().expect("loaded check");
+    assert_preserved_after_failure(&fixture, &bytes, inode, &previous_state);
+}
+
+#[test]
+fn launchd_final_loaded_check_requires_pid_after_bootstrap() {
+    let fixture = ServiceFixture::new("final-pid-required", true);
+    let previous_state = write_previous_state(&fixture);
+    let artifact = artifact_path(&fixture.home);
+    let desired = expected_plist_bytes(&fixture);
+    let state_path = fixture.config_root().join(STATE_FILENAME);
+    let expected_tmux = fs::canonicalize(&fixture.tmux).expect("tmux");
+    let inspected_previous = previous_state.clone();
+    let runner = InspectingRunner {
+        inner: FixtureRunner::new(vec![
+            enable(output([])),
+            bootstrap(&fixture, output([])),
+            print(quiescent()),
+        ]),
+        inspect: Box::new(move |invocation| {
+            assert_eq!(fs::read(&artifact).expect("installed plist"), desired);
+            if invocation.operation == CommandOperation::Service(ServiceOperation::LaunchdEnable) {
+                assert_eq!(
+                    fs::read(&state_path).expect("prior state before prepare completes"),
+                    inspected_previous
+                );
+            } else {
+                assert_local_observer(&state_path, &expected_tmux);
+            }
+        }),
+    };
+
+    let error = runtime()
+        .block_on(fixture.controller(&runner).0.install())
+        .expect_err("loaded without pid");
+
+    assert!(matches!(&error, ServiceError::InvalidState(_)));
+    assert!(error.to_string().contains(LABEL));
+    assert!(error.to_string().contains("does not report a live pid"));
     assert!(
         error
             .to_string()
-            .contains("Boot-out failed: 5: Input/output error")
+            .contains("solstone-tmux-observer install-service")
     );
-    runner
-        .assert_finished()
-        .expect("failed replacement invocation");
-    let calls = runner.calls();
-    assert_eq!(calls.len(), 1);
-    assert!(matches!(
-        calls[0].operation,
-        CommandOperation::Service(ServiceOperation::LaunchdBootout)
-    ));
+    runner.inner.assert_finished().expect("pid-required calls");
     assert_eq!(
-        fs::read(artifact).expect("old plist after failed replacement"),
-        old_bytes
-    );
-    assert_eq!(
-        fs::read(state_path).expect("previous local observer after failed replacement"),
+        fs::read(fixture.config_root().join(STATE_FILENAME)).expect("restored state"),
         previous_state
     );
 }
 
 #[test]
-fn launchd_replacement_enable_failure_leaves_new_plist_and_preserves_previous_state() {
-    let fixture = ServiceFixture::new("launchd-enable-error", true);
+fn launchd_final_loaded_manager_failure_restores_previous_state() {
+    let fixture = ServiceFixture::new("final-loaded-manager-failure", true);
+    let previous_state = write_previous_state(&fixture);
     let artifact = artifact_path(&fixture.home);
-    fs::create_dir_all(artifact.parent().expect("plist parent")).expect("plist parent");
-    let old_bytes =
-        render(Path::new("/old/solstone-tmux-observer"), OsStr::new("/old")).expect("old plist");
-    fs::write(&artifact, &old_bytes).expect("write old plist");
-    let desired_bytes = expected_plist_bytes(&fixture);
+    let desired = expected_plist_bytes(&fixture);
     let state_path = fixture.config_root().join(STATE_FILENAME);
-    fs::create_dir_all(fixture.config_root()).expect("config root");
-    let previous_state = b"{\"tmux_path\":\"/previous/tmux\"}\n";
-    fs::write(&state_path, previous_state).expect("previous local observer");
-    let inspected_artifact = artifact.clone();
-    let inspected_state = state_path.clone();
-    let inspected_desired_bytes = desired_bytes.clone();
+    let expected_tmux = fs::canonicalize(&fixture.tmux).expect("tmux");
+    let inspected_previous = previous_state.clone();
     let runner = InspectingRunner {
-        inner: FixtureRunner::new([
-            expected(
-                ServiceOperation::LaunchdBootout,
-                vec![
-                    "bootout".into(),
-                    domain().into(),
-                    artifact.clone().into_os_string(),
-                ],
-                output([]),
-            ),
-            expected(
-                ServiceOperation::LaunchdEnable,
-                vec!["enable".into(), target().into()],
-                command_output(&[], b"enable failed", 5),
-            ),
+        inner: FixtureRunner::new(vec![
+            enable(output([])),
+            bootstrap(&fixture, output([])),
+            print(command_output(&[], STATUS_FIVE_ERROR, 5)),
         ]),
         inspect: Box::new(move |invocation| {
+            assert_eq!(fs::read(&artifact).expect("installed plist"), desired);
             if invocation.operation == CommandOperation::Service(ServiceOperation::LaunchdEnable) {
                 assert_eq!(
-                    fs::read(&inspected_artifact).expect("new plist before failed enable"),
-                    inspected_desired_bytes
+                    fs::read(&state_path).expect("prior state before prepare completes"),
+                    inspected_previous
                 );
-                assert_eq!(
-                    fs::read(&inspected_state).expect("previous state before failed enable"),
-                    previous_state
-                );
+            } else {
+                assert_local_observer(&state_path, &expected_tmux);
             }
         }),
     };
 
     let error = runtime()
         .block_on(fixture.controller(&runner).0.install())
-        .expect_err("enable failure must fail replacement");
+        .expect_err("loaded check manager failure");
 
-    let message = error.to_string();
-    assert!(message.contains("launchd enable failed"));
-    assert!(message.contains("exit status 5"));
-    assert!(message.contains(": enable failed"));
-    runner
-        .inner
-        .assert_finished()
-        .expect("failed enable invocations");
-    assert_eq!(runner.inner.calls().len(), 2);
-    // prepare_install writes the new plist before enable and has no plist rollback.
+    assert!(error.to_string().contains("launchd loaded check failed"));
+    runner.inner.assert_finished().expect("final loaded check");
     assert_eq!(
-        fs::read(&artifact).expect("new plist after failed enable"),
-        desired_bytes
-    );
-    assert_ne!(
-        fs::read(&artifact).expect("replacement plist after failed enable"),
-        old_bytes
-    );
-    // Enable fails before state persistence, so prior bytes stay untouched without restoration.
-    assert_eq!(
-        fs::read(state_path).expect("previous state after failed enable"),
-        previous_state
-    );
-}
-
-#[test]
-fn unchanged_launchd_plist_enable_failure_restores_previous_state() {
-    let fixture = ServiceFixture::new("launchd-unchanged-enable-error", true);
-    let artifact = artifact_path(&fixture.home);
-    fs::create_dir_all(artifact.parent().expect("plist parent")).expect("plist parent");
-    let desired_bytes = expected_plist_bytes(&fixture);
-    fs::write(&artifact, &desired_bytes).expect("desired plist");
-    let inode_before = fs::metadata(&artifact)
-        .expect("desired plist metadata")
-        .ino();
-    let state_path = fixture.config_root().join(STATE_FILENAME);
-    fs::create_dir_all(fixture.config_root()).expect("config root");
-    let previous_state = b"{\"tmux_path\":\"/previous/tmux\"}\n";
-    fs::write(&state_path, previous_state).expect("previous local observer");
-    let inspected_state = state_path.clone();
-    let expected_tmux = fs::canonicalize(&fixture.tmux).expect("canonical tmux");
-    let runner = InspectingRunner {
-        inner: FixtureRunner::new([
-            expected(
-                ServiceOperation::LaunchdPrint,
-                vec!["print".into(), target().into()],
-                command_output(&[], b"service not loaded", 3),
-            ),
-            expected(
-                ServiceOperation::LaunchdEnable,
-                vec!["enable".into(), target().into()],
-                command_output(&[], b"enable failed", 5),
-            ),
-        ]),
-        inspect: Box::new(move |invocation| {
-            if invocation.operation == CommandOperation::Service(ServiceOperation::LaunchdEnable) {
-                assert_local_observer(&inspected_state, &expected_tmux);
-            }
-        }),
-    };
-
-    let error = runtime()
-        .block_on(fixture.controller(&runner).0.install())
-        .expect_err("enable failure must fail absent-job recovery");
-
-    let message = error.to_string();
-    assert!(message.contains("launchd enable failed"));
-    assert!(message.contains("exit status 5"));
-    assert!(message.contains(": enable failed"));
-    runner
-        .inner
-        .assert_finished()
-        .expect("failed absent-job enable invocations");
-    assert_eq!(runner.inner.calls().len(), 2);
-    assert_eq!(
-        fs::metadata(&artifact)
-            .expect("unchanged plist metadata after failed enable")
-            .ino(),
-        inode_before
-    );
-    assert_eq!(
-        fs::read(artifact).expect("unchanged plist after failed enable"),
-        desired_bytes
-    );
-    assert_eq!(
-        fs::read(state_path).expect("restored state after failed enable"),
+        fs::read(fixture.config_root().join(STATE_FILENAME)).expect("restored state"),
         previous_state
     );
 }
 
 #[test]
 fn launchd_bootstrap_failure_restores_previous_state() {
-    let fixture = ServiceFixture::new("launchd-bootstrap-error", true);
+    let fixture = ServiceFixture::new("bootstrap-failure", true);
+    let previous_state = write_previous_state(&fixture);
     let artifact = artifact_path(&fixture.home);
-    let desired_bytes = expected_plist_bytes(&fixture);
+    let desired = expected_plist_bytes(&fixture);
     let state_path = fixture.config_root().join(STATE_FILENAME);
-    fs::create_dir_all(fixture.config_root()).expect("config root");
-    let previous_state = b"{\"tmux_path\":\"/previous/tmux\"}\n";
-    fs::write(&state_path, previous_state).expect("previous local observer");
-    let inspected_artifact = artifact.clone();
-    let inspected_state = state_path.clone();
-    let inspected_desired_bytes = desired_bytes.clone();
-    let expected_tmux = fs::canonicalize(&fixture.tmux).expect("canonical tmux");
+    let expected_tmux = fs::canonicalize(&fixture.tmux).expect("tmux");
+    let inspected_previous = previous_state.clone();
     let runner = InspectingRunner {
-        inner: FixtureRunner::new([
-            expected(
-                ServiceOperation::LaunchdEnable,
-                vec!["enable".into(), target().into()],
-                output([]),
-            ),
-            expected(
-                ServiceOperation::LaunchdBootstrap,
-                vec![
-                    "bootstrap".into(),
-                    domain().into(),
-                    artifact.clone().into_os_string(),
-                ],
-                command_output(&[], b"bootstrap failed", 5),
-            ),
+        inner: FixtureRunner::new(vec![
+            enable(output([])),
+            bootstrap(&fixture, command_output(&[], b"bootstrap failed", 5)),
         ]),
         inspect: Box::new(move |invocation| {
-            if invocation.operation == CommandOperation::Service(ServiceOperation::LaunchdBootstrap)
-            {
+            assert_eq!(fs::read(&artifact).expect("installed plist"), desired);
+            if invocation.operation == CommandOperation::Service(ServiceOperation::LaunchdEnable) {
                 assert_eq!(
-                    fs::read(&inspected_artifact).expect("plist before failed bootstrap"),
-                    inspected_desired_bytes
+                    fs::read(&state_path).expect("prior state before prepare completes"),
+                    inspected_previous
                 );
-                assert_local_observer(&inspected_state, &expected_tmux);
+            } else {
+                assert_local_observer(&state_path, &expected_tmux);
             }
         }),
     };
 
     let error = runtime()
         .block_on(fixture.controller(&runner).0.install())
-        .expect_err("bootstrap failure must fail install");
+        .expect_err("bootstrap manager failure");
 
-    let message = error.to_string();
-    assert!(message.contains("launchd bootstrap failed"));
-    assert!(message.contains("exit status 5"));
-    assert!(message.contains(": bootstrap failed"));
-    runner
-        .inner
-        .assert_finished()
-        .expect("failed bootstrap invocations");
-    assert_eq!(runner.inner.calls().len(), 2);
+    assert!(error.to_string().contains("launchd bootstrap failed"));
+    runner.inner.assert_finished().expect("bootstrap failure");
     assert_eq!(
-        fs::read(artifact).expect("desired plist after failed bootstrap"),
-        desired_bytes
-    );
-    assert_eq!(
-        fs::read(state_path).expect("restored state after failed bootstrap"),
+        fs::read(fixture.config_root().join(STATE_FILENAME)).expect("restored state"),
         previous_state
     );
 }
 
 #[test]
-fn unchanged_launchd_plist_loaded_check_status_five_restores_previous_state() {
-    let fixture = ServiceFixture::new("launchd-loaded-check-error", true);
-    let artifact = artifact_path(&fixture.home);
-    fs::create_dir_all(artifact.parent().expect("plist parent")).expect("plist parent");
-    let desired_bytes = expected_plist_bytes(&fixture);
-    fs::write(&artifact, &desired_bytes).expect("desired plist");
-    let inode_before = fs::metadata(&artifact)
-        .expect("desired plist metadata")
-        .ino();
-    let state_path = fixture.config_root().join(STATE_FILENAME);
-    fs::create_dir_all(fixture.config_root()).expect("config root");
-    let previous_state = b"{\"tmux_path\":\"/previous/tmux\"}\n";
-    fs::write(&state_path, previous_state).expect("previous local observer");
-    let inspected_state = state_path.clone();
-    let expected_tmux = fs::canonicalize(&fixture.tmux).expect("canonical tmux");
-    let runner = InspectingRunner {
-        inner: FixtureRunner::new([expected(
-            ServiceOperation::LaunchdPrint,
-            vec!["print".into(), target().into()],
-            command_output(&[], STATUS_FIVE_ERROR, 5),
-        )]),
-        inspect: Box::new(move |invocation| {
-            if invocation.operation == CommandOperation::Service(ServiceOperation::LaunchdPrint) {
-                assert_local_observer(&inspected_state, &expected_tmux);
-            }
-        }),
-    };
+fn launchd_pid_classifier_rejects_zero_and_non_digit_pid_values() {
+    for value in ["0", "0000", "", "abc", "12a", "-1"] {
+        let fixture = ServiceFixture::new("invalid-pid", true);
+        write_desired_plist(&fixture);
+        let artifact = artifact_path(&fixture.home);
+        let bytes = fs::read(&artifact).expect("plist");
+        let inode = fs::metadata(&artifact).expect("plist").ino();
+        let runner = FixtureRunner::new(vec![
+            print(output(stdout_with_pid(value))),
+            bootout(&fixture, output([])),
+            enable(output([])),
+            bootstrap(&fixture, output([])),
+            print(running()),
+        ]);
 
-    let error = runtime()
-        .block_on(fixture.controller(&runner).0.install())
-        .expect_err("loaded-check failure must fail install");
+        fixture.controller(&runner).install_blocking();
 
-    let message = error.to_string();
-    assert!(message.contains("launchd loaded check failed"));
-    assert!(message.contains("exit status 5"));
-    assert!(message.contains("Boot-out failed: 5: Input/output error"));
-    runner
-        .inner
-        .assert_finished()
-        .expect("failed loaded-check invocation");
-    assert_eq!(runner.inner.calls().len(), 1);
-    assert_eq!(
-        fs::metadata(&artifact)
-            .expect("unchanged plist metadata after loaded-check failure")
-            .ino(),
-        inode_before
-    );
-    assert_eq!(
-        fs::read(artifact).expect("unchanged plist after loaded-check failure"),
-        desired_bytes
-    );
-    assert_eq!(
-        fs::read(state_path).expect("restored state after loaded-check failure"),
-        previous_state
-    );
+        runner.assert_finished().expect("invalid pid path");
+        assert_artifact(&artifact, &bytes, inode, "invalid pid no rewrite");
+        assert_eq!(
+            runner
+                .calls()
+                .iter()
+                .filter(|call| call.operation
+                    == CommandOperation::Service(ServiceOperation::LaunchdBootout))
+                .count(),
+            1,
+            "{value:?} must be quiescent"
+        );
+    }
 }
 
 #[test]
-fn launchd_final_loaded_verification_failure_restores_previous_state() {
-    let fixture = ServiceFixture::new("launchd-final-loaded-check-error", true);
-    let artifact = artifact_path(&fixture.home);
-    let desired_bytes = expected_plist_bytes(&fixture);
-    let state_path = fixture.config_root().join(STATE_FILENAME);
-    fs::create_dir_all(fixture.config_root()).expect("config root");
-    let previous_state = b"{\"tmux_path\":\"/previous/tmux\"}\n";
-    fs::write(&state_path, previous_state).expect("previous local observer");
-    let inspected_artifact = artifact.clone();
-    let inspected_state = state_path.clone();
-    let inspected_desired_bytes = desired_bytes.clone();
-    let expected_tmux = fs::canonicalize(&fixture.tmux).expect("canonical tmux");
-    let runner = InspectingRunner {
-        inner: FixtureRunner::new([
-            expected(
-                ServiceOperation::LaunchdEnable,
-                vec!["enable".into(), target().into()],
-                output([]),
-            ),
-            expected(
-                ServiceOperation::LaunchdBootstrap,
-                vec![
-                    "bootstrap".into(),
-                    domain().into(),
-                    artifact.clone().into_os_string(),
-                ],
-                output([]),
-            ),
-            expected(
-                ServiceOperation::LaunchdPrint,
-                vec!["print".into(), target().into()],
-                command_output(&[], STATUS_FIVE_ERROR, 5),
-            ),
-        ]),
-        inspect: Box::new(move |invocation| {
-            if invocation.operation == CommandOperation::Service(ServiceOperation::LaunchdPrint) {
-                assert_eq!(
-                    fs::read(&inspected_artifact).expect("plist before failed loaded verification"),
-                    inspected_desired_bytes
-                );
-                assert_local_observer(&inspected_state, &expected_tmux);
-            }
-        }),
-    };
+fn launchd_pid_classifier_accepts_thirty_digit_nonzero_value() {
+    let fixture = ServiceFixture::new("large-pid", true);
+    write_desired_plist(&fixture);
+    let runner = FixtureRunner::new(vec![
+        print(output(stdout_with_pid("123456789012345678901234567890"))),
+        enable(output([])),
+        print(running()),
+    ]);
 
-    let error = runtime()
-        .block_on(fixture.controller(&runner).0.install())
-        .expect_err("final loaded verification must fail install");
+    fixture.controller(&runner).install_blocking();
 
-    let message = error.to_string();
-    assert!(message.contains("launchd loaded check failed"));
-    assert!(message.contains("exit status 5"));
-    assert!(message.contains("Boot-out failed: 5: Input/output error"));
-    runner
-        .inner
-        .assert_finished()
-        .expect("failed final loaded-check invocations");
-    assert_eq!(runner.inner.calls().len(), 3);
-    assert_eq!(
-        fs::read(artifact).expect("desired plist after failed loaded verification"),
-        desired_bytes
-    );
-    assert_eq!(
-        fs::read(state_path).expect("restored state after failed loaded verification"),
-        previous_state
-    );
+    runner.assert_finished().expect("large pid");
+    assert!(!runner.calls().iter().any(|call| matches!(
+        call.operation,
+        CommandOperation::Service(
+            ServiceOperation::LaunchdBootout
+                | ServiceOperation::LaunchdBootstrap
+                | ServiceOperation::LaunchdKill
+        )
+    )));
 }
 
 #[test]
-fn launchd_install_rejects_invalid_artifacts_before_mutation() {
+fn launchd_absence_requires_status_113_and_an_exact_complete_line() {
+    let fixture = ServiceFixture::new("absence-classifier", true);
+    write_desired_plist(&fixture);
+    let exact = format!("Could not find service \"{LABEL}\" in domain for user gui: {USER_ID}");
+    let positive_stderr = format!("diagnostic before\n{exact}\ndiagnostic after\n");
+    let positive = FixtureRunner::new(vec![print(command_output(
+        &[],
+        positive_stderr.as_bytes(),
+        113,
+    ))]);
+    assert_eq!(
+        runtime()
+            .block_on(fixture.controller(&positive).0.status())
+            .expect("exact complete line"),
+        ServiceStatus::Inactive
+    );
+    positive.assert_finished().expect("positive absence");
+
+    let cases = vec![
+        ("wrong-label", exact.replace(LABEL, "wrong.label"), 113),
+        ("wrong-uid", exact.replace(&USER_ID.to_string(), "999"), 113),
+        ("prefix", format!("prefix {exact}"), 113),
+        ("suffix", format!("{exact} suffix"), 113),
+        ("empty", String::new(), 113),
+        ("generic", "service not loaded".to_owned(), 113),
+        ("unrelated", "unrelated launchctl failure".to_owned(), 113),
+        ("status-3", exact.clone(), 3),
+        ("status-4", exact.clone(), 4),
+        ("status-5", exact, 5),
+    ];
+    for (label, stderr, status) in cases {
+        let runner =
+            FixtureRunner::new(vec![print(command_output(&[], stderr.as_bytes(), status))]);
+        let error = runtime()
+            .block_on(fixture.controller(&runner).0.status())
+            .expect_err("negative absence");
+        assert!(
+            error.to_string().contains("launchd status failed"),
+            "{label}: {error}"
+        );
+        runner.assert_finished().expect(label);
+    }
+}
+
+#[test]
+fn launchd_status_zero_remains_active_without_pid() {
+    let fixture = ServiceFixture::new("status-no-pid", true);
+    write_desired_plist(&fixture);
+    let runner = FixtureRunner::new(vec![print(quiescent())]);
+
+    assert_eq!(
+        runtime()
+            .block_on(fixture.controller(&runner).0.status())
+            .expect("status zero"),
+        ServiceStatus::Active
+    );
+    runner.assert_finished().expect("status query");
+}
+
+#[test]
+fn launchd_install_and_uninstall_reject_invalid_or_unowned_artifacts_before_mutation() {
     #[derive(Clone, Copy)]
     enum InvalidCase {
         UnownedRegular,
@@ -653,198 +1140,65 @@ fn launchd_install_rejects_invalid_artifacts_before_mutation() {
         ("dangling-symlink", InvalidCase::DanglingSymlink),
         ("directory", InvalidCase::Directory),
     ] {
-        let fixture = ServiceFixture::new(label, true);
-        let artifact = artifact_path(&fixture.home);
-        fs::create_dir_all(artifact.parent().expect("plist parent")).expect("plist parent");
-        let preserved_bytes = b"preserved owner bytes\n";
-        let owned_bytes = render(
-            Path::new("/owned/solstone-tmux-observer"),
-            OsStr::new("/owned"),
-        )
-        .expect("owned plist");
-        let referent = fixture.root.join("owned referent.plist");
-        let dangling = fixture.root.join("missing referent.plist");
-        let sentinel = artifact.join("sentinel");
-
-        match case {
-            InvalidCase::UnownedRegular => {
-                fs::write(&artifact, preserved_bytes).expect("unowned plist");
+        for install in [true, false] {
+            let fixture = ServiceFixture::new(label, true);
+            let artifact = artifact_path(&fixture.home);
+            fs::create_dir_all(artifact.parent().expect("plist parent")).expect("plist parent");
+            let preserved = b"preserved owner bytes\n";
+            let owned =
+                render(Path::new("/owned/observer"), OsStr::new("/owned")).expect("owned plist");
+            let referent = fixture.root.join("owned referent.plist");
+            let dangling = fixture.root.join("missing referent.plist");
+            let sentinel = artifact.join("sentinel");
+            match case {
+                InvalidCase::UnownedRegular => fs::write(&artifact, preserved).expect("unowned"),
+                InvalidCase::OwnedSymlink => {
+                    fs::write(&referent, &owned).expect("referent");
+                    symlink(&referent, &artifact).expect("symlink");
+                }
+                InvalidCase::DanglingSymlink => symlink(&dangling, &artifact).expect("dangling"),
+                InvalidCase::Directory => {
+                    fs::create_dir(&artifact).expect("directory");
+                    fs::write(&sentinel, preserved).expect("sentinel");
+                }
             }
-            InvalidCase::OwnedSymlink => {
-                fs::write(&referent, &owned_bytes).expect("owned referent");
-                symlink(&referent, &artifact).expect("owned plist symlink");
-            }
-            InvalidCase::DanglingSymlink => {
-                symlink(&dangling, &artifact).expect("dangling plist symlink");
-            }
-            InvalidCase::Directory => {
-                fs::create_dir(&artifact).expect("plist directory");
-                fs::write(&sentinel, preserved_bytes).expect("directory sentinel");
-            }
-        }
-        let runner = FixtureRunner::default();
-
-        let error = runtime()
-            .block_on(fixture.controller(&runner).0.install())
-            .expect_err("invalid plist must be rejected");
-
-        assert!(
-            error
-                .to_string()
-                .contains("invalid or unowned service artifact"),
-            "{label}: {error}"
-        );
-        assert!(runner.calls().is_empty(), "{label}: no launchctl calls");
-        match case {
-            InvalidCase::UnownedRegular => {
-                assert_eq!(fs::read(&artifact).expect("unowned plist"), preserved_bytes);
-            }
-            InvalidCase::OwnedSymlink => {
-                assert!(
-                    fs::symlink_metadata(&artifact)
-                        .expect("owned symlink metadata")
-                        .file_type()
-                        .is_symlink()
-                );
-                assert_eq!(fs::read_link(&artifact).expect("owned symlink"), referent);
-                assert_eq!(fs::read(referent).expect("owned referent"), owned_bytes);
-            }
-            InvalidCase::DanglingSymlink => {
-                assert!(
-                    fs::symlink_metadata(&artifact)
-                        .expect("dangling symlink metadata")
-                        .file_type()
-                        .is_symlink()
-                );
-                assert_eq!(
-                    fs::read_link(&artifact).expect("dangling symlink"),
-                    dangling
-                );
-                assert!(!dangling.exists());
-            }
-            InvalidCase::Directory => {
-                assert!(fs::metadata(&artifact).expect("plist directory").is_dir());
-                assert_eq!(
-                    fs::read(sentinel).expect("directory sentinel"),
-                    preserved_bytes
-                );
+            let runner = FixtureRunner::default();
+            let result = if install {
+                runtime().block_on(fixture.controller(&runner).0.install())
+            } else {
+                runtime().block_on(fixture.controller(&runner).0.uninstall())
+            };
+            let error = result.expect_err("invalid artifact");
+            assert!(error.to_string().contains("invalid or unowned"));
+            assert!(runner.calls().is_empty());
+            match case {
+                InvalidCase::UnownedRegular => {
+                    assert_eq!(fs::read(&artifact).expect("unowned"), preserved);
+                }
+                InvalidCase::OwnedSymlink => {
+                    assert!(
+                        fs::symlink_metadata(&artifact)
+                            .expect("symlink")
+                            .file_type()
+                            .is_symlink()
+                    );
+                    assert_eq!(fs::read(referent).expect("referent"), owned);
+                }
+                InvalidCase::DanglingSymlink => {
+                    assert!(
+                        fs::symlink_metadata(&artifact)
+                            .expect("dangling")
+                            .file_type()
+                            .is_symlink()
+                    );
+                    assert!(!dangling.exists());
+                }
+                InvalidCase::Directory => {
+                    assert_eq!(fs::read(sentinel).expect("sentinel"), preserved);
+                }
             }
         }
     }
-}
-
-#[test]
-fn install_is_idempotent_when_launchd_bytes_match() {
-    let fixture = ServiceFixture::new("launchd-idempotent", true);
-    let first = FixtureRunner::new(launchd_install_expectations(&fixture));
-    fixture.controller(&first).install_blocking();
-    first.assert_finished().expect("first install");
-    let artifact = artifact_path(&fixture.home);
-    let desired_bytes = expected_plist_bytes(&fixture);
-    assert_eq!(fs::read(&artifact).expect("first plist"), desired_bytes);
-    let inode_before = fs::metadata(&artifact).expect("first plist metadata").ino();
-
-    let second = FixtureRunner::new([expected(
-        ServiceOperation::LaunchdPrint,
-        vec!["print".into(), target().into()],
-        output(b"loaded\n"),
-    )]);
-    fixture.controller(&second).install_blocking();
-    second.assert_finished().expect("idempotent install");
-    let calls = second.calls();
-    assert_eq!(calls.len(), 1);
-    assert!(matches!(
-        calls[0].operation,
-        CommandOperation::Service(ServiceOperation::LaunchdPrint)
-    ));
-    assert!(
-        !calls.iter().any(|call| matches!(
-            call.operation,
-            CommandOperation::Service(
-                ServiceOperation::LaunchdBootout
-                    | ServiceOperation::LaunchdEnable
-                    | ServiceOperation::LaunchdBootstrap
-            )
-        )),
-        "an unchanged loaded job must not be mutated"
-    );
-    assert_eq!(
-        fs::metadata(&artifact)
-            .expect("idempotent plist metadata")
-            .ino(),
-        inode_before,
-        "an unchanged plist must not be rewritten"
-    );
-    assert_eq!(fs::read(artifact).expect("idempotent plist"), desired_bytes);
-}
-
-#[test]
-fn unchanged_launchd_plist_bootstraps_absent_job_without_rewrite() {
-    let fixture = ServiceFixture::new("launchd-unchanged-absent", true);
-    let artifact = artifact_path(&fixture.home);
-    fs::create_dir_all(artifact.parent().expect("plist parent")).expect("plist parent");
-    let desired_bytes = expected_plist_bytes(&fixture);
-    fs::write(&artifact, &desired_bytes).expect("desired plist");
-    let inode_before = fs::metadata(&artifact)
-        .expect("desired plist metadata")
-        .ino();
-    let runner = FixtureRunner::new(
-        [expected(
-            ServiceOperation::LaunchdPrint,
-            vec!["print".into(), target().into()],
-            command_output(&[], b"service not loaded", 3),
-        )]
-        .into_iter()
-        .chain(launchd_install_expectations(&fixture)),
-    );
-
-    fixture.controller(&runner).install_blocking();
-
-    runner
-        .assert_finished()
-        .expect("unchanged absent-job invocations");
-    let calls = runner.calls();
-    assert_eq!(calls.len(), 4);
-    assert!(
-        !calls.iter().any(|call| matches!(
-            call.operation,
-            CommandOperation::Service(ServiceOperation::LaunchdBootout)
-        )),
-        "an unchanged plist must not be booted out"
-    );
-    assert_eq!(
-        fs::metadata(&artifact)
-            .expect("unchanged plist metadata")
-            .ino(),
-        inode_before,
-        "an unchanged plist must not be rewritten"
-    );
-    assert_eq!(fs::read(artifact).expect("unchanged plist"), desired_bytes);
-}
-
-#[test]
-fn launchd_status_five_is_manager_error_not_inactive() {
-    let fixture = ServiceFixture::new("launchd-status-five", true);
-    let artifact = artifact_path(&fixture.home);
-    fs::create_dir_all(artifact.parent().expect("plist parent")).expect("plist parent");
-    fs::write(&artifact, expected_plist_bytes(&fixture)).expect("owned plist");
-    let runner = FixtureRunner::new([expected(
-        ServiceOperation::LaunchdPrint,
-        vec!["print".into(), target().into()],
-        command_output(&[], STATUS_FIVE_ERROR, 5),
-    )]);
-
-    let error = runtime()
-        .block_on(fixture.controller(&runner).0.status())
-        .expect_err("status 5 must remain a manager error");
-
-    assert!(error.to_string().contains("launchd status failed"));
-    assert!(
-        error
-            .to_string()
-            .contains("Boot-out failed: 5: Input/output error")
-    );
-    runner.assert_finished().expect("status-five invocation");
 }
 
 #[test]
@@ -858,34 +1212,18 @@ fn minimal_path_missing_tmux_is_actionable() {
     assert!(runner.calls().is_empty());
 }
 
-fn launchd_install_expectations(fixture: &ServiceFixture) -> [ExpectedInvocation; 3] {
-    [
-        expected(
-            ServiceOperation::LaunchdEnable,
-            vec!["enable".into(), target().into()],
-            output([]),
-        ),
-        expected(
-            ServiceOperation::LaunchdBootstrap,
-            vec![
-                "bootstrap".into(),
-                domain().into(),
-                artifact_path(&fixture.home).into_os_string(),
-            ],
-            output([]),
-        ),
-        expected(
-            ServiceOperation::LaunchdPrint,
-            vec!["print".into(), target().into()],
-            output(b"loaded\n"),
-        ),
+fn launchd_install_expectations(fixture: &ServiceFixture) -> Vec<ExpectedInvocation> {
+    vec![
+        enable(output([])),
+        bootstrap(fixture, output([])),
+        print(running()),
     ]
 }
 
 fn expected(
     operation: ServiceOperation,
     args: Vec<OsString>,
-    outcome: support::FixtureOutcome,
+    outcome: FixtureOutcome,
 ) -> ExpectedInvocation {
     ExpectedInvocation {
         invocation: CommandInvocation {
@@ -896,6 +1234,100 @@ fn expected(
         },
         outcome,
     }
+}
+
+fn disable(outcome: FixtureOutcome) -> ExpectedInvocation {
+    expected(
+        ServiceOperation::LaunchdDisable,
+        vec!["disable".into(), target().into()],
+        outcome,
+    )
+}
+
+fn enable(outcome: FixtureOutcome) -> ExpectedInvocation {
+    expected(
+        ServiceOperation::LaunchdEnable,
+        vec!["enable".into(), target().into()],
+        outcome,
+    )
+}
+
+fn kill(outcome: FixtureOutcome) -> ExpectedInvocation {
+    expected(
+        ServiceOperation::LaunchdKill,
+        vec!["kill".into(), "SIGTERM".into(), target().into()],
+        outcome,
+    )
+}
+
+fn print(outcome: FixtureOutcome) -> ExpectedInvocation {
+    expected(
+        ServiceOperation::LaunchdPrint,
+        vec!["print".into(), target().into()],
+        outcome,
+    )
+}
+
+fn bootout(fixture: &ServiceFixture, outcome: FixtureOutcome) -> ExpectedInvocation {
+    expected(
+        ServiceOperation::LaunchdBootout,
+        vec![
+            "bootout".into(),
+            domain().into(),
+            artifact_path(&fixture.home).into_os_string(),
+        ],
+        outcome,
+    )
+}
+
+fn bootout_placeholder(outcome: FixtureOutcome) -> ExpectedInvocation {
+    expected(
+        ServiceOperation::LaunchdBootout,
+        vec!["bootout".into(), domain().into(), OsString::new()],
+        outcome,
+    )
+}
+
+fn bootstrap(fixture: &ServiceFixture, outcome: FixtureOutcome) -> ExpectedInvocation {
+    expected(
+        ServiceOperation::LaunchdBootstrap,
+        vec![
+            "bootstrap".into(),
+            domain().into(),
+            artifact_path(&fixture.home).into_os_string(),
+        ],
+        outcome,
+    )
+}
+
+fn running() -> FixtureOutcome {
+    output(RUNNING)
+}
+
+fn quiescent() -> FixtureOutcome {
+    output(QUIESCENT)
+}
+
+fn absent() -> FixtureOutcome {
+    launchd_absent(USER_ID)
+}
+
+fn stdout_with_pid(value: &str) -> Vec<u8> {
+    String::from_utf8(RUNNING.to_vec())
+        .expect("fixture UTF-8")
+        .replace("\tpid = 43210", &format!("\tpid = {value}"))
+        .into_bytes()
+}
+
+fn is_stop_operation(call: &CommandInvocation) -> bool {
+    matches!(
+        call.operation,
+        CommandOperation::Service(
+            ServiceOperation::LaunchdDisable
+                | ServiceOperation::LaunchdKill
+                | ServiceOperation::LaunchdBootout
+        )
+    )
 }
 
 struct ServiceFixture {
@@ -942,10 +1374,7 @@ impl ServiceFixture {
         }
     }
 
-    fn controller<'a>(
-        &'a self,
-        runner: &'a dyn solstone_tmux_observer::command::CommandRunner,
-    ) -> Controller<'a> {
+    fn controller<'a>(&'a self, runner: &'a dyn CommandRunner) -> Controller<'a> {
         Controller(
             ServiceController::new(
                 PlatformKind::Macos,
@@ -976,16 +1405,89 @@ fn expected_plist_bytes(fixture: &ServiceFixture) -> Vec<u8> {
     render(&binary, &service_path).expect("desired plist")
 }
 
-fn assert_local_observer(path: &Path, expected_tmux: &Path) {
-    assert!(
-        fs::metadata(path)
-            .expect("local observer before bootstrap")
-            .is_file()
+fn write_old_plist(fixture: &ServiceFixture) -> (Vec<u8>, u64) {
+    let artifact = artifact_path(&fixture.home);
+    fs::create_dir_all(artifact.parent().expect("plist parent")).expect("plist parent");
+    let bytes =
+        render(Path::new("/old/solstone-tmux-observer"), OsStr::new("/old")).expect("old plist");
+    fs::write(&artifact, &bytes).expect("old plist");
+    let inode = fs::metadata(&artifact).expect("old plist").ino();
+    (bytes, inode)
+}
+
+fn write_desired_plist(fixture: &ServiceFixture) {
+    let artifact = artifact_path(&fixture.home);
+    fs::create_dir_all(artifact.parent().expect("plist parent")).expect("plist parent");
+    fs::write(artifact, expected_plist_bytes(fixture)).expect("desired plist");
+}
+
+fn write_previous_state(fixture: &ServiceFixture) -> Vec<u8> {
+    let state = b"{\"tmux_path\":\"/previous/tmux\"}\n".to_vec();
+    fs::create_dir_all(fixture.config_root()).expect("config root");
+    fs::write(fixture.config_root().join(STATE_FILENAME), &state).expect("previous state");
+    state
+}
+
+fn assert_artifact(path: &Path, bytes: &[u8], inode: u64, context: &str) {
+    assert_eq!(fs::read(path).expect("plist bytes"), bytes, "{context}");
+    assert_eq!(
+        fs::metadata(path).expect("plist metadata").ino(),
+        inode,
+        "{context}: inode"
     );
+}
+
+fn assert_local_observer(path: &Path, expected_tmux: &Path) {
     let state: LocalObserver =
-        serde_json::from_slice(&fs::read(path).expect("local observer bytes before bootstrap"))
-            .expect("local observer JSON before bootstrap");
+        serde_json::from_slice(&fs::read(path).expect("local observer")).expect("state JSON");
     assert_eq!(state.tmux_path, expected_tmux);
+}
+
+fn inspecting_preserved_runner(
+    fixture: &ServiceFixture,
+    expectations: Vec<ExpectedInvocation>,
+    protected_calls: usize,
+    plist_bytes: &[u8],
+    plist_inode: u64,
+    state_bytes: Option<&[u8]>,
+) -> InspectingRunner {
+    let artifact = artifact_path(&fixture.home);
+    let state_path = fixture.config_root().join(STATE_FILENAME);
+    let plist_bytes = plist_bytes.to_vec();
+    let state_bytes = state_bytes.map(<[u8]>::to_vec);
+    let index = AtomicUsize::new(0);
+    InspectingRunner {
+        inner: FixtureRunner::new(expectations),
+        inspect: Box::new(move |_| {
+            if index.fetch_add(1, Ordering::Relaxed) < protected_calls {
+                assert_artifact(&artifact, &plist_bytes, plist_inode, "protected call");
+                match &state_bytes {
+                    Some(expected) => {
+                        assert_eq!(fs::read(&state_path).expect("state bytes"), *expected)
+                    }
+                    None => assert!(!state_path.exists(), "state must remain absent"),
+                }
+            }
+        }),
+    }
+}
+
+fn assert_preserved_after_failure(
+    fixture: &ServiceFixture,
+    plist_bytes: &[u8],
+    plist_inode: u64,
+    state_bytes: &[u8],
+) {
+    assert_artifact(
+        &artifact_path(&fixture.home),
+        plist_bytes,
+        plist_inode,
+        "after failure",
+    );
+    assert_eq!(
+        fs::read(fixture.config_root().join(STATE_FILENAME)).expect("state after failure"),
+        state_bytes
+    );
 }
 
 struct Controller<'a>(ServiceController<'a>);

@@ -56,6 +56,7 @@ native/solstone-tmux-observer/     Transitional native local plane (not installe
     tests/
         data/tmux/                 Verbatim observed tmux stdout fixtures
         data/golden/               Verbatim Python-authored JSONL fixtures
+        data/launchd/              Verbatim-realistic launchctl print stdout fixtures
         *.rs                       Native integration tests
 tests/
     test_capture.py                Capture serialization, hashing, JSONL writing

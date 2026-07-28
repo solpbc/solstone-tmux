@@ -3,17 +3,27 @@
 
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
-use crate::command::{CommandInvocation, CommandOperation, CommandRunner, ServiceOperation};
+use crate::command::{
+    CommandInvocation, CommandOperation, CommandOutput, CommandRunner, ServiceOperation,
+};
 
 use super::{
     COMMAND_TIMEOUT, ServiceError, ServiceStatus, install_artifact, manager_error,
-    remove_owned_regular_file, reports_absent, require_success, utf8_os, utf8_path,
-    validate_regular_file,
+    remove_owned_regular_file, require_success, utf8_os, utf8_path, validate_regular_file,
 };
 
 pub const LABEL: &str = "com.solstone.tmux-observer";
-const OWNERSHIP_MARKER: &[u8] = b"<string>com.solstone.tmux-observer</string>";
+const QUIESCENCE_TIMEOUT: Duration = Duration::from_secs(5);
+const QUIESCENCE_POLL_INTERVAL: Duration = Duration::from_millis(50);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum JobState {
+    Running,
+    Quiescent,
+    Absent,
+}
 
 pub fn artifact_path(home: &Path) -> PathBuf {
     home.join("Library/LaunchAgents")
@@ -72,7 +82,8 @@ pub async fn prepare_install(
 ) -> Result<PreparedInstall, ServiceError> {
     let path = artifact_path(home);
     let bytes = render(binary, service_path)?;
-    let present = validate_regular_file(&path, Some(OWNERSHIP_MARKER))?;
+    let marker = ownership_marker();
+    let present = validate_regular_file(&path, Some(&marker))?;
     let unchanged = present
         && std::fs::read(&path).map_err(|source| ServiceError::Io {
             path: path.clone(),
@@ -81,21 +92,10 @@ pub async fn prepare_install(
 
     if !unchanged {
         if present {
-            let output = bootout(runner, user_id, &path).await?;
-            if output.status != 0 && !reports_absent(&output) {
-                return Err(manager_error("launchd bootout", &output));
-            }
+            graceful_stop(runner, user_id, &path, "install-service").await?;
         }
         install_artifact(&path, &bytes)?;
-        require_success(
-            "launchd enable",
-            run(
-                runner,
-                ServiceOperation::LaunchdEnable,
-                vec!["enable".into(), target(user_id).into()],
-            )
-            .await?,
-        )?;
+        enable(runner, user_id).await?;
     }
     Ok(PreparedInstall {
         path,
@@ -111,26 +111,24 @@ pub async fn activate(
     if prepared.bootstrap {
         bootstrap(runner, user_id, &prepared.path).await?;
     } else {
-        let loaded = print(runner, user_id).await?;
-        if loaded.status == 0 {
-            return Ok(());
+        let output = print(runner, user_id).await?;
+        match classify_print(&output, user_id, "launchd loaded check")? {
+            JobState::Running => {
+                enable(runner, user_id).await?;
+            }
+            state @ JobState::Quiescent => {
+                unload(runner, user_id, &prepared.path, state, "install-service").await?;
+                enable(runner, user_id).await?;
+                bootstrap(runner, user_id, &prepared.path).await?;
+            }
+            JobState::Absent => {
+                enable(runner, user_id).await?;
+                bootstrap(runner, user_id, &prepared.path).await?;
+            }
         }
-        if !reports_absent(&loaded) {
-            return Err(manager_error("launchd loaded check", &loaded));
-        }
-        require_success(
-            "launchd enable",
-            run(
-                runner,
-                ServiceOperation::LaunchdEnable,
-                vec!["enable".into(), target(user_id).into()],
-            )
-            .await?,
-        )?;
-        bootstrap(runner, user_id, &prepared.path).await?;
     }
 
-    require_success("launchd loaded check", print(runner, user_id).await?)
+    verify_loaded(runner, user_id).await
 }
 
 pub async fn uninstall(
@@ -139,14 +137,12 @@ pub async fn uninstall(
     user_id: u32,
 ) -> Result<(), ServiceError> {
     let path = artifact_path(home);
-    if !validate_regular_file(&path, Some(OWNERSHIP_MARKER))? {
+    let marker = ownership_marker();
+    if !validate_regular_file(&path, Some(&marker))? {
         return Ok(());
     }
-    let output = bootout(runner, user_id, &path).await?;
-    if output.status != 0 && !reports_absent(&output) {
-        return Err(manager_error("launchd bootout", &output));
-    }
-    remove_owned_regular_file(&path, Some(OWNERSHIP_MARKER))?;
+    graceful_stop(runner, user_id, &path, "uninstall-service").await?;
+    remove_owned_regular_file(&path, Some(&marker))?;
     Ok(())
 }
 
@@ -155,16 +151,144 @@ pub async fn status(
     home: &Path,
     user_id: u32,
 ) -> Result<ServiceStatus, ServiceError> {
-    if !validate_regular_file(&artifact_path(home), Some(OWNERSHIP_MARKER))? {
+    let marker = ownership_marker();
+    if !validate_regular_file(&artifact_path(home), Some(&marker))? {
         return Ok(ServiceStatus::Absent);
     }
     let output = print(runner, user_id).await?;
     if output.status == 0 {
         Ok(ServiceStatus::Active)
-    } else if reports_absent(&output) {
+    } else if reports_missing_service(&output, user_id) {
         Ok(ServiceStatus::Inactive)
     } else {
         Err(manager_error("launchd status", &output))
+    }
+}
+
+async fn graceful_stop(
+    runner: &dyn CommandRunner,
+    user_id: u32,
+    path: &Path,
+    retry_command: &'static str,
+) -> Result<(), ServiceError> {
+    let result = async {
+        disable(runner, user_id).await?;
+        let output = print(runner, user_id).await?;
+        let state = classify_print(&output, user_id, "launchd stop inspection")?;
+        unload(runner, user_id, path, state, retry_command).await
+    }
+    .await;
+
+    let Err(primary) = result else {
+        return Ok(());
+    };
+    match enable(runner, user_id).await {
+        Ok(()) => Err(primary),
+        Err(reenable) => Err(ServiceError::LaunchdRecovery {
+            primary: Box::new(primary),
+            reenable: Box::new(reenable),
+            retry_command,
+        }),
+    }
+}
+
+async fn unload(
+    runner: &dyn CommandRunner,
+    user_id: u32,
+    path: &Path,
+    mut state: JobState,
+    retry_command: &'static str,
+) -> Result<(), ServiceError> {
+    if state == JobState::Running {
+        let output = kill(runner, user_id).await?;
+        if output.status != 0 && !reports_missing_service(&output, user_id) {
+            return Err(manager_error("launchd kill", &output));
+        }
+
+        let mut elapsed = Duration::ZERO;
+        loop {
+            tokio::time::sleep(QUIESCENCE_POLL_INTERVAL).await;
+            elapsed += QUIESCENCE_POLL_INTERVAL;
+            let output = print(runner, user_id).await?;
+            state = classify_print(&output, user_id, "launchd quiescence check")?;
+            if state != JobState::Running {
+                break;
+            }
+            if elapsed >= QUIESCENCE_TIMEOUT {
+                return Err(ServiceError::InvalidState(format!(
+                    "{LABEL} still reports a live pid after {} seconds; rerun \
+solstone-tmux-observer {retry_command}",
+                    QUIESCENCE_TIMEOUT.as_secs()
+                )));
+            }
+        }
+    }
+
+    if state == JobState::Absent {
+        return Ok(());
+    }
+    let output = bootout(runner, user_id, path).await?;
+    if output.status == 0 || reports_missing_service(&output, user_id) {
+        Ok(())
+    } else {
+        Err(manager_error("launchd bootout", &output))
+    }
+}
+
+fn classify_print(
+    output: &CommandOutput,
+    user_id: u32,
+    action: &'static str,
+) -> Result<JobState, ServiceError> {
+    if output.status == 0 {
+        if reports_live_pid(&output.stdout) {
+            Ok(JobState::Running)
+        } else {
+            Ok(JobState::Quiescent)
+        }
+    } else if reports_missing_service(output, user_id) {
+        Ok(JobState::Absent)
+    } else {
+        Err(manager_error(action, output))
+    }
+}
+
+fn reports_live_pid(stdout: &[u8]) -> bool {
+    String::from_utf8_lossy(stdout).lines().any(|line| {
+        let line = line.trim_start();
+        let Some((key, value)) = line.split_once(" = ") else {
+            return false;
+        };
+        key == "pid"
+            && !value.is_empty()
+            && value.bytes().all(|byte| byte.is_ascii_digit())
+            && value.bytes().any(|byte| byte != b'0')
+    })
+}
+
+fn reports_missing_service(output: &CommandOutput, user_id: u32) -> bool {
+    if output.status != 113 {
+        return false;
+    }
+    let expected = format!("Could not find service \"{LABEL}\" in domain for user gui: {user_id}");
+    output
+        .stderr
+        .split(|byte| *byte == b'\n')
+        .any(|line| line == expected.as_bytes())
+}
+
+async fn verify_loaded(runner: &dyn CommandRunner, user_id: u32) -> Result<(), ServiceError> {
+    let output = print(runner, user_id).await?;
+    if output.status != 0 {
+        return Err(manager_error("launchd loaded check", &output));
+    }
+    if reports_live_pid(&output.stdout) {
+        Ok(())
+    } else {
+        Err(ServiceError::InvalidState(format!(
+            "{LABEL} is loaded but does not report a live pid; rerun \
+solstone-tmux-observer install-service"
+        )))
     }
 }
 
@@ -172,7 +296,7 @@ async fn bootout(
     runner: &dyn CommandRunner,
     user_id: u32,
     path: &Path,
-) -> Result<crate::command::CommandOutput, ServiceError> {
+) -> Result<CommandOutput, ServiceError> {
     run(
         runner,
         ServiceOperation::LaunchdBootout,
@@ -185,10 +309,40 @@ async fn bootout(
     .await
 }
 
-async fn print(
-    runner: &dyn CommandRunner,
-    user_id: u32,
-) -> Result<crate::command::CommandOutput, ServiceError> {
+async fn disable(runner: &dyn CommandRunner, user_id: u32) -> Result<(), ServiceError> {
+    require_success(
+        "launchd disable",
+        run(
+            runner,
+            ServiceOperation::LaunchdDisable,
+            vec!["disable".into(), target(user_id).into()],
+        )
+        .await?,
+    )
+}
+
+async fn enable(runner: &dyn CommandRunner, user_id: u32) -> Result<(), ServiceError> {
+    require_success(
+        "launchd enable",
+        run(
+            runner,
+            ServiceOperation::LaunchdEnable,
+            vec!["enable".into(), target(user_id).into()],
+        )
+        .await?,
+    )
+}
+
+async fn kill(runner: &dyn CommandRunner, user_id: u32) -> Result<CommandOutput, ServiceError> {
+    run(
+        runner,
+        ServiceOperation::LaunchdKill,
+        vec!["kill".into(), "SIGTERM".into(), target(user_id).into()],
+    )
+    .await
+}
+
+async fn print(runner: &dyn CommandRunner, user_id: u32) -> Result<CommandOutput, ServiceError> {
     run(
         runner,
         ServiceOperation::LaunchdPrint,
@@ -221,7 +375,7 @@ async fn run(
     runner: &dyn CommandRunner,
     operation: ServiceOperation,
     args: Vec<OsString>,
-) -> Result<crate::command::CommandOutput, ServiceError> {
+) -> Result<CommandOutput, ServiceError> {
     Ok(runner
         .run(CommandInvocation {
             operation: CommandOperation::Service(operation),
@@ -230,6 +384,10 @@ async fn run(
             timeout: COMMAND_TIMEOUT,
         })
         .await?)
+}
+
+fn ownership_marker() -> Vec<u8> {
+    format!("<string>{LABEL}</string>").into_bytes()
 }
 
 fn domain(user_id: u32) -> String {

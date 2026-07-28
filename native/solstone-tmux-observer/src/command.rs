@@ -33,8 +33,10 @@ pub enum ServiceOperation {
     SystemdIsActive,
     SystemdDisableNow,
     LaunchdBootout,
+    LaunchdDisable,
     LaunchdEnable,
     LaunchdBootstrap,
+    LaunchdKill,
     LaunchdPrint,
 }
 

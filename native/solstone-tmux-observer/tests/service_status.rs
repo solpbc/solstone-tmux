@@ -17,7 +17,8 @@ use solstone_tmux_observer::service::{
     COMMAND_TIMEOUT, ServiceController, ServiceStatus, load_local_observer, status_exit_code,
 };
 use support::{
-    ExpectedInvocation, FakeEnvironment, FixtureRunner, TestDirectory, command_output, output,
+    ExpectedInvocation, FakeEnvironment, FixtureRunner, TestDirectory, command_output,
+    launchd_absent, output,
 };
 
 #[test]
@@ -113,8 +114,7 @@ fn launchd_loaded_and_not_loaded_statuses_use_same_taxonomy() {
         ServiceStatus::Active
     );
 
-    let unloaded_runner =
-        FixtureRunner::new([launchd_status(command_output(&[], b"not loaded", 3))]);
+    let unloaded_runner = FixtureRunner::new([launchd_status(launchd_absent(501))]);
     let unloaded = ServiceController::new(
         PlatformKind::Macos,
         &environment,

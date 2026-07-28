@@ -68,6 +68,11 @@ pub enum ServiceError {
         status: i32,
         stderr: String,
     },
+    LaunchdRecovery {
+        primary: Box<ServiceError>,
+        reenable: Box<ServiceError>,
+        retry_command: &'static str,
+    },
     InvalidState(String),
 }
 
@@ -107,6 +112,16 @@ impl fmt::Display for ServiceError {
                 }
                 Ok(())
             }
+            Self::LaunchdRecovery {
+                primary,
+                reenable,
+                retry_command,
+            } => write!(
+                formatter,
+                "{primary}; launchd re-enable recovery also failed: {reenable}; launchd crash \
+restart may remain disabled for {}; rerun solstone-tmux-observer {retry_command}",
+                launchd::LABEL
+            ),
             Self::InvalidState(message) => formatter.write_str(message),
         }
     }
@@ -119,6 +134,7 @@ impl std::error::Error for ServiceError {
             Self::Storage(error) => Some(error),
             Self::Command(error) => Some(error),
             Self::Io { source, .. } => Some(source),
+            Self::LaunchdRecovery { primary, .. } => Some(primary.as_ref()),
             _ => None,
         }
     }

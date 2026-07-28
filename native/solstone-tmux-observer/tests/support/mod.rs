@@ -17,7 +17,7 @@ use solstone_tmux_observer::command::{
 };
 use solstone_tmux_observer::model::{CaptureResult, PaneInfo, WindowInfo};
 use solstone_tmux_observer::paths::{Environment, resolve_config_root, resolve_data_root};
-use solstone_tmux_observer::service::current_platform;
+use solstone_tmux_observer::service::{current_platform, launchd::LABEL};
 use solstone_tmux_observer::tmux::WarningSink;
 
 #[derive(Clone, Debug)]
@@ -160,6 +160,14 @@ pub fn command_output(stdout: &[u8], stderr: &[u8], status: i32) -> FixtureOutco
         stderr: stderr.to_vec(),
         status,
     })
+}
+
+pub fn launchd_absent(user_id: u32) -> FixtureOutcome {
+    command_output(
+        &[],
+        format!("Could not find service \"{LABEL}\" in domain for user gui: {user_id}").as_bytes(),
+        113,
+    )
 }
 
 #[derive(Clone, Debug, Default)]

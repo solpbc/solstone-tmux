@@ -1,0 +1,34 @@
+gui/501/com.solstone.tmux-observer = {
+	active count = 0
+	path = /Users/owner/Library/LaunchAgents/com.solstone.tmux-observer.plist
+	type = LaunchAgent
+	state = not running
+
+	program = /Applications/Solstone/solstone-tmux-observer
+	arguments = {
+		/Applications/Solstone/solstone-tmux-observer
+		run
+		/tmp/pid-decoy-argument
+	}
+
+	environment = {
+		PATH => /opt/homebrew/bin:/usr/bin:/bin
+		pid => 777
+	}
+
+	default environment = {
+		PATH => /usr/bin:/bin:/usr/sbin:/sbin
+	}
+
+	domain = gui/501 [100028]
+	asid = 100028
+	minimum runtime = 10
+	exit timeout = 5
+	runs = 2
+	last exit code = 0
+
+	pid-local endpoints = {
+	}
+
+	properties = keepalive | runatload | inferred program
+}
