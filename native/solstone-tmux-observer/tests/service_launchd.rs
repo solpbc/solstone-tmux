@@ -22,7 +22,7 @@ use solstone_tmux_observer::service::{
 };
 use support::{
     ExpectedInvocation, FakeEnvironment, FixtureOutcome, FixtureRunner, TestDirectory,
-    command_output, create_executable, launchd_absent, output,
+    command_output, create_executable, launchd_absent, launchd_missing_service_line, output,
 };
 
 const USER_ID: u32 = 501;
@@ -382,10 +382,11 @@ fn launchd_quiescence_timeout_has_exactly_one_hundred_post_kill_prints() {
     let mut expectations = vec![disable(output([])), print(running()), kill(output([]))];
     expectations.extend((0..100).map(|_| print(running())));
     expectations.push(enable(output([])));
+    let protected = expectations.len();
     let runner = inspecting_preserved_runner(
         &fixture,
         expectations,
-        103,
+        protected,
         &old_bytes,
         inode,
         Some(&previous_state),
@@ -436,7 +437,6 @@ fn launchd_graceful_stop_failures_reenable_and_preserve_artifacts() {
                 enable(output([])),
             ],
             "launchd disable failed",
-            1,
         ),
         (
             "inspect",
@@ -446,7 +446,6 @@ fn launchd_graceful_stop_failures_reenable_and_preserve_artifacts() {
                 enable(output([])),
             ],
             "launchd stop inspection failed",
-            2,
         ),
         (
             "kill-status",
@@ -457,7 +456,6 @@ fn launchd_graceful_stop_failures_reenable_and_preserve_artifacts() {
                 enable(output([])),
             ],
             "launchd kill failed",
-            3,
         ),
         (
             "kill-command",
@@ -468,7 +466,6 @@ fn launchd_graceful_stop_failures_reenable_and_preserve_artifacts() {
                 enable(output([])),
             ],
             "could not start command",
-            3,
         ),
         (
             "poll",
@@ -480,7 +477,6 @@ fn launchd_graceful_stop_failures_reenable_and_preserve_artifacts() {
                 enable(output([])),
             ],
             "launchd quiescence check failed",
-            4,
         ),
         (
             "bootout",
@@ -491,14 +487,14 @@ fn launchd_graceful_stop_failures_reenable_and_preserve_artifacts() {
                 enable(output([])),
             ],
             "launchd bootout failed",
-            3,
         ),
     ];
 
-    for (label, expectations, primary_message, protected) in cases {
+    for (label, expectations, primary_message) in cases {
         let fixture = ServiceFixture::new(label, true);
         let (old_bytes, inode) = write_old_plist(&fixture);
         let previous_state = write_previous_state(&fixture);
+        let protected = expectations.len();
         let expectations = expectations.into_iter().map(|mut item| {
             if item.invocation.operation
                 == CommandOperation::Service(ServiceOperation::LaunchdBootout)
@@ -539,15 +535,17 @@ fn launchd_uninstall_failure_preserves_plist_and_state() {
     let bytes = fs::read(&artifact).expect("plist");
     let inode = fs::metadata(&artifact).expect("plist").ino();
     let state = fs::read(fixture.config_root().join(STATE_FILENAME)).expect("state");
+    let expectations = vec![
+        disable(output([])),
+        print(running()),
+        kill(command_output(&[], b"kill failed", 5)),
+        enable(output([])),
+    ];
+    let protected = expectations.len();
     let runner = inspecting_preserved_runner(
         &fixture,
-        vec![
-            disable(output([])),
-            print(running()),
-            kill(command_output(&[], b"kill failed", 5)),
-            enable(output([])),
-        ],
-        3,
+        expectations,
+        protected,
         &bytes,
         inode,
         Some(&state),
@@ -589,10 +587,11 @@ fn launchd_recovery_error_reports_both_failures_and_retry_command() {
         let fixture = ServiceFixture::new(label, true);
         let (old_bytes, inode) = write_old_plist(&fixture);
         let previous_state = write_previous_state(&fixture);
+        let protected = expectations.len();
         let runner = inspecting_preserved_runner(
             &fixture,
             expectations,
-            if uninstall { 3 } else { 1 },
+            protected,
             &old_bytes,
             inode,
             Some(&previous_state),
@@ -1068,7 +1067,7 @@ fn launchd_pid_classifier_accepts_thirty_digit_nonzero_value() {
 fn launchd_absence_requires_status_113_and_an_exact_complete_line() {
     let fixture = ServiceFixture::new("absence-classifier", true);
     write_desired_plist(&fixture);
-    let exact = format!("Could not find service \"{LABEL}\" in domain for user gui: {USER_ID}");
+    let exact = launchd_missing_service_line(USER_ID);
     let positive_stderr = format!("diagnostic before\n{exact}\ndiagnostic after\n");
     let positive = FixtureRunner::new(vec![print(command_output(
         &[],
@@ -1438,9 +1437,12 @@ fn assert_artifact(path: &Path, bytes: &[u8], inode: u64, context: &str) {
 }
 
 fn assert_local_observer(path: &Path, expected_tmux: &Path) {
-    let state: LocalObserver =
-        serde_json::from_slice(&fs::read(path).expect("local observer")).expect("state JSON");
-    assert_eq!(state.tmux_path, expected_tmux);
+    let mut expected = serde_json::to_vec(&LocalObserver {
+        tmux_path: expected_tmux.to_owned(),
+    })
+    .expect("expected local observer JSON");
+    expected.push(b'\n');
+    assert_eq!(fs::read(path).expect("local observer"), expected);
 }
 
 fn inspecting_preserved_runner(

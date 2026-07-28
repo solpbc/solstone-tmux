@@ -205,16 +205,18 @@ async fn unload(
             return Err(manager_error("launchd kill", &output));
         }
 
-        let mut elapsed = Duration::ZERO;
+        let started = tokio::time::Instant::now();
+        let deadline = started + QUIESCENCE_TIMEOUT;
+        let mut next_poll = started + QUIESCENCE_POLL_INTERVAL;
         loop {
-            tokio::time::sleep(QUIESCENCE_POLL_INTERVAL).await;
-            elapsed += QUIESCENCE_POLL_INTERVAL;
+            tokio::time::sleep_until(next_poll).await;
+            next_poll += QUIESCENCE_POLL_INTERVAL;
             let output = print(runner, user_id).await?;
             state = classify_print(&output, user_id, "launchd quiescence check")?;
             if state != JobState::Running {
                 break;
             }
-            if elapsed >= QUIESCENCE_TIMEOUT {
+            if tokio::time::Instant::now() >= deadline {
                 return Err(ServiceError::InvalidState(format!(
                     "{LABEL} still reports a live pid after {} seconds; rerun \
 solstone-tmux-observer {retry_command}",

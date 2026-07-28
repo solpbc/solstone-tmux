@@ -163,11 +163,11 @@ pub fn command_output(stdout: &[u8], stderr: &[u8], status: i32) -> FixtureOutco
 }
 
 pub fn launchd_absent(user_id: u32) -> FixtureOutcome {
-    command_output(
-        &[],
-        format!("Could not find service \"{LABEL}\" in domain for user gui: {user_id}").as_bytes(),
-        113,
-    )
+    command_output(&[], launchd_missing_service_line(user_id).as_bytes(), 113)
+}
+
+pub fn launchd_missing_service_line(user_id: u32) -> String {
+    format!("Could not find service \"{LABEL}\" in domain for user gui: {user_id}")
 }
 
 #[derive(Clone, Debug, Default)]
