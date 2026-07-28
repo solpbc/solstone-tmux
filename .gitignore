@@ -8,3 +8,5 @@ build/
 .installed
 .mypy_cache/
 .ruff_cache/
+target/
+*.profraw

@@ -1,0 +1,23 @@
+bash-5.2$ printf '\033[31mRED-SGR\033[0m
+ plain-after\n'
+[31mRED-SGR[39m plain-after
+bash-5.2$
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
