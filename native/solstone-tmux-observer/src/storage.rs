@@ -120,16 +120,6 @@ pub struct FileStorage {
 }
 
 impl FileStorage {
-    pub fn new(segment_dir: PathBuf, metadata_path: PathBuf, stream_dir: PathBuf) -> Self {
-        Self {
-            segment_dir,
-            metadata_path,
-            stream_dir,
-            handles: BTreeMap::new(),
-            faults: FaultPlan::default(),
-        }
-    }
-
     pub fn with_faults(
         segment_dir: PathBuf,
         metadata_path: PathBuf,
@@ -461,6 +451,20 @@ pub fn atomic_write_metadata(
 }
 
 pub fn atomic_write_bytes(path: &Path, parent: &Path, bytes: &[u8]) -> Result<(), StorageError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+            return Err(StorageError::InvalidTarget(path.to_owned()));
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(source) => {
+            return Err(StorageError::Io {
+                stage: "inspect atomic write target",
+                path: path.to_owned(),
+                source,
+            });
+        }
+    }
     let name = path
         .file_name()
         .ok_or_else(|| StorageError::InvalidTarget(path.to_owned()))?

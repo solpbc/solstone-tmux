@@ -7,11 +7,13 @@ use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
 
-use crate::command::{CommandInvocation, CommandRunner, TmuxOperation};
+use crate::command::{CommandInvocation, CommandOperation, CommandRunner, TmuxOperation};
 use crate::tmux::TMUX_TIMEOUT;
 
 pub const STATUS_LEFT: &str = "status-left";
 pub const SOLSTONE_OPTION: &str = "@solstone";
+pub const OBSERVING_VALUE: &str = "observing";
+const INDICATOR_PREFIX: &str = "#{?@solstone,#{?#{==:#{@solstone},syncing},#[fg=yellow]☼#[default],#[fg=colour245]☼#[default]},}";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum OptionValue {
@@ -62,7 +64,7 @@ impl<R: CommandRunner> IndicatorIo for CommandIndicatorIo<R> {
             let output = self
                 .runner
                 .run(CommandInvocation {
-                    operation: TmuxOperation::ShowOption(name.to_owned()),
+                    operation: CommandOperation::Tmux(TmuxOperation::ShowOption(name.to_owned())),
                     executable: self.tmux.clone(),
                     args: ["show-options", "-gv", name]
                         .into_iter()
@@ -98,7 +100,7 @@ impl<R: CommandRunner> IndicatorIo for CommandIndicatorIo<R> {
             let output = self
                 .runner
                 .run(CommandInvocation {
-                    operation: TmuxOperation::SetOption(name.to_owned()),
+                    operation: CommandOperation::Tmux(TmuxOperation::SetOption(name.to_owned())),
                     executable: self.tmux.clone(),
                     args: ["set-option", "-g", name, value]
                         .into_iter()
@@ -127,7 +129,7 @@ impl<R: CommandRunner> IndicatorIo for CommandIndicatorIo<R> {
             let output = self
                 .runner
                 .run(CommandInvocation {
-                    operation: TmuxOperation::UnsetOption(name.to_owned()),
+                    operation: CommandOperation::Tmux(TmuxOperation::UnsetOption(name.to_owned())),
                     executable: self.tmux.clone(),
                     args: ["set-option", "-gu", name]
                         .into_iter()
@@ -159,6 +161,23 @@ pub struct IndicatorOwnership<I> {
 }
 
 impl<I: IndicatorIo> IndicatorOwnership<I> {
+    pub async fn install_default(io: I) -> Result<Self, IndicatorError> {
+        let original_status_left = io.read(STATUS_LEFT).await?;
+        let original_solstone = io.read(SOLSTONE_OPTION).await?;
+        let status_left = match &original_status_left {
+            OptionValue::Absent => INDICATOR_PREFIX.to_owned(),
+            OptionValue::Present(value) => format!("{INDICATOR_PREFIX}{value}"),
+        };
+        Self::install_with_originals(
+            io,
+            original_status_left,
+            original_solstone,
+            status_left,
+            OBSERVING_VALUE.to_owned(),
+        )
+        .await
+    }
+
     pub async fn install(
         io: I,
         written_status_left: String,
@@ -166,6 +185,23 @@ impl<I: IndicatorIo> IndicatorOwnership<I> {
     ) -> Result<Self, IndicatorError> {
         let original_status_left = io.read(STATUS_LEFT).await?;
         let original_solstone = io.read(SOLSTONE_OPTION).await?;
+        Self::install_with_originals(
+            io,
+            original_status_left,
+            original_solstone,
+            written_status_left,
+            written_solstone,
+        )
+        .await
+    }
+
+    async fn install_with_originals(
+        io: I,
+        original_status_left: OptionValue,
+        original_solstone: OptionValue,
+        written_status_left: String,
+        written_solstone: String,
+    ) -> Result<Self, IndicatorError> {
         io.write(STATUS_LEFT, &written_status_left).await?;
         if let Err(error) = io.write(SOLSTONE_OPTION, &written_solstone).await {
             if let Err(rollback) = restore_value(&io, STATUS_LEFT, &original_status_left).await {

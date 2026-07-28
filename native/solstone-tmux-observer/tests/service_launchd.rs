@@ -7,7 +7,7 @@ use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use solstone_tmux_observer::command::{CommandInvocation, ServiceOperation, TmuxOperation};
+use solstone_tmux_observer::command::{CommandInvocation, CommandOperation, ServiceOperation};
 use solstone_tmux_observer::paths::PlatformKind;
 use solstone_tmux_observer::service::launchd::{LABEL, artifact_path, render};
 use solstone_tmux_observer::service::{COMMAND_TIMEOUT, ServiceController, TMUX_NOT_FOUND};
@@ -110,6 +110,30 @@ fn launchd_install_and_uninstall_argv_are_exact() {
         .expect("uninstall invocations");
     assert!(!artifact_path(&fixture.home).exists());
     assert!(!fixture.config_root().join("local-observer.json").exists());
+}
+
+#[test]
+fn unowned_launchd_artifact_is_rejected_before_manager_mutation() {
+    let fixture = ServiceFixture::new("launchd-unowned-uninstall", true);
+    let artifact = artifact_path(&fixture.home);
+    fs::create_dir_all(artifact.parent().expect("plist parent")).expect("plist parent");
+    fs::write(&artifact, b"<plist><string>owner label</string></plist>\n").expect("owner plist");
+    let runner = FixtureRunner::default();
+
+    let error = runtime()
+        .block_on(fixture.controller(&runner).0.uninstall())
+        .expect_err("unowned plist must be rejected");
+
+    assert!(
+        error
+            .to_string()
+            .contains("invalid or unowned service artifact")
+    );
+    assert!(runner.calls().is_empty());
+    assert_eq!(
+        fs::read(artifact).expect("owner plist preserved"),
+        b"<plist><string>owner label</string></plist>\n"
+    );
 }
 
 #[test]
@@ -221,7 +245,7 @@ fn expected(
 ) -> ExpectedInvocation {
     ExpectedInvocation {
         invocation: CommandInvocation {
-            operation: TmuxOperation::Service(operation),
+            operation: CommandOperation::Service(operation),
             executable: PathBuf::from("launchctl"),
             args,
             timeout: COMMAND_TIMEOUT,
@@ -280,6 +304,7 @@ impl ServiceFixture {
                 runner,
                 self.binary.clone(),
             )
+            .with_user_id(USER_ID)
             .with_standard_directories(Vec::new()),
         )
     }
@@ -328,13 +353,13 @@ impl solstone_tmux_observer::command::CommandRunner for OrderingRunner {
     > {
         Box::pin(async move {
             match invocation.operation {
-                TmuxOperation::Service(ServiceOperation::LaunchdBootout) => {
+                CommandOperation::Service(ServiceOperation::LaunchdBootout) => {
                     assert!(
                         String::from_utf8_lossy(&fs::read(&self.artifact).expect("old plist"))
                             .contains("/old/solstone-tmux-observer")
                     );
                 }
-                TmuxOperation::Service(ServiceOperation::LaunchdEnable) => {
+                CommandOperation::Service(ServiceOperation::LaunchdEnable) => {
                     let escaped_binary = self
                         .new_binary
                         .to_str()

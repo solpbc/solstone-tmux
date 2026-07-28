@@ -10,11 +10,13 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use solstone_tmux_observer::instance_lock::InstanceLock;
+use solstone_tmux_observer::name::derive_component;
 use solstone_tmux_observer::recovery::{
-    RecoveryAction, RecoveryError, RecoveryOptions, recover_stream, recover_stream_with_options,
+    RecoveryAction, RecoveryError, RecoveryOptions, recover_configured_streams, recover_stream,
+    recover_stream_with_options,
 };
 use solstone_tmux_observer::segment::SegmentState;
-use solstone_tmux_observer::storage::SegmentMetadata;
+use solstone_tmux_observer::storage::{SegmentMetadata, SessionMetadata};
 use support::{TestDirectory, golden_capture};
 use time::{Date, Month, PrimitiveDateTime, Time, UtcOffset};
 
@@ -181,6 +183,21 @@ fn rename_collision_keeps_source() {
     );
 }
 
+// AC 13: a dangling symlink is still a finalized-target collision.
+#[test]
+fn dangling_symlink_finalized_target_keeps_source() {
+    let setup = incomplete("dangling-finalized", true);
+    let before = fs::read(setup.jsonl()).expect("source bytes");
+    let dangling = setup.stream.join("missing-finalized-target");
+    symlink(&dangling, setup.finalized_path()).expect("dangling finalized symlink");
+
+    let records = recover(&setup);
+
+    assert_eq!(records[0].action, RecoveryAction::Failed);
+    assert_eq!(fs::read(setup.jsonl()).expect("source retained"), before);
+    assert!(fs::symlink_metadata(setup.finalized_path()).is_ok());
+}
+
 // AC 13: a source rename failure retains both source and authoritative metadata.
 #[test]
 fn rename_failure_keeps_source() {
@@ -194,6 +211,7 @@ fn rename_failure_keeps_source() {
         &setup.stream,
         RecoveryOptions {
             fail_source_rename: true,
+            ..RecoveryOptions::default()
         },
     )
     .expect("recovery");
@@ -220,7 +238,7 @@ fn orphan_metadata_after_final_rename_is_removed() {
     assert!(!setup.metadata.exists());
 }
 
-// AC 13: successful repair and rename return only after file and parent syncs.
+// AC 13: the repair fault seam proves recovery attempts to fsync the truncated JSONL.
 #[test]
 fn repairs_and_parent_renames_are_fsynced() {
     let setup = incomplete("repair-sync", true);
@@ -232,11 +250,158 @@ fn repairs_and_parent_renames_are_fsynced() {
         .write_all(b"{")
         .expect("append torn suffix");
 
+    let instance_lock = InstanceLock::acquire(&setup.data_root).expect("recovery lock");
+    let error = recover_stream_with_options(
+        &instance_lock,
+        &setup.data_root,
+        &setup.stream,
+        RecoveryOptions {
+            fail_repair_sync: true,
+            ..RecoveryOptions::default()
+        },
+    )
+    .expect_err("repair fsync failure must surface");
+
+    assert!(
+        error
+            .to_string()
+            .contains("truncate and fsync JSONL repair")
+    );
+    assert!(setup.source.is_dir());
+    assert!(setup.metadata.is_file());
+}
+
+// AC 13: the rename-parent fault seam proves recovery fsyncs the stream directory.
+#[test]
+fn finalized_rename_parent_is_fsynced() {
+    let setup = incomplete("rename-parent-sync", true);
+    let instance_lock = InstanceLock::acquire(&setup.data_root).expect("recovery lock");
+    let error = recover_stream_with_options(
+        &instance_lock,
+        &setup.data_root,
+        &setup.stream,
+        RecoveryOptions {
+            fail_rename_parent_sync: true,
+            ..RecoveryOptions::default()
+        },
+    )
+    .expect_err("rename parent fsync failure must surface");
+
+    assert!(error.to_string().contains("fsync recovered rename parent"));
+    assert!(setup.finalized_path().is_dir());
+    assert!(setup.metadata.is_file());
+}
+
+// AC 13: a symlink inside metadata-confirmed empty state is never deleted as empty.
+#[test]
+fn symlinked_zero_length_empty_entry_is_quarantined() {
+    let setup = incomplete("empty-entry-symlink", false);
+    let referent = setup.data_root.join("owner-empty-file");
+    fs::write(&referent, b"").expect("zero-length referent");
+    symlink(&referent, setup.source.join(setup.filename())).expect("segment entry symlink");
+
     let records = recover(&setup);
 
-    assert_eq!(records[0].action, RecoveryAction::RepairThenFinalize);
+    assert_eq!(records[0].action, RecoveryAction::Quarantine);
+    assert!(fs::symlink_metadata(records[0].candidate.join(setup.filename())).is_ok());
+    assert!(referent.is_file());
+}
+
+// AC 13: a dangling .failed target is a collision and cannot be replaced.
+#[test]
+fn dangling_symlink_failed_target_is_preserved() {
+    let setup = incomplete("dangling-failed", true);
+    let before = fs::read(setup.jsonl()).expect("source bytes");
+    fs::write(&setup.metadata, b"{").expect("tear metadata");
+    let failed = setup.stream.join("120000.failed");
+    symlink(setup.stream.join("missing-failed-target"), &failed).expect("failed symlink");
+
+    let records = recover(&setup);
+
+    assert_eq!(records[0].action, RecoveryAction::Quarantine);
+    assert_eq!(
+        records[0]
+            .candidate
+            .file_name()
+            .and_then(|name| name.to_str()),
+        Some("120000.1.failed")
+    );
+    assert!(fs::symlink_metadata(failed).is_ok());
+    assert_eq!(
+        fs::read(records[0].candidate.join(setup.filename())).expect("quarantined bytes"),
+        before
+    );
+}
+
+// AC 13: metadata cannot choose an arbitrary finalized directory.
+#[test]
+fn arbitrary_finalized_name_is_contradictory_and_quarantined() {
+    let setup = incomplete("arbitrary-finalized", true);
+    let mut metadata = setup.read_metadata();
+    metadata.finalized_dir = "owner-chosen-name".to_owned();
+    setup.write_metadata(&metadata);
+
+    let records = recover(&setup);
+
+    assert_eq!(records[0].action, RecoveryAction::Quarantine);
+    assert!(!setup.stream.join("owner-chosen-name").exists());
+}
+
+// AC 13: zero durable counts cannot coexist with a nonzero per-session frame id.
+#[test]
+fn contradictory_empty_session_frame_id_is_quarantined() {
+    let setup = incomplete("empty-frame-id", false);
+    let mut metadata = setup.read_metadata();
+    metadata.sessions.insert(
+        "main".to_owned(),
+        SessionMetadata {
+            session: "main".to_owned(),
+            filename: setup.filename(),
+            last_frame_id: 9,
+            durable_offset: 0,
+        },
+    );
+    setup.write_metadata(&metadata);
+
+    let records = recover(&setup);
+
+    assert_eq!(records[0].action, RecoveryAction::Quarantine);
+}
+
+// AC 13: segment time, offset, and duration naming fields are checked together.
+#[test]
+fn invalid_time_offset_and_duration_metadata_are_quarantined() {
+    assert_contradictory_metadata("invalid-time", |metadata| {
+        metadata.incomplete_dir = "250000.incomplete".into();
+    });
+    assert_contradictory_metadata("invalid-offset", |metadata| {
+        metadata.local_offset_seconds = 100_000;
+    });
+    assert_contradictory_metadata("invalid-duration", |metadata| {
+        metadata.elapsed_nanos += 1_000_000_000;
+    });
+}
+
+// AC 13: an invalid candidate stem is contradictory even when metadata agrees with it.
+#[test]
+fn invalid_candidate_stem_is_quarantined() {
+    let mut setup = incomplete("invalid-candidate-stem", true);
+    let mut metadata = setup.read_metadata();
+    let source = setup.stream.join("250000.incomplete");
+    let metadata_path = setup.stream.join("250000.incomplete.meta");
+    fs::rename(&setup.source, &source).expect("rename candidate");
+    fs::rename(&setup.metadata, &metadata_path).expect("rename candidate metadata");
+    setup.source = source;
+    setup.metadata = metadata_path;
+    setup.finalized = setup.stream.join("250000_001");
+    metadata.incomplete_dir = "250000.incomplete".to_owned();
+    metadata.finalized_dir = "250000_001".to_owned();
+    setup.write_metadata(&metadata);
+
+    let records = recover(&setup);
+
+    assert_eq!(records[0].action, RecoveryAction::Quarantine);
     assert!(records[0].candidate.is_dir());
-    assert!(!setup.metadata.exists());
 }
 
 // AC 13: symlink candidates and stream paths outside the configured root are rejected.
@@ -264,6 +429,24 @@ fn symlink_and_escape_candidates_are_rejected() {
     ));
 }
 
+// AC 13: production recovery never follows a captures-directory symlink.
+#[test]
+fn configured_stream_scan_rejects_symlinked_captures_root() {
+    let temporary = TestDirectory::new("recovery-captures-symlink");
+    let data_root = temporary.path().join("data");
+    let outside = temporary.path().join("outside");
+    fs::create_dir(&data_root).expect("data root");
+    fs::create_dir(&outside).expect("outside");
+    symlink(&outside, data_root.join("captures")).expect("captures symlink");
+    let instance_lock = InstanceLock::acquire(&data_root).expect("recovery lock");
+    let stream = derive_component("main").expect("stream");
+
+    assert!(matches!(
+        recover_configured_streams(&instance_lock, &data_root, &stream),
+        Err(RecoveryError::SpecialTarget(path)) if path == data_root.join("captures")
+    ));
+}
+
 struct Incomplete {
     _temporary: TestDirectory,
     data_root: PathBuf,
@@ -277,6 +460,15 @@ struct Incomplete {
 fn recover(setup: &Incomplete) -> Vec<solstone_tmux_observer::recovery::RecoveryRecord> {
     let instance_lock = InstanceLock::acquire(&setup.data_root).expect("recovery lock");
     recover_stream(&instance_lock, &setup.data_root, &setup.stream).expect("recovery")
+}
+
+fn assert_contradictory_metadata(label: &str, mutate: impl FnOnce(&mut SegmentMetadata)) {
+    let setup = incomplete(label, true);
+    let mut metadata = setup.read_metadata();
+    mutate(&mut metadata);
+    setup.write_metadata(&metadata);
+    let records = recover(&setup);
+    assert_eq!(records[0].action, RecoveryAction::Quarantine, "{label}");
 }
 
 impl Incomplete {

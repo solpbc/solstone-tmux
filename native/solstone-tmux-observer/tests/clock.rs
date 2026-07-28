@@ -25,7 +25,7 @@ fn clock() -> TestClock {
 fn fixed_offset_formats_paths() {
     let clock = clock();
     assert_eq!(
-        local_date_and_time(&clock),
+        local_date_and_time(clock.wall_now(), clock.local_offset()),
         ("20260728".to_owned(), "000708".to_owned())
     );
 }

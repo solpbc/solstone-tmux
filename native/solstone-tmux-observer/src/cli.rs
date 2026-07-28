@@ -61,7 +61,3 @@ where
 pub const fn usage() -> &'static str {
     "usage: solstone-tmux-observer [run|status|install-service|uninstall-service]"
 }
-
-pub const fn command_requires_instance_lock(command: CliCommand) -> bool {
-    matches!(command, CliCommand::Run)
-}

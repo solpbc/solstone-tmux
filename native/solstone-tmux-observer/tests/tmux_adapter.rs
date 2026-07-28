@@ -7,7 +7,9 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use solstone_tmux_observer::command::{CommandInvocation, CommandRunner, TmuxOperation};
+use solstone_tmux_observer::command::{
+    CommandInvocation, CommandOperation, CommandRunner, TmuxOperation,
+};
 use solstone_tmux_observer::tmux::{TMUX_TIMEOUT, TmuxAdapter};
 use support::{ExpectedInvocation, FixtureRunner, output};
 
@@ -271,7 +273,7 @@ fn complete_session_runner(session: &str, pane: Vec<u8>) -> FixtureRunner {
 
 fn invocation(operation: TmuxOperation, args: &[&str]) -> CommandInvocation {
     CommandInvocation {
-        operation,
+        operation: CommandOperation::Tmux(operation),
         executable: PathBuf::from(TMUX),
         args: args.iter().map(OsString::from).collect(),
         timeout: TMUX_TIMEOUT,

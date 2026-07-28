@@ -12,10 +12,11 @@ use std::time::Duration;
 
 use solstone_tmux_observer::clock::{Clock, TestClock};
 use solstone_tmux_observer::model::CaptureResult;
+use solstone_tmux_observer::name::{DerivedName, derive_component};
 use solstone_tmux_observer::observer::{
     CaptureProvider, LifecycleLock, ObserverConfig, ObserverExit, ObserverOperationError,
     SegmentLifecycle, SegmentManager, ShutdownEvent, ShutdownIndicator, run_observer,
-    supervise_observer,
+    stream_directory, supervise_observer,
 };
 use solstone_tmux_observer::segment::{SegmentClose, SegmentState};
 use support::{TestDirectory, golden_capture};
@@ -61,9 +62,9 @@ fn signal_future_maps_to_same_shutdown_event() {
 
 #[test]
 fn nonempty_segment_finalizes_exactly_once() {
-    let (temporary, segment, clock) = actual_segment("lifecycle-finalize", true);
-    let stream = segment.stream_dir().to_owned();
-    let manager = SegmentManager::new(segment, clock.local_offset());
+    let (temporary, segment, clock, data_root, stream) = actual_segment("lifecycle-finalize", true);
+    let segment_stream = segment.stream_dir().to_owned();
+    let manager = SegmentManager::new(segment, data_root, stream, clock.local_offset());
 
     let exit = run_with_clock(
         Box::new(manager),
@@ -75,7 +76,7 @@ fn nonempty_segment_finalizes_exactly_once() {
     );
 
     assert_eq!(exit.exit_code, 0);
-    let finalized = std::fs::read_dir(&stream)
+    let finalized = std::fs::read_dir(&segment_stream)
         .expect("stream entries")
         .filter_map(Result::ok)
         .filter(|entry| {
@@ -88,10 +89,10 @@ fn nonempty_segment_finalizes_exactly_once() {
 
 #[test]
 fn confirmed_empty_segment_is_removed() {
-    let (temporary, segment, clock) = actual_segment("lifecycle-empty", false);
+    let (temporary, segment, clock, data_root, stream) = actual_segment("lifecycle-empty", false);
     let source = segment.incomplete_dir().to_owned();
     let metadata = segment.metadata_path().to_owned();
-    let manager = SegmentManager::new(segment, clock.local_offset());
+    let manager = SegmentManager::new(segment, data_root, stream, clock.local_offset());
 
     let exit = run_with_clock(
         Box::new(manager),
@@ -131,11 +132,11 @@ fn indicator_restores_before_lock_release() {
 
 #[test]
 fn finalize_failure_exits_nonzero_and_keeps_source() {
-    let (temporary, segment, clock) = actual_segment("lifecycle-failure", true);
+    let (temporary, segment, clock, data_root, stream) = actual_segment("lifecycle-failure", true);
     let source = segment.incomplete_dir().to_owned();
     let collision = segment.stream_dir().join("120000_005");
     std::fs::create_dir(&collision).expect("create finalization collision");
-    let manager = SegmentManager::new(segment, clock.local_offset());
+    let manager = SegmentManager::new(segment, data_root, stream, clock.local_offset());
 
     let exit = run_with_clock(
         Box::new(manager),
@@ -251,11 +252,18 @@ fn runtime() -> tokio::runtime::Runtime {
         .expect("test runtime")
 }
 
-fn actual_segment(label: &str, nonempty: bool) -> (TestDirectory, SegmentState, TestClock) {
+fn actual_segment(
+    label: &str,
+    nonempty: bool,
+) -> (TestDirectory, SegmentState, TestClock, PathBuf, DerivedName) {
     let temporary = TestDirectory::new(label);
     let clock = test_clock();
+    let data_root = temporary.path().join("data");
+    let stream = derive_component("test.tmux").expect("stream name");
+    let stream_dir = stream_directory(&data_root, &stream, clock.wall_now(), clock.local_offset())
+        .expect("stream path");
     let mut segment = SegmentState::create(
-        &temporary.path().join("stream"),
+        &stream_dir,
         clock.wall_now(),
         Duration::ZERO,
         clock.local_offset(),
@@ -267,7 +275,7 @@ fn actual_segment(label: &str, nonempty: bool) -> (TestDirectory, SegmentState, 
             .expect("append");
     }
     clock.set_monotonic(Duration::from_secs(5));
-    (temporary, segment, clock)
+    (temporary, segment, clock, data_root, stream)
 }
 
 fn test_clock() -> TestClock {

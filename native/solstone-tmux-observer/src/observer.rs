@@ -11,12 +11,12 @@ use std::time::Duration;
 use time::{OffsetDateTime, UtcOffset};
 use tokio::task::{JoinError, JoinSet};
 
-use crate::clock::Clock;
+use crate::clock::{Clock, local_date_and_time};
 use crate::command::CommandRunner;
 use crate::indicator::{IndicatorIo, IndicatorOwnership};
-use crate::instance_lock::{InstanceLock, InstanceLockError};
+use crate::instance_lock::InstanceLock;
 use crate::model::CaptureResult;
-use crate::paths::ensure_private_directory;
+use crate::name::DerivedName;
 use crate::segment::{SegmentClose, SegmentError, SegmentState};
 use crate::tmux::{TmuxAdapter, WarningSink};
 
@@ -77,16 +77,22 @@ pub trait SegmentLifecycle: Send {
 
 pub struct SegmentManager {
     segment: SegmentState,
-    stream_dir: PathBuf,
+    data_root: PathBuf,
+    stream: DerivedName,
     local_offset: UtcOffset,
 }
 
 impl SegmentManager {
-    pub fn new(segment: SegmentState, local_offset: UtcOffset) -> Self {
-        let stream_dir = segment.stream_dir().to_owned();
+    pub fn new(
+        segment: SegmentState,
+        data_root: PathBuf,
+        stream: DerivedName,
+        local_offset: UtcOffset,
+    ) -> Self {
         Self {
             segment,
-            stream_dir,
+            data_root,
+            stream,
             local_offset,
         }
     }
@@ -104,8 +110,10 @@ impl SegmentLifecycle for SegmentManager {
             self.segment
                 .finalize(monotonic_now)
                 .map_err(operation_error)?;
+            let stream_dir =
+                stream_directory(&self.data_root, &self.stream, wall_now, self.local_offset)?;
             self.segment =
-                SegmentState::create(&self.stream_dir, wall_now, monotonic_now, self.local_offset)
+                SegmentState::create(&stream_dir, wall_now, monotonic_now, self.local_offset)
                     .map_err(operation_error)?;
         }
         let timestamp = self.segment.frame_timestamp(wall_now);
@@ -137,6 +145,18 @@ impl SegmentLifecycle for SegmentManager {
     }
 }
 
+pub fn stream_directory(
+    data_root: &Path,
+    stream: &DerivedName,
+    wall_now: OffsetDateTime,
+    local_offset: UtcOffset,
+) -> Result<PathBuf, ObserverOperationError> {
+    let (date, _) = local_date_and_time(wall_now, local_offset);
+    stream
+        .join_checked(&data_root.join("captures").join(date))
+        .map_err(|error| ObserverOperationError(error.to_string()))
+}
+
 fn operation_error(error: SegmentError) -> ObserverOperationError {
     ObserverOperationError(error.to_string())
 }
@@ -162,22 +182,6 @@ impl<I: IndicatorIo> ShutdownIndicator for IndicatorOwnership<I> {
 pub trait LifecycleLock: Send {}
 
 impl LifecycleLock for InstanceLock {}
-
-pub async fn acquire_run_lock(data_root: &Path) -> Result<InstanceLock, ObserverOperationError> {
-    let data_root = data_root.to_owned();
-    let handle = tokio::task::spawn_blocking(move || {
-        ensure_private_directory(&data_root)
-            .map_err(|error| ObserverOperationError(error.to_string()))?;
-        InstanceLock::acquire(&data_root).map_err(lock_error)
-    });
-    handle
-        .await
-        .map_err(|error| ObserverOperationError(join_error_message(error)))?
-}
-
-fn lock_error(error: InstanceLockError) -> ObserverOperationError {
-    ObserverOperationError(error.to_string())
-}
 
 pub async fn run_observer(
     provider: Arc<dyn CaptureProvider>,

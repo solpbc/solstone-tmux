@@ -217,7 +217,7 @@ impl SegmentState {
         self.storage.sync_and_close()?;
 
         let finalized = self.stream_dir.join(&self.metadata.finalized_dir);
-        if finalized.exists() {
+        if fs::symlink_metadata(&finalized).is_ok() {
             return Err(SegmentError::Collision(finalized));
         }
         fs::rename(&self.incomplete_dir, &finalized).map_err(|source| SegmentError::Io {
@@ -354,7 +354,7 @@ fn segment_stem(incomplete_name: &str) -> &str {
         .expect("segment metadata has an incomplete directory name")
 }
 
-fn finalized_name(stem: &str, elapsed: Duration) -> String {
+pub(crate) fn finalized_name(stem: &str, elapsed: Duration) -> String {
     format!("{stem}_{:03}", elapsed.as_secs())
 }
 

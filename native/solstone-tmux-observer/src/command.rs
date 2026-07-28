@@ -9,6 +9,12 @@ use std::pin::Pin;
 use std::time::Duration;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CommandOperation {
+    Tmux(TmuxOperation),
+    Service(ServiceOperation),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TmuxOperation {
     ListClients,
     ListWindows(String),
@@ -17,7 +23,6 @@ pub enum TmuxOperation {
     ShowOption(String),
     SetOption(String),
     UnsetOption(String),
-    Service(ServiceOperation),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -36,7 +41,7 @@ pub enum ServiceOperation {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CommandInvocation {
-    pub operation: TmuxOperation,
+    pub operation: CommandOperation,
     pub executable: PathBuf,
     pub args: Vec<OsString>,
     pub timeout: Duration,
@@ -53,7 +58,7 @@ pub struct CommandOutput {
 pub enum CommandError {
     Spawn(std::io::Error),
     Timeout {
-        operation: TmuxOperation,
+        operation: CommandOperation,
         duration: Duration,
     },
 }

@@ -11,8 +11,8 @@ use std::os::unix::net::UnixListener;
 
 use solstone_tmux_observer::paths::{
     Environment, PathError, PlatformKind, PlatformPaths, ensure_private_directory,
-    write_private_file_atomic,
 };
+use solstone_tmux_observer::storage::{StorageError, atomic_write_bytes};
 use support::TestDirectory;
 
 #[test]
@@ -94,7 +94,7 @@ fn files_are_0600_independent_of_umask() {
     fs::write(&file, b"old").expect("write old file");
     fs::set_permissions(&file, fs::Permissions::from_mode(0o666)).expect("set permissive mode");
 
-    write_private_file_atomic(&file, b"new").expect("replace private file");
+    atomic_write_bytes(&file, temporary.path(), b"new").expect("replace private file");
 
     let metadata = fs::metadata(&file).expect("file metadata");
     assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
@@ -110,8 +110,8 @@ fn symlink_targets_are_rejected_without_referent_change() {
     symlink(&referent, &link).expect("create symlink");
 
     assert!(matches!(
-        write_private_file_atomic(&link, b"replacement"),
-        Err(PathError::InvalidTarget(path)) if path == link
+        atomic_write_bytes(&link, temporary.path(), b"replacement"),
+        Err(StorageError::InvalidTarget(path)) if path == link
     ));
     assert_eq!(fs::read(referent).expect("referent bytes"), b"owner data");
 }
@@ -122,8 +122,8 @@ fn nonregular_targets_are_rejected() {
     let socket = temporary.path().join("socket");
     let _listener = UnixListener::bind(&socket).expect("bind test socket");
     assert!(matches!(
-        write_private_file_atomic(&socket, b"replacement"),
-        Err(PathError::InvalidTarget(path)) if path == socket
+        atomic_write_bytes(&socket, temporary.path(), b"replacement"),
+        Err(StorageError::InvalidTarget(path)) if path == socket
     ));
 
     let ordinary_file = temporary.path().join("not-a-directory");

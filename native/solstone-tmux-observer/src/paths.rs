@@ -6,11 +6,9 @@ pub mod macos;
 
 use std::ffi::OsString;
 use std::fmt;
-use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::name::{DerivedName, NameError, derive_component};
 
@@ -100,6 +98,26 @@ impl PlatformPaths {
     }
 }
 
+pub fn resolve_data_root(
+    platform: PlatformKind,
+    environment: &dyn Environment,
+) -> Result<PathBuf, PathError> {
+    match platform {
+        PlatformKind::Linux => linux::resolve_data_root(environment),
+        PlatformKind::Macos => macos::resolve_data_root(environment),
+    }
+}
+
+pub fn resolve_config_root(
+    platform: PlatformKind,
+    environment: &dyn Environment,
+) -> Result<PathBuf, PathError> {
+    match platform {
+        PlatformKind::Linux => linux::resolve_config_root(environment),
+        PlatformKind::Macos => macos::resolve_config_root(environment),
+    }
+}
+
 pub fn resolve_stream_paths(
     platform: PlatformKind,
     environment: &dyn Environment,
@@ -111,6 +129,14 @@ pub fn resolve_stream_paths(
 }
 
 pub fn ensure_private_directory(path: &Path) -> Result<(), PathError> {
+    ensure_directory(path, true)
+}
+
+pub fn ensure_service_directory(path: &Path) -> Result<(), PathError> {
+    ensure_directory(path, false)
+}
+
+fn ensure_directory(path: &Path, enforce_existing_mode: bool) -> Result<(), PathError> {
     if path.as_os_str().is_empty() || path.parent().is_none() {
         return Err(PathError::InvalidTarget(path.to_owned()));
     }
@@ -147,75 +173,10 @@ pub fn ensure_private_directory(path: &Path) -> Result<(), PathError> {
         })?;
         set_and_verify_mode(directory, 0o700, true)?;
     }
-    set_and_verify_mode(path, 0o700, true)?;
+    if enforce_existing_mode || !missing.is_empty() {
+        set_and_verify_mode(path, 0o700, true)?;
+    }
     Ok(())
-}
-
-static TEMPORARY_COUNTER: AtomicU64 = AtomicU64::new(0);
-
-pub fn write_private_file_atomic(path: &Path, bytes: &[u8]) -> Result<(), PathError> {
-    match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
-            return Err(PathError::InvalidTarget(path.to_owned()));
-        }
-        Ok(_) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(source) => {
-            return Err(PathError::Io {
-                path: path.to_owned(),
-                source,
-            });
-        }
-    }
-
-    let parent = path
-        .parent()
-        .ok_or_else(|| PathError::InvalidTarget(path.to_owned()))?;
-    let file_name = path
-        .file_name()
-        .ok_or_else(|| PathError::InvalidTarget(path.to_owned()))?
-        .to_string_lossy();
-    let counter = TEMPORARY_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let temporary = parent.join(format!(
-        ".{file_name}.{}.{}.tmp",
-        std::process::id(),
-        counter
-    ));
-
-    let result = (|| {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)
-            .map_err(|source| PathError::Io {
-                path: temporary.clone(),
-                source,
-            })?;
-        file.set_permissions(fs::Permissions::from_mode(0o600))
-            .map_err(|source| PathError::Io {
-                path: temporary.clone(),
-                source,
-            })?;
-        file.write_all(bytes).map_err(|source| PathError::Io {
-            path: temporary.clone(),
-            source,
-        })?;
-        file.sync_all().map_err(|source| PathError::Io {
-            path: temporary.clone(),
-            source,
-        })?;
-        fs::rename(&temporary, path).map_err(|source| PathError::Io {
-            path: path.to_owned(),
-            source,
-        })?;
-        set_and_verify_mode(path, 0o600, false)?;
-        Ok(())
-    })();
-
-    if result.is_err() {
-        let _ = fs::remove_file(&temporary);
-    }
-    result
 }
 
 fn set_and_verify_mode(path: &Path, mode: u32, directory: bool) -> Result<(), PathError> {

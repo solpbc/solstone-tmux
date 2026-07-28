@@ -8,13 +8,13 @@ use std::fs;
 use std::os::unix::fs::symlink;
 use std::path::PathBuf;
 
-use solstone_tmux_observer::cli::{CliCommand, command_requires_instance_lock, parse_args};
-use solstone_tmux_observer::command::{CommandInvocation, ServiceOperation, TmuxOperation};
+use solstone_tmux_observer::cli::parse_args;
+use solstone_tmux_observer::command::{CommandInvocation, CommandOperation, ServiceOperation};
 use solstone_tmux_observer::paths::PlatformKind;
 use solstone_tmux_observer::service::launchd;
 use solstone_tmux_observer::service::systemd;
 use solstone_tmux_observer::service::{
-    COMMAND_TIMEOUT, ServiceController, ServiceStatus, status_exit_code,
+    COMMAND_TIMEOUT, ServiceController, ServiceStatus, load_local_observer, status_exit_code,
 };
 use support::{
     ExpectedInvocation, FakeEnvironment, FixtureRunner, TestDirectory, command_output, output,
@@ -106,7 +106,8 @@ fn launchd_loaded_and_not_loaded_statuses_use_same_taxonomy() {
         &environment,
         &loaded_runner,
         PathBuf::from("/unused"),
-    );
+    )
+    .with_user_id(501);
     assert_eq!(
         runtime().block_on(loaded.status()).expect("loaded status"),
         ServiceStatus::Active
@@ -119,13 +120,53 @@ fn launchd_loaded_and_not_loaded_statuses_use_same_taxonomy() {
         &environment,
         &unloaded_runner,
         PathBuf::from("/unused"),
-    );
+    )
+    .with_user_id(501);
     assert_eq!(
         runtime()
             .block_on(unloaded.status())
             .expect("unloaded status"),
         ServiceStatus::Inactive
     );
+}
+
+#[test]
+fn launchd_default_user_id_comes_from_os_not_environment() {
+    let temporary = TestDirectory::new("launchd-os-user-id");
+    let home = temporary.path().join("owner");
+    let environment = FakeEnvironment::from_paths([
+        ("HOME", home.as_os_str().to_owned()),
+        ("PATH", OsString::new()),
+    ]);
+    let plist = launchd::artifact_path(&home);
+    fs::create_dir_all(plist.parent().expect("plist parent")).expect("plist parent");
+    fs::write(
+        &plist,
+        launchd::render(
+            std::path::Path::new("/opt/solstone-tmux-observer"),
+            OsStr::new("/usr/bin:/bin"),
+        )
+        .expect("plist bytes"),
+    )
+    .expect("write plist");
+    let user_id = rustix::process::getuid().as_raw();
+    let runner = FixtureRunner::new([launchd_status_for(user_id, output(b"loaded\n"))]);
+    let controller = ServiceController::new(
+        PlatformKind::Macos,
+        &environment,
+        &runner,
+        PathBuf::from("/unused"),
+    );
+
+    assert_eq!(
+        runtime()
+            .block_on(controller.status())
+            .expect("loaded status"),
+        ServiceStatus::Active
+    );
+    runner
+        .assert_finished()
+        .expect("OS-derived launchd user id");
 }
 
 #[test]
@@ -162,6 +203,20 @@ fn manager_query_error_is_1() {
 }
 
 #[test]
+fn missing_persisted_state_directs_owner_to_install_service() {
+    let temporary = TestDirectory::new("missing-local-observer-state");
+
+    let error = load_local_observer(temporary.path()).expect_err("state must be required");
+
+    assert!(error.to_string().contains("is missing"));
+    assert!(
+        error
+            .to_string()
+            .contains("solstone-tmux-observer install-service")
+    );
+}
+
+#[test]
 fn invalid_status_artifact_is_exit_1_without_following_referent() {
     let temporary = TestDirectory::new("service-status-invalid");
     let home = temporary.path().join("owner");
@@ -183,13 +238,8 @@ fn invalid_status_artifact_is_exit_1_without_following_referent() {
 }
 
 #[test]
-fn cli_usage_error_is_2_and_service_commands_do_not_lock() {
+fn cli_usage_error_is_2() {
     assert!(parse_args(["observer".into(), "unknown".into()]).is_err());
-    assert!(!command_requires_instance_lock(CliCommand::Status));
-    assert!(!command_requires_instance_lock(CliCommand::InstallService));
-    assert!(!command_requires_instance_lock(
-        CliCommand::UninstallService
-    ));
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_solstone-tmux-observer"))
         .arg("unknown")
         .output()
@@ -219,7 +269,7 @@ fn environment(home: &std::path::Path) -> FakeEnvironment {
 fn systemd_status(outcome: support::FixtureOutcome) -> ExpectedInvocation {
     ExpectedInvocation {
         invocation: CommandInvocation {
-            operation: TmuxOperation::Service(ServiceOperation::SystemdIsActive),
+            operation: CommandOperation::Service(ServiceOperation::SystemdIsActive),
             executable: PathBuf::from("systemctl"),
             args: ["--user", "is-active", systemd::UNIT_NAME]
                 .into_iter()
@@ -232,13 +282,17 @@ fn systemd_status(outcome: support::FixtureOutcome) -> ExpectedInvocation {
 }
 
 fn launchd_status(outcome: support::FixtureOutcome) -> ExpectedInvocation {
+    launchd_status_for(501, outcome)
+}
+
+fn launchd_status_for(user_id: u32, outcome: support::FixtureOutcome) -> ExpectedInvocation {
     ExpectedInvocation {
         invocation: CommandInvocation {
-            operation: TmuxOperation::Service(ServiceOperation::LaunchdPrint),
+            operation: CommandOperation::Service(ServiceOperation::LaunchdPrint),
             executable: PathBuf::from("launchctl"),
             args: [
                 OsString::from("print"),
-                OsString::from(format!("gui/501/{}", launchd::LABEL)),
+                OsString::from(format!("gui/{user_id}/{}", launchd::LABEL)),
             ]
             .into_iter()
             .collect(),

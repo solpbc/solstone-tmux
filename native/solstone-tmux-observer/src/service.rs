@@ -14,7 +14,10 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::command::{CommandError, CommandRunner};
-use crate::paths::{Environment, PathError, PlatformKind, PlatformPaths, ensure_private_directory};
+use crate::paths::{
+    Environment, PathError, PlatformKind, PlatformPaths, ensure_private_directory,
+    ensure_service_directory,
+};
 use crate::storage::{StorageError, atomic_write_bytes, sync_directory};
 
 pub const STATE_FILENAME: &str = "local-observer.json";
@@ -59,7 +62,6 @@ pub enum ServiceError {
     InvalidArtifact(PathBuf),
     InvalidExecutable(PathBuf),
     InvalidUtf8Path(PathBuf),
-    MissingUserId,
     TmuxNotFound,
     Manager {
         action: &'static str,
@@ -92,10 +94,6 @@ impl fmt::Display for ServiceError {
                 formatter,
                 "{} cannot be represented safely in a service definition",
                 path.display()
-            ),
-            Self::MissingUserId => write!(
-                formatter,
-                "UID is not set; cannot address the owner's launchd domain"
             ),
             Self::TmuxNotFound => formatter.write_str(TMUX_NOT_FOUND),
             Self::Manager {
@@ -150,6 +148,7 @@ pub struct ServiceController<'a> {
     runner: &'a dyn CommandRunner,
     binary: PathBuf,
     standard_directories: Vec<PathBuf>,
+    user_id: u32,
 }
 
 impl<'a> ServiceController<'a> {
@@ -165,11 +164,17 @@ impl<'a> ServiceController<'a> {
             runner,
             binary,
             standard_directories: standard_directories(platform),
+            user_id: rustix::process::getuid().as_raw(),
         }
     }
 
     pub fn with_standard_directories(mut self, directories: Vec<PathBuf>) -> Self {
         self.standard_directories = directories;
+        self
+    }
+
+    pub fn with_user_id(mut self, user_id: u32) -> Self {
+        self.user_id = user_id;
         self
     }
 
@@ -179,23 +184,36 @@ impl<'a> ServiceController<'a> {
         let binary = canonical_executable(&self.binary)?;
         let search_directories = search_directories(self.environment, &self.standard_directories);
         let tmux_path = resolve_tmux(&search_directories)?;
-        persist_local_observer(
-            &paths.config_root,
-            &LocalObserver {
-                tmux_path: tmux_path.clone(),
-            },
-        )?;
-        let service_path = assembled_service_path(&tmux_path, &search_directories);
+        let service_path = assembled_service_path(&tmux_path, &search_directories)?;
+        let state = LocalObserver { tmux_path };
+        let previous_state = read_local_observer_state(&paths.config_root)?;
 
         match self.platform {
             PlatformKind::Linux => {
-                systemd::install(self.runner, &home, &binary, &service_path).await
+                systemd::prepare_install(self.runner, &home, &binary, &service_path).await?;
+                persist_local_observer(&paths.config_root, &state)?;
+                if let Err(error) = systemd::activate(self.runner).await {
+                    restore_local_observer_state(&paths.config_root, previous_state)?;
+                    return Err(error);
+                }
             }
             PlatformKind::Macos => {
-                let user_id = required_user_id(self.environment)?;
-                launchd::install(self.runner, &home, user_id, &binary, &service_path).await
+                let prepared = launchd::prepare_install(
+                    self.runner,
+                    &home,
+                    self.user_id,
+                    &binary,
+                    &service_path,
+                )
+                .await?;
+                persist_local_observer(&paths.config_root, &state)?;
+                if let Err(error) = launchd::activate(self.runner, self.user_id, prepared).await {
+                    restore_local_observer_state(&paths.config_root, previous_state)?;
+                    return Err(error);
+                }
             }
         }
+        Ok(())
     }
 
     pub async fn uninstall(&self) -> Result<(), ServiceError> {
@@ -204,8 +222,7 @@ impl<'a> ServiceController<'a> {
         match self.platform {
             PlatformKind::Linux => systemd::uninstall(self.runner, &home).await?,
             PlatformKind::Macos => {
-                let user_id = required_user_id(self.environment)?;
-                launchd::uninstall(self.runner, &home, user_id).await?;
+                launchd::uninstall(self.runner, &home, self.user_id).await?;
             }
         }
         remove_owned_regular_file(
@@ -219,10 +236,7 @@ impl<'a> ServiceController<'a> {
         let home = required_home(self.environment)?;
         match self.platform {
             PlatformKind::Linux => systemd::status(self.runner, &home).await,
-            PlatformKind::Macos => {
-                let user_id = required_user_id(self.environment)?;
-                launchd::status(self.runner, &home, user_id).await
-            }
+            PlatformKind::Macos => launchd::status(self.runner, &home, self.user_id).await,
         }
     }
 }
@@ -238,13 +252,14 @@ pub fn current_platform() -> PlatformKind {
     }
 }
 
-pub fn load_local_observer(
-    platform: PlatformKind,
-    environment: &dyn Environment,
-) -> Result<LocalObserver, ServiceError> {
-    let paths = PlatformPaths::resolve(platform, environment)?;
-    let path = paths.config_root.join(STATE_FILENAME);
-    validate_regular_file(&path, None)?;
+pub fn load_local_observer(config_root: &Path) -> Result<LocalObserver, ServiceError> {
+    let path = config_root.join(STATE_FILENAME);
+    if !validate_regular_file(&path, None)? {
+        return Err(ServiceError::InvalidState(format!(
+            "{} is missing; run solstone-tmux-observer install-service to resolve and persist an absolute tmux path",
+            path.display()
+        )));
+    }
     let bytes = fs::read(&path).map_err(|source| ServiceError::Io {
         path: path.clone(),
         source,
@@ -279,13 +294,6 @@ fn required_home(environment: &dyn Environment) -> Result<PathBuf, ServiceError>
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
         .ok_or(ServiceError::Path(PathError::MissingHome))
-}
-
-fn required_user_id(environment: &dyn Environment) -> Result<u32, ServiceError> {
-    environment
-        .var_os("UID")
-        .and_then(|value| value.to_str().and_then(|text| text.parse().ok()))
-        .ok_or(ServiceError::MissingUserId)
 }
 
 fn search_directories(environment: &dyn Environment, standards: &[PathBuf]) -> Vec<PathBuf> {
@@ -325,7 +333,10 @@ fn canonical_executable(path: &Path) -> Result<PathBuf, ServiceError> {
     Ok(canonical)
 }
 
-fn assembled_service_path(tmux_path: &Path, directories: &[PathBuf]) -> OsString {
+fn assembled_service_path(
+    tmux_path: &Path,
+    directories: &[PathBuf],
+) -> Result<OsString, ServiceError> {
     let mut assembled = Vec::new();
     if let Some(parent) = tmux_path.parent() {
         assembled.push(parent.to_owned());
@@ -335,8 +346,11 @@ fn assembled_service_path(tmux_path: &Path, directories: &[PathBuf]) -> OsString
             assembled.push(directory.clone());
         }
     }
-    std::env::join_paths(assembled)
-        .unwrap_or_else(|_| OsString::from("/usr/local/bin:/usr/bin:/bin"))
+    std::env::join_paths(assembled).map_err(|error| {
+        ServiceError::InvalidState(format!(
+            "could not assemble service PATH including the resolved tmux directory: {error}; remove path entries containing ':' and rerun install-service"
+        ))
+    })
 }
 
 fn persist_local_observer(config_root: &Path, state: &LocalObserver) -> Result<(), ServiceError> {
@@ -346,6 +360,29 @@ fn persist_local_observer(config_root: &Path, state: &LocalObserver) -> Result<(
     })?;
     bytes.push(b'\n');
     atomic_write_bytes(&config_root.join(STATE_FILENAME), config_root, &bytes)?;
+    Ok(())
+}
+
+fn read_local_observer_state(config_root: &Path) -> Result<Option<Vec<u8>>, ServiceError> {
+    let path = config_root.join(STATE_FILENAME);
+    if !validate_regular_file(&path, Some(b"\"tmux_path\""))? {
+        return Ok(None);
+    }
+    fs::read(&path)
+        .map(Some)
+        .map_err(|source| ServiceError::Io { path, source })
+}
+
+fn restore_local_observer_state(
+    config_root: &Path,
+    previous: Option<Vec<u8>>,
+) -> Result<(), ServiceError> {
+    let path = config_root.join(STATE_FILENAME);
+    if let Some(bytes) = previous {
+        atomic_write_bytes(&path, config_root, &bytes)?;
+    } else {
+        remove_owned_regular_file(&path, Some(b"\"tmux_path\""))?;
+    }
     Ok(())
 }
 
@@ -390,7 +427,7 @@ pub(crate) fn install_artifact(path: &Path, bytes: &[u8]) -> Result<bool, Servic
     let parent = path
         .parent()
         .ok_or_else(|| ServiceError::InvalidArtifact(path.to_owned()))?;
-    ensure_private_directory(parent)?;
+    ensure_service_directory(parent)?;
     atomic_write_bytes(path, parent, bytes)?;
     Ok(true)
 }
@@ -432,6 +469,17 @@ pub(crate) fn manager_error(
         action,
         status: output.status,
         stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+    }
+}
+
+pub(crate) fn require_success(
+    action: &'static str,
+    output: crate::command::CommandOutput,
+) -> Result<(), ServiceError> {
+    if output.status == 0 {
+        Ok(())
+    } else {
+        Err(manager_error(action, &output))
     }
 }
 

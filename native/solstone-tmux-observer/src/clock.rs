@@ -86,8 +86,8 @@ impl Clock for TestClock {
     }
 }
 
-pub fn local_date_and_time(clock: &dyn Clock) -> (String, String) {
-    let local = clock.wall_now().to_offset(clock.local_offset());
+pub fn local_date_and_time(wall_now: OffsetDateTime, local_offset: UtcOffset) -> (String, String) {
+    let local = wall_now.to_offset(local_offset);
     (
         format!(
             "{:04}{:02}{:02}",

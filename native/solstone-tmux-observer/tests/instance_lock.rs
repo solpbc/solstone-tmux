@@ -5,8 +5,8 @@ mod support;
 
 use std::fs;
 use std::os::unix::fs::MetadataExt;
+use std::process::Command;
 
-use solstone_tmux_observer::cli::{CliCommand, command_requires_instance_lock};
 use solstone_tmux_observer::instance_lock::{InstanceLock, InstanceLockError, LOCK_FILENAME};
 use solstone_tmux_observer::paths::ensure_private_directory;
 use support::TestDirectory;
@@ -50,20 +50,41 @@ fn release_never_unlinks_lock_inode() {
 #[test]
 fn status_does_not_lock() {
     let temporary = TestDirectory::new("status-no-lock");
-    let _writer = InstanceLock::acquire(temporary.path()).expect("writer lock");
+    let data_home = temporary.path().join("data");
+    let data_root = data_home.join("solstone-tmux");
+    let home = temporary.path().join("home");
+    fs::create_dir_all(&data_root).expect("data root");
+    fs::create_dir(&home).expect("home");
+    let _writer = InstanceLock::acquire(&data_root).expect("writer lock");
 
-    assert!(!command_requires_instance_lock(CliCommand::Status));
-    assert!(!temporary.path().join("status-lock").exists());
+    let status = Command::new(env!("CARGO_BIN_EXE_solstone-tmux-observer"))
+        .arg("status")
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", &data_home)
+        .status()
+        .expect("run status");
+
+    assert_eq!(status.code(), Some(4));
 }
 
 #[test]
-fn service_install_stop_and_uninstall_do_not_lock() {
+fn service_uninstall_does_not_lock() {
     let temporary = TestDirectory::new("service-no-lock");
-    let _writer = InstanceLock::acquire(temporary.path()).expect("writer lock");
+    let data_home = temporary.path().join("data");
+    let config_home = temporary.path().join("config");
+    let data_root = data_home.join("solstone-tmux");
+    let home = temporary.path().join("home");
+    fs::create_dir_all(&data_root).expect("data root");
+    fs::create_dir(&home).expect("home");
+    let _writer = InstanceLock::acquire(&data_root).expect("writer lock");
 
-    assert!(!command_requires_instance_lock(CliCommand::InstallService));
-    assert!(!command_requires_instance_lock(
-        CliCommand::UninstallService
-    ));
-    assert!(!temporary.path().join("service-lock").exists());
+    let status = Command::new(env!("CARGO_BIN_EXE_solstone-tmux-observer"))
+        .arg("uninstall-service")
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", &data_home)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .status()
+        .expect("run uninstall-service");
+
+    assert!(status.success());
 }

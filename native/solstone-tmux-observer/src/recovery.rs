@@ -5,16 +5,21 @@ use std::collections::BTreeSet;
 use std::fmt;
 use std::fs::{self, OpenOptions};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use serde_json::Value;
+use time::{Date, Month, OffsetDateTime, UtcOffset};
 
 use crate::instance_lock::InstanceLock;
-use crate::name::derive_component;
+use crate::name::{DerivedName, derive_component};
+use crate::segment::finalized_name;
 use crate::storage::{MetadataLifecycle, SegmentMetadata, atomic_write_metadata, sync_directory};
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct RecoveryOptions {
     pub fail_source_rename: bool,
+    pub fail_repair_sync: bool,
+    pub fail_rename_parent_sync: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -57,19 +62,83 @@ pub fn recover_stream_with_options(
     recover_stream_inner(data_root, stream_dir, options)
 }
 
-pub async fn recover_stream_blocking(
+pub fn recover_configured_streams(
     instance_lock: &InstanceLock,
     data_root: &Path,
-    stream_dir: &Path,
+    stream: &DerivedName,
 ) -> Result<Vec<RecoveryRecord>, RecoveryError> {
     let _held_lock = instance_lock.file();
-    let data_root = data_root.to_owned();
-    let stream_dir = stream_dir.to_owned();
-    tokio::task::spawn_blocking(move || {
-        recover_stream_inner(&data_root, &stream_dir, RecoveryOptions::default())
-    })
-    .await
-    .map_err(|error| RecoveryError::Task(error.to_string()))?
+    let captures = data_root.join("captures");
+    match fs::symlink_metadata(&captures) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+            return Err(RecoveryError::SpecialTarget(captures));
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(source) => {
+            return Err(RecoveryError::Io {
+                operation: "inspect captures directory",
+                path: captures,
+                source,
+            });
+        }
+    }
+    let entries = match fs::read_dir(&captures) {
+        Ok(entries) => entries,
+        Err(source) => {
+            return Err(RecoveryError::Io {
+                operation: "scan capture dates",
+                path: captures,
+                source,
+            });
+        }
+    };
+    let mut stream_directories = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|source| RecoveryError::Io {
+            operation: "read capture date entry",
+            path: captures.clone(),
+            source,
+        })?;
+        let Some(date) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        if !valid_date_name(&date) {
+            continue;
+        }
+        let file_type = entry.file_type().map_err(|source| RecoveryError::Io {
+            operation: "inspect capture date entry",
+            path: entry.path(),
+            source,
+        })?;
+        if file_type.is_symlink() || !file_type.is_dir() {
+            return Err(RecoveryError::SpecialTarget(entry.path()));
+        }
+        let stream_dir = stream
+            .join_checked(&entry.path())
+            .map_err(|_| RecoveryError::EscapesDataRoot(entry.path()))?;
+        match fs::symlink_metadata(&stream_dir) {
+            Ok(_) => stream_directories.push(stream_dir),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(source) => {
+                return Err(RecoveryError::Io {
+                    operation: "inspect configured stream",
+                    path: stream_dir,
+                    source,
+                });
+            }
+        }
+    }
+    stream_directories.sort();
+    let mut records = Vec::new();
+    for stream_dir in stream_directories {
+        records.extend(recover_stream_inner(
+            data_root,
+            &stream_dir,
+            RecoveryOptions::default(),
+        )?);
+    }
+    Ok(records)
 }
 
 fn recover_stream_inner(
@@ -112,17 +181,20 @@ fn recover_candidate(
     stem: &str,
     options: RecoveryOptions,
 ) -> Result<RecoveryRecord, RecoveryError> {
-    if derive_component(stem).map(|name| name.as_str() == stem) != Ok(true) {
-        return Ok(record(
-            stream_dir.join(format!("{stem}.incomplete")),
-            RecoveryAction::Failed,
-            "candidate name is not a canonical direct entry",
-        ));
-    }
     let source = stream_dir.join(format!("{stem}.incomplete"));
     let metadata_path = stream_dir.join(format!("{stem}.incomplete.meta"));
     reject_special_target(&source)?;
     reject_special_target(&metadata_path)?;
+    if derive_component(stem).map(|name| name.as_str() == stem) != Ok(true)
+        || !valid_time_name(stem)
+    {
+        return quarantine(
+            stream_dir,
+            &source,
+            &metadata_path,
+            "candidate stem is not a well-formed HHMMSS",
+        );
+    }
 
     let metadata_bytes = match fs::read(&metadata_path) {
         Ok(bytes) => Some(bytes),
@@ -207,7 +279,7 @@ fn recover_candidate(
     }
 
     let finalized = stream_dir.join(&metadata.finalized_dir);
-    if finalized.exists() {
+    if entry_exists(&finalized)? {
         return Ok(record(
             source,
             RecoveryAction::Failed,
@@ -263,7 +335,7 @@ fn recover_candidate(
     }
     let repaired = validation.kind == ValidationKind::Repair;
     if repaired {
-        apply_repairs(&source, &validation.repairs)?;
+        apply_repairs(&source, &validation.repairs, options)?;
         if let Some(updated) = validation.updated_metadata {
             metadata = updated;
         }
@@ -278,6 +350,13 @@ fn recover_candidate(
             RecoveryAction::Failed,
             &format!("source rename failed and was retained: {source_error}"),
         ));
+    }
+    if options.fail_rename_parent_sync {
+        return Err(RecoveryError::Io {
+            operation: "fsync recovered rename parent",
+            path: stream_dir.to_owned(),
+            source: std::io::Error::other("injected recovered rename parent fsync failure"),
+        });
     }
     sync_directory(stream_dir)?;
     fs::remove_file(&metadata_path).map_err(|source_error| RecoveryError::Io {
@@ -358,20 +437,32 @@ fn reject_special_target(path: &Path) -> Result<(), RecoveryError> {
 }
 
 fn metadata_is_consistent(metadata: &SegmentMetadata, stem: &str) -> bool {
+    let elapsed = Duration::from_nanos(metadata.elapsed_nanos);
     if metadata.schema_version != SegmentMetadata::SCHEMA_VERSION
+        || !valid_time_name(stem)
         || metadata.incomplete_dir != format!("{stem}.incomplete")
         || !is_direct_name(&metadata.incomplete_dir)
         || !is_direct_name(&metadata.finalized_dir)
+        || metadata.finalized_dir != finalized_name(stem, elapsed)
+        || UtcOffset::from_whole_seconds(metadata.local_offset_seconds).is_err()
+        || OffsetDateTime::from_unix_timestamp_nanos(metadata.start_wall_unix_nanos).is_err()
         || metadata.has_durable_frames != (metadata.durable_frame_count > 0)
+        || metadata.durable_frame_count != metadata.last_durable_frame_id
+        || (metadata.lifecycle == MetadataLifecycle::Creating
+            && (metadata.durable_frame_count != 0 || !metadata.sessions.is_empty()))
     {
         return false;
     }
     let mut filenames = BTreeSet::new();
     metadata.sessions.iter().all(|(identity, session)| {
+        let has_durable_bytes = session.durable_offset > 0;
+        let has_frame_id = session.last_frame_id > 0;
         identity == &session.session
             && derive_component(identity)
                 .map(|name| name.session_filename() == session.filename)
                 .unwrap_or(false)
+            && has_durable_bytes == has_frame_id
+            && session.last_frame_id <= metadata.last_durable_frame_id
             && filenames.insert(session.filename.clone())
     })
 }
@@ -555,7 +646,11 @@ fn contradiction(detail: &str) -> Validation {
     }
 }
 
-fn apply_repairs(directory: &Path, repairs: &[FileRepair]) -> Result<(), RecoveryError> {
+fn apply_repairs(
+    directory: &Path,
+    repairs: &[FileRepair],
+    options: RecoveryOptions,
+) -> Result<(), RecoveryError> {
     for repair in repairs {
         if repair.path.parent() != Some(directory) {
             return Err(RecoveryError::EscapesDataRoot(repair.path.clone()));
@@ -569,7 +664,15 @@ fn apply_repairs(directory: &Path, repairs: &[FileRepair]) -> Result<(), Recover
                 source,
             })?;
         file.set_len(repair.offset)
-            .and_then(|()| file.sync_all())
+            .and_then(|()| {
+                if options.fail_repair_sync {
+                    Err(std::io::Error::other(
+                        "injected repaired JSONL fsync failure",
+                    ))
+                } else {
+                    file.sync_all()
+                }
+            })
             .map_err(|source| RecoveryError::Io {
                 operation: "truncate and fsync JSONL repair",
                 path: repair.path.clone(),
@@ -590,12 +693,12 @@ fn directory_is_confirmed_empty(directory: &Path) -> Result<bool, RecoveryError>
             path: directory.to_owned(),
             source,
         })?;
-        let metadata = entry.metadata().map_err(|source| RecoveryError::Io {
+        let metadata = fs::symlink_metadata(entry.path()).map_err(|source| RecoveryError::Io {
             operation: "inspect empty segment entry",
             path: entry.path(),
             source,
         })?;
-        if !metadata.is_file() || metadata.len() != 0 {
+        if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() != 0 {
             return Ok(false);
         }
     }
@@ -667,13 +770,13 @@ fn quarantine(
         };
         let failed = stream_dir.join(format!("{stem}{suffix}.failed"));
         let failed_metadata = stream_dir.join(format!("{stem}{suffix}.failed.meta"));
-        if !failed.exists() && !failed_metadata.exists() {
+        if !entry_exists(&failed)? && !entry_exists(&failed_metadata)? {
             break (failed, failed_metadata);
         }
         number += 1;
     };
-    let source_exists = source.exists();
-    let metadata_exists = metadata.exists();
+    let source_exists = entry_exists(source)?;
+    let metadata_exists = entry_exists(metadata)?;
     if source_exists {
         fs::rename(source, &failed).map_err(|source_error| RecoveryError::Io {
             operation: "quarantine segment",
@@ -695,6 +798,48 @@ fn quarantine(
     Ok(record(failed, RecoveryAction::Quarantine, detail))
 }
 
+fn entry_exists(path: &Path) -> Result<bool, RecoveryError> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(source) => Err(RecoveryError::Io {
+            operation: "inspect recovery collision target",
+            path: path.to_owned(),
+            source,
+        }),
+    }
+}
+
+fn valid_time_name(value: &str) -> bool {
+    if value.len() != 6 || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return false;
+    }
+    let hour = value[0..2].parse::<u8>().ok();
+    let minute = value[2..4].parse::<u8>().ok();
+    let second = value[4..6].parse::<u8>().ok();
+    matches!(
+        (hour, minute, second),
+        (Some(0..=23), Some(0..=59), Some(0..=59))
+    )
+}
+
+fn valid_date_name(value: &str) -> bool {
+    if value.len() != 8 || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return false;
+    }
+    let year = value[0..4].parse::<i32>().ok();
+    let month = value[4..6]
+        .parse::<u8>()
+        .ok()
+        .and_then(|month| Month::try_from(month).ok());
+    let day = value[6..8].parse::<u8>().ok();
+    matches!(
+        (year, month, day),
+        (Some(year), Some(month), Some(day))
+            if Date::from_calendar_date(year, month, day).is_ok()
+    )
+}
+
 fn atomic_write_bytes_for_recovery(
     path: &Path,
     parent: &Path,
@@ -714,7 +859,6 @@ fn record(candidate: PathBuf, action: RecoveryAction, detail: &str) -> RecoveryR
 #[derive(Debug)]
 pub enum RecoveryError {
     Storage(crate::storage::StorageError),
-    Task(String),
     EscapesDataRoot(PathBuf),
     SpecialTarget(PathBuf),
     Io {
@@ -734,7 +878,6 @@ impl fmt::Display for RecoveryError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Storage(error) => error.fmt(formatter),
-            Self::Task(error) => write!(formatter, "blocking recovery task failed: {error}"),
             Self::EscapesDataRoot(path) => write!(
                 formatter,
                 "recovery candidate escapes the configured data root: {}",

@@ -4,11 +4,12 @@
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
-use crate::command::{CommandInvocation, CommandRunner, ServiceOperation, TmuxOperation};
+use crate::command::{CommandInvocation, CommandOperation, CommandRunner, ServiceOperation};
 
 use super::{
     COMMAND_TIMEOUT, ServiceError, ServiceStatus, install_artifact, manager_error,
-    remove_owned_regular_file, reports_absent, utf8_os, utf8_path, validate_regular_file,
+    remove_owned_regular_file, reports_absent, require_success, utf8_os, utf8_path,
+    validate_regular_file,
 };
 
 pub const LABEL: &str = "com.solstone.tmux-observer";
@@ -57,13 +58,18 @@ pub fn render(binary: &Path, service_path: &OsStr) -> Result<Vec<u8>, ServiceErr
     .into_bytes())
 }
 
-pub async fn install(
+pub struct PreparedInstall {
+    path: PathBuf,
+    bootstrap: bool,
+}
+
+pub async fn prepare_install(
     runner: &dyn CommandRunner,
     home: &Path,
     user_id: u32,
     binary: &Path,
     service_path: &OsStr,
-) -> Result<(), ServiceError> {
+) -> Result<PreparedInstall, ServiceError> {
     let path = artifact_path(home);
     let bytes = render(binary, service_path)?;
     let unchanged = validate_regular_file(&path, Some(OWNERSHIP_MARKER))?
@@ -87,19 +93,20 @@ pub async fn install(
             )
             .await?,
         )?;
-        require_success(
-            "launchd bootstrap",
-            run(
-                runner,
-                ServiceOperation::LaunchdBootstrap,
-                vec![
-                    "bootstrap".into(),
-                    domain(user_id).into(),
-                    path.as_os_str().to_owned(),
-                ],
-            )
-            .await?,
-        )?;
+    }
+    Ok(PreparedInstall {
+        path,
+        bootstrap: !unchanged,
+    })
+}
+
+pub async fn activate(
+    runner: &dyn CommandRunner,
+    user_id: u32,
+    prepared: PreparedInstall,
+) -> Result<(), ServiceError> {
+    if prepared.bootstrap {
+        bootstrap(runner, user_id, &prepared.path).await?;
     } else {
         let loaded = print(runner, user_id).await?;
         if loaded.status != 0 {
@@ -115,19 +122,7 @@ pub async fn install(
                 )
                 .await?,
             )?;
-            require_success(
-                "launchd bootstrap",
-                run(
-                    runner,
-                    ServiceOperation::LaunchdBootstrap,
-                    vec![
-                        "bootstrap".into(),
-                        domain(user_id).into(),
-                        path.as_os_str().to_owned(),
-                    ],
-                )
-                .await?,
-            )?;
+            bootstrap(runner, user_id, &prepared.path).await?;
         }
     }
 
@@ -149,6 +144,9 @@ pub async fn uninstall(
     user_id: u32,
 ) -> Result<(), ServiceError> {
     let path = artifact_path(home);
+    if !validate_regular_file(&path, Some(OWNERSHIP_MARKER))? {
+        return Ok(());
+    }
     let output = bootout(runner, user_id, &path).await?;
     if output.status != 0 && !reports_absent(&output) {
         return Err(manager_error("launchd bootout", &output));
@@ -204,6 +202,26 @@ async fn print(
     .await
 }
 
+async fn bootstrap(
+    runner: &dyn CommandRunner,
+    user_id: u32,
+    path: &Path,
+) -> Result<(), ServiceError> {
+    require_success(
+        "launchd bootstrap",
+        run(
+            runner,
+            ServiceOperation::LaunchdBootstrap,
+            vec![
+                "bootstrap".into(),
+                domain(user_id).into(),
+                path.as_os_str().to_owned(),
+            ],
+        )
+        .await?,
+    )
+}
+
 async fn run(
     runner: &dyn CommandRunner,
     operation: ServiceOperation,
@@ -211,7 +229,7 @@ async fn run(
 ) -> Result<crate::command::CommandOutput, ServiceError> {
     Ok(runner
         .run(CommandInvocation {
-            operation: TmuxOperation::Service(operation),
+            operation: CommandOperation::Service(operation),
             executable: PathBuf::from("launchctl"),
             args,
             timeout: COMMAND_TIMEOUT,
@@ -234,15 +252,4 @@ fn xml_escape(value: &str) -> String {
         .replace('>', "&gt;")
         .replace('"', "&quot;")
         .replace('\'', "&apos;")
-}
-
-fn require_success(
-    action: &'static str,
-    output: crate::command::CommandOutput,
-) -> Result<(), ServiceError> {
-    if output.status == 0 {
-        Ok(())
-    } else {
-        Err(manager_error(action, &output))
-    }
 }

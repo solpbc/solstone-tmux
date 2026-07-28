@@ -8,7 +8,7 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
-use solstone_tmux_observer::command::{CommandInvocation, ServiceOperation, TmuxOperation};
+use solstone_tmux_observer::command::{CommandInvocation, CommandOperation, ServiceOperation};
 use solstone_tmux_observer::paths::PlatformKind;
 use solstone_tmux_observer::service::systemd::{UNIT_NAME, artifact_path, render};
 use solstone_tmux_observer::service::{
@@ -116,6 +116,30 @@ fn systemd_install_and_uninstall_argv_are_exact() {
 }
 
 #[test]
+fn unowned_systemd_artifact_is_rejected_before_manager_mutation() {
+    let fixture = ServiceFixture::new("systemd-unowned-uninstall");
+    let artifact = artifact_path(&fixture.home);
+    fs::create_dir_all(artifact.parent().expect("unit parent")).expect("unit parent");
+    fs::write(&artifact, b"[Unit]\nDescription=owner unit\n").expect("owner unit");
+    let runner = FixtureRunner::default();
+
+    let error = runtime()
+        .block_on(fixture.controller(&runner).0.uninstall())
+        .expect_err("unowned unit must be rejected");
+
+    assert!(
+        error
+            .to_string()
+            .contains("invalid or unowned service artifact")
+    );
+    assert!(runner.calls().is_empty());
+    assert_eq!(
+        fs::read(artifact).expect("owner unit preserved"),
+        b"[Unit]\nDescription=owner unit\n"
+    );
+}
+
+#[test]
 fn tmux_is_resolved_absolute_and_persisted() {
     let fixture = ServiceFixture::new("tmux-persisted");
     let runner = FixtureRunner::new(systemd_install_expectations());
@@ -138,6 +162,92 @@ fn tmux_is_resolved_absolute_and_persisted() {
             & 0o777,
         0o600
     );
+}
+
+#[test]
+fn install_preserves_preexisting_shared_service_directory_mode() {
+    let fixture = ServiceFixture::new("systemd-shared-directory-mode");
+    let shared = artifact_path(&fixture.home)
+        .parent()
+        .expect("unit parent")
+        .to_owned();
+    fs::create_dir_all(&shared).expect("shared unit directory");
+    fs::set_permissions(&shared, fs::Permissions::from_mode(0o755)).expect("shared mode");
+    let runner = FixtureRunner::new(systemd_install_expectations());
+
+    fixture.controller(&runner).install_blocking();
+
+    runner.assert_finished().expect("install invocations");
+    assert_eq!(
+        fs::metadata(shared)
+            .expect("shared directory")
+            .permissions()
+            .mode()
+            & 0o777,
+        0o755
+    );
+}
+
+#[test]
+fn failed_install_leaves_no_new_persisted_state() {
+    let fixture = ServiceFixture::new("systemd-failed-install-state");
+    let runner = FixtureRunner::new([
+        expected(
+            ServiceOperation::SystemdStop,
+            &["--user", "stop", UNIT_NAME],
+            command_output(&[], b"unit not found", 4),
+        ),
+        expected(
+            ServiceOperation::SystemdDaemonReload,
+            &["--user", "daemon-reload"],
+            output([]),
+        ),
+        expected(
+            ServiceOperation::SystemdEnableNow,
+            &["--user", "enable", "--now", UNIT_NAME],
+            command_output(&[], b"enable failed", 1),
+        ),
+    ]);
+
+    let error = runtime()
+        .block_on(fixture.controller(&runner).0.install())
+        .expect_err("manager failure must fail install");
+
+    assert!(error.to_string().contains("systemd enable failed"));
+    runner.assert_finished().expect("install invocations");
+    assert!(!fixture.config_root().join(STATE_FILENAME).exists());
+}
+
+#[test]
+fn unjoinable_service_path_is_actionable_and_does_not_drop_tmux_directory() {
+    let temporary = TestDirectory::new("systemd-unjoinable-path");
+    let root = temporary.path();
+    let home = root.join("home");
+    let binary = root.join("bin/solstone-tmux-observer");
+    let tmux_directory = root.join("tmux:bin");
+    create_executable(&binary);
+    create_executable(&tmux_directory.join("tmux"));
+    let environment = FakeEnvironment::from_paths([
+        ("HOME", home.into_os_string()),
+        ("PATH", OsString::new()),
+        ("XDG_CONFIG_HOME", root.join("config").into_os_string()),
+        ("XDG_DATA_HOME", root.join("data").into_os_string()),
+    ]);
+    let runner = FixtureRunner::default();
+    let controller = ServiceController::new(PlatformKind::Linux, &environment, &runner, binary)
+        .with_standard_directories(vec![tmux_directory]);
+
+    let error = runtime()
+        .block_on(controller.install())
+        .expect_err("a colon-containing PATH entry cannot be serialized");
+
+    assert!(
+        error
+            .to_string()
+            .contains("could not assemble service PATH")
+    );
+    assert!(error.to_string().contains("rerun install-service"));
+    assert!(runner.calls().is_empty());
 }
 
 #[test]
@@ -253,7 +363,7 @@ fn expected(
 ) -> ExpectedInvocation {
     ExpectedInvocation {
         invocation: CommandInvocation {
-            operation: TmuxOperation::Service(operation),
+            operation: CommandOperation::Service(operation),
             executable: PathBuf::from("systemctl"),
             args: args.iter().map(OsString::from).collect(),
             timeout: COMMAND_TIMEOUT,
@@ -356,13 +466,13 @@ impl solstone_tmux_observer::command::CommandRunner for OrderingRunner {
     > {
         Box::pin(async move {
             match invocation.operation {
-                TmuxOperation::Service(ServiceOperation::SystemdStop) => {
+                CommandOperation::Service(ServiceOperation::SystemdStop) => {
                     assert!(
                         String::from_utf8_lossy(&fs::read(&self.artifact).expect("old unit"))
                             .contains("/old/solstone-tmux-observer")
                     );
                 }
-                TmuxOperation::Service(ServiceOperation::SystemdDaemonReload) => {
+                CommandOperation::Service(ServiceOperation::SystemdDaemonReload) => {
                     assert!(
                         String::from_utf8_lossy(&fs::read(&self.artifact).expect("new unit"))
                             .contains(self.new_binary.to_str().expect("UTF-8 binary"))
@@ -372,7 +482,7 @@ impl solstone_tmux_observer::command::CommandRunner for OrderingRunner {
             }
             Ok(solstone_tmux_observer::command::CommandOutput {
                 stdout: if invocation.operation
-                    == TmuxOperation::Service(ServiceOperation::SystemdIsActive)
+                    == CommandOperation::Service(ServiceOperation::SystemdIsActive)
                 {
                     b"active\n".to_vec()
                 } else {

@@ -7,8 +7,33 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
 use solstone_tmux_observer::indicator::{
-    IndicatorError, IndicatorIo, IndicatorOwnership, OptionValue, SOLSTONE_OPTION, STATUS_LEFT,
+    IndicatorError, IndicatorIo, IndicatorOwnership, OBSERVING_VALUE, OptionValue, SOLSTONE_OPTION,
+    STATUS_LEFT,
 };
+
+#[tokio::test]
+async fn production_install_uses_native_indicator_values() {
+    let io = MemoryIndicator::with([
+        (STATUS_LEFT, OptionValue::Present("owner status".to_owned())),
+        (SOLSTONE_OPTION, OptionValue::Absent),
+    ]);
+
+    let mut ownership = IndicatorOwnership::install_default(io.clone())
+        .await
+        .expect("install production indicator");
+
+    let status = io.value(STATUS_LEFT);
+    let OptionValue::Present(status) = status else {
+        panic!("status-left must be present");
+    };
+    assert!(status.contains("#{?@solstone"));
+    assert!(status.ends_with("owner status"));
+    assert_eq!(
+        io.value(SOLSTONE_OPTION),
+        OptionValue::Present(OBSERVING_VALUE.to_owned())
+    );
+    ownership.restore().await.expect("restore");
+}
 
 #[tokio::test]
 async fn matching_owned_status_left_is_restored() {

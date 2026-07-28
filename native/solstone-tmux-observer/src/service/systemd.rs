@@ -4,11 +4,12 @@
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
-use crate::command::{CommandInvocation, CommandRunner, ServiceOperation, TmuxOperation};
+use crate::command::{CommandInvocation, CommandOperation, CommandRunner, ServiceOperation};
 
 use super::{
     COMMAND_TIMEOUT, ServiceError, ServiceStatus, install_artifact, manager_error,
-    remove_owned_regular_file, reports_absent, utf8_os, utf8_path, validate_regular_file,
+    remove_owned_regular_file, reports_absent, require_success, utf8_os, utf8_path,
+    validate_regular_file,
 };
 
 pub const UNIT_NAME: &str = "solstone-tmux-observer.service";
@@ -41,7 +42,7 @@ WantedBy=default.target\n"
     .into_bytes())
 }
 
-pub async fn install(
+pub async fn prepare_install(
     runner: &dyn CommandRunner,
     home: &Path,
     binary: &Path,
@@ -76,6 +77,10 @@ pub async fn install(
             .await?,
         )?;
     }
+    Ok(())
+}
+
+pub async fn activate(runner: &dyn CommandRunner) -> Result<(), ServiceError> {
     require_success(
         "systemd enable",
         run(
@@ -98,6 +103,10 @@ pub async fn install(
 }
 
 pub async fn uninstall(runner: &dyn CommandRunner, home: &Path) -> Result<(), ServiceError> {
+    let path = artifact_path(home);
+    if !validate_regular_file(&path, Some(OWNERSHIP_MARKER))? {
+        return Ok(());
+    }
     let disabled = run(
         runner,
         ServiceOperation::SystemdDisableNow,
@@ -107,7 +116,7 @@ pub async fn uninstall(runner: &dyn CommandRunner, home: &Path) -> Result<(), Se
     if disabled.status != 0 && !reports_absent(&disabled) {
         return Err(manager_error("systemd disable", &disabled));
     }
-    remove_owned_regular_file(&artifact_path(home), Some(OWNERSHIP_MARKER))?;
+    remove_owned_regular_file(&path, Some(OWNERSHIP_MARKER))?;
     require_success(
         "systemd daemon-reload",
         run(
@@ -171,21 +180,10 @@ async fn run(
 ) -> Result<crate::command::CommandOutput, ServiceError> {
     Ok(runner
         .run(CommandInvocation {
-            operation: TmuxOperation::Service(operation),
+            operation: CommandOperation::Service(operation),
             executable: PathBuf::from("systemctl"),
             args: args.iter().map(OsString::from).collect(),
             timeout: COMMAND_TIMEOUT,
         })
         .await?)
-}
-
-fn require_success(
-    action: &'static str,
-    output: crate::command::CommandOutput,
-) -> Result<(), ServiceError> {
-    if output.status == 0 {
-        Ok(())
-    } else {
-        Err(manager_error(action, &output))
-    }
 }

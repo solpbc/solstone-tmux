@@ -35,10 +35,12 @@ src/solstone_tmux/
 native/solstone-tmux-observer/     Transitional native local plane (not installed product)
     Cargo.toml
     src/
+        lib.rs                     Shared native crate surface
         main.rs                    Process startup and command dispatch
         cli.rs                     Four-command argument parser
         clock.rs                   Wall/monotonic clock seam
         command.rs                 Bounded argv command seam
+        config.rs                  Read-only native runtime config + hostname defaults
         model.rs                   Shared capture domain model
         tmux.rs                    Tmux grammar and complete transactions
         serialize.rs               Python-compatible JSONL serialization
@@ -154,7 +156,10 @@ The transitional native local plane uses one Tokio process. It constructs comple
 per-session tmux transactions, serializes Python-compatible envelopes, durably appends
 changed sessions, rotates on monotonic time, and supervises shutdown. Its shared
 capture, segment, durability, and recovery code is identical on Linux and macOS. This
-does not make it the installed observer.
+does not make it the installed observer. Its `run` command acquires the data-root lock,
+loads the separate native `<config_root>/config.json`, recovers configured streams,
+opens a segment, installs the owned tmux indicator, and enters the supervised poll loop.
+It does not read or migrate the installed Python product's config.
 
 ### Tmux grammar compatibility
 
@@ -187,6 +192,10 @@ transitional native backends use
 `solstone-tmux-observer.service` on systemd-user and
 `com.solstone.tmux-observer` on launchd. Native code must never replace, stop,
 unload, or otherwise control the live Python unit.
+
+The launchd plist retains Apple's standard
+`http://www.apple.com/DTDs/PropertyList-1.0.dtd` document-type identifier. It is emitted
+as plist syntax and is never fetched; the native crate has no networking code.
 
 ### Sync Service
 

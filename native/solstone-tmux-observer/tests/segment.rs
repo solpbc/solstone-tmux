@@ -4,6 +4,7 @@
 mod support;
 
 use std::fs;
+use std::os::unix::fs::symlink;
 use std::time::Duration;
 
 use solstone_tmux_observer::segment::{AppendOutcome, SegmentClose, SegmentState};
@@ -98,6 +99,32 @@ fn nonempty_segment_finalizes_once() {
     assert!(path.ends_with("120000_005"));
     assert!(path.is_dir());
     assert!(!segment.metadata_path().exists());
+}
+
+#[test]
+fn dangling_symlink_finalized_target_preserves_source() {
+    let (_temporary, mut segment) = segment("dangling-finalized-target");
+    segment
+        .append_capture(&golden_capture("main"), 0.25, Duration::from_secs(1))
+        .expect("append");
+    let source = segment.incomplete_dir().to_owned();
+    let finalized = source.parent().expect("stream").join("120000_005");
+    symlink(
+        finalized
+            .parent()
+            .expect("stream")
+            .join("missing-finalized-target"),
+        &finalized,
+    )
+    .expect("dangling symlink");
+
+    let error = segment
+        .finalize(Duration::from_secs(5))
+        .expect_err("dangling symlink must be a collision");
+
+    assert!(error.to_string().contains("already exists"));
+    assert!(source.is_dir());
+    assert!(fs::symlink_metadata(finalized).is_ok());
 }
 
 #[test]

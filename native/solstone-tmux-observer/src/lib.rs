@@ -6,6 +6,7 @@
 pub mod cli;
 pub mod clock;
 pub mod command;
+pub mod config;
 pub mod indicator;
 pub mod instance_lock;
 pub mod model;

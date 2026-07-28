@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::command::{
-    CommandError, CommandInvocation, CommandOutput, CommandRunner, TmuxOperation,
+    CommandError, CommandInvocation, CommandOperation, CommandOutput, CommandRunner, TmuxOperation,
 };
 use crate::model::{CaptureResult, ClientInfo, PaneInfo, WindowInfo};
 use crate::name::derive_component;
@@ -298,7 +298,7 @@ where
         let output = self
             .runner
             .run(CommandInvocation {
-                operation: operation.clone(),
+                operation: CommandOperation::Tmux(operation.clone()),
                 executable: self.executable.clone(),
                 args: args.into(),
                 timeout: TMUX_TIMEOUT,
