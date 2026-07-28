@@ -4,6 +4,7 @@
 use std::collections::BTreeSet;
 use std::fmt;
 use std::fs::{self, OpenOptions};
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -20,6 +21,7 @@ pub struct RecoveryOptions {
     pub fail_source_rename: bool,
     pub fail_repair_sync: bool,
     pub fail_rename_parent_sync: bool,
+    pub before_empty_removal: Option<fn(&Path) -> std::io::Result<()>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -256,7 +258,20 @@ fn recover_candidate(
             ));
         }
         let finalized = stream_dir.join(&metadata.finalized_dir);
-        if finalized.is_dir()
+        let finalized_is_directory = match fs::symlink_metadata(&finalized) {
+            Ok(finalized_metadata) => {
+                !finalized_metadata.file_type().is_symlink() && finalized_metadata.is_dir()
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+            Err(source_error) => {
+                return Err(RecoveryError::Io {
+                    operation: "inspect orphan finalized target",
+                    path: finalized,
+                    source: source_error,
+                });
+            }
+        };
+        if finalized_is_directory
             && validate_files(&finalized, &metadata)?.kind == ValidationKind::Exact
         {
             fs::remove_file(&metadata_path).map_err(|source_error| RecoveryError::Io {
@@ -302,8 +317,21 @@ fn recover_candidate(
             .values()
             .all(|session| session.durable_offset == 0)
     {
-        if directory_is_confirmed_empty(&source)? {
-            remove_zero_length_files(&source)?;
+        if let Some(validated) = validated_empty_files(&source)? {
+            if let Some(before_empty_removal) = options.before_empty_removal {
+                before_empty_removal(&source).map_err(|source_error| RecoveryError::Io {
+                    operation: "run confirmed-empty pre-removal hook",
+                    path: source.clone(),
+                    source: source_error,
+                })?;
+            }
+            if !remove_validated_empty_files(&source, &validated)? {
+                return Ok(record(
+                    source,
+                    RecoveryAction::Retain,
+                    "confirmed-empty segment changed before removal; retained without deleting unvalidated entries",
+                ));
+            }
             fs::remove_dir(&source).map_err(|source_error| RecoveryError::Io {
                 operation: "remove confirmed-empty segment",
                 path: source.clone(),
@@ -682,7 +710,17 @@ fn apply_repairs(
     Ok(())
 }
 
-fn directory_is_confirmed_empty(directory: &Path) -> Result<bool, RecoveryError> {
+struct ValidatedEmptyFile {
+    path: PathBuf,
+    device: u64,
+    inode: u64,
+    length: u64,
+}
+
+fn validated_empty_files(
+    directory: &Path,
+) -> Result<Option<Vec<ValidatedEmptyFile>>, RecoveryError> {
+    let mut validated = Vec::new();
     for entry in fs::read_dir(directory).map_err(|source| RecoveryError::Io {
         operation: "scan empty segment",
         path: directory.to_owned(),
@@ -699,13 +737,23 @@ fn directory_is_confirmed_empty(directory: &Path) -> Result<bool, RecoveryError>
             source,
         })?;
         if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() != 0 {
-            return Ok(false);
+            return Ok(None);
         }
+        validated.push(ValidatedEmptyFile {
+            path: entry.path(),
+            device: metadata.dev(),
+            inode: metadata.ino(),
+            length: metadata.len(),
+        });
     }
-    Ok(true)
+    Ok(Some(validated))
 }
 
-fn remove_zero_length_files(directory: &Path) -> Result<(), RecoveryError> {
+fn remove_validated_empty_files(
+    directory: &Path,
+    validated: &[ValidatedEmptyFile],
+) -> Result<bool, RecoveryError> {
+    let mut seen = BTreeSet::new();
     for entry in fs::read_dir(directory).map_err(|source| RecoveryError::Io {
         operation: "scan zero-length files",
         path: directory.to_owned(),
@@ -716,13 +764,36 @@ fn remove_zero_length_files(directory: &Path) -> Result<(), RecoveryError> {
             path: directory.to_owned(),
             source,
         })?;
-        fs::remove_file(entry.path()).map_err(|source| RecoveryError::Io {
+        let path = entry.path();
+        let Some(expected) = validated.iter().find(|expected| expected.path == path) else {
+            return Ok(false);
+        };
+        let metadata = fs::symlink_metadata(&path).map_err(|source| RecoveryError::Io {
+            operation: "reinspect zero-length JSONL",
+            path: path.clone(),
+            source,
+        })?;
+        if metadata.file_type().is_symlink()
+            || !metadata.is_file()
+            || metadata.dev() != expected.device
+            || metadata.ino() != expected.inode
+            || metadata.len() != expected.length
+            || !seen.insert(path)
+        {
+            return Ok(false);
+        }
+    }
+    if seen.len() != validated.len() {
+        return Ok(false);
+    }
+    for expected in validated {
+        fs::remove_file(&expected.path).map_err(|source| RecoveryError::Io {
             operation: "remove zero-length JSONL",
-            path: entry.path(),
+            path: expected.path.clone(),
             source,
         })?;
     }
-    Ok(())
+    Ok(true)
 }
 
 fn source_has_nonempty_jsonl(source: &Path) -> Result<bool, RecoveryError> {
@@ -739,8 +810,7 @@ fn source_has_nonempty_jsonl(source: &Path) -> Result<bool, RecoveryError> {
             path: source.to_owned(),
             source: source_error,
         })?;
-        if entry
-            .metadata()
+        if fs::symlink_metadata(entry.path())
             .map(|metadata| metadata.len() > 0)
             .unwrap_or(true)
         {

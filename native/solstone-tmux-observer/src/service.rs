@@ -188,6 +188,8 @@ impl<'a> ServiceController<'a> {
         let state = LocalObserver { tmux_path };
         let previous_state = read_local_observer_state(&paths.config_root)?;
 
+        // Activation can start `run` immediately, so persist first and restore the
+        // previous state if activation fails.
         match self.platform {
             PlatformKind::Linux => {
                 systemd::prepare_install(self.runner, &home, &binary, &service_path).await?;

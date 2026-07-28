@@ -267,15 +267,18 @@ impl SegmentState {
                 path: entry.path(),
                 source,
             })?;
-            let length = entry
-                .metadata()
-                .map_err(|source| SegmentError::Io {
+            let metadata =
+                fs::symlink_metadata(entry.path()).map_err(|source| SegmentError::Io {
                     operation: "inspect confirmed-empty file",
                     path: entry.path(),
                     source,
-                })?
-                .len();
-            if file_type.is_symlink() || !file_type.is_file() || length != 0 {
+                })?;
+            if file_type.is_symlink()
+                || metadata.file_type().is_symlink()
+                || !file_type.is_file()
+                || !metadata.is_file()
+                || metadata.len() != 0
+            {
                 return Err(SegmentError::NotEmpty);
             }
             fs::remove_file(entry.path()).map_err(|source| SegmentError::Io {

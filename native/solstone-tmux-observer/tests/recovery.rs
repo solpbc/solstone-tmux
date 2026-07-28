@@ -238,6 +238,31 @@ fn orphan_metadata_after_final_rename_is_removed() {
     assert!(!setup.metadata.exists());
 }
 
+// AC 13: orphan-finalized recovery never scans through a symlink outside the data root.
+#[test]
+fn orphan_finalized_symlink_outside_data_root_is_retained() {
+    let setup = incomplete("orphan-finalized-symlink", true);
+    let outside = setup._temporary.path().join("outside-finalized");
+    let before = fs::read(setup.jsonl()).expect("source bytes");
+    fs::rename(&setup.source, &outside).expect("move finalized contents outside data root");
+    symlink(&outside, setup.finalized_path()).expect("finalized symlink");
+
+    let records = recover(&setup);
+
+    assert_eq!(records[0].action, RecoveryAction::Retain);
+    assert!(setup.metadata.is_file());
+    assert!(
+        fs::symlink_metadata(setup.finalized_path())
+            .expect("finalized symlink metadata")
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(
+        fs::read(outside.join(setup.filename())).expect("external referent bytes"),
+        before
+    );
+}
+
 // AC 13: the repair fault seam proves recovery attempts to fsync the truncated JSONL.
 #[test]
 fn repairs_and_parent_renames_are_fsynced() {
@@ -305,6 +330,34 @@ fn symlinked_zero_length_empty_entry_is_quarantined() {
     assert_eq!(records[0].action, RecoveryAction::Quarantine);
     assert!(fs::symlink_metadata(records[0].candidate.join(setup.filename())).is_ok());
     assert!(referent.is_file());
+}
+
+// AC 13: empty recovery never removes an entry introduced after validation.
+#[test]
+fn unexpected_file_between_empty_validation_and_removal_is_retained() {
+    let setup = incomplete("empty-removal-race", false);
+    let instance_lock = InstanceLock::acquire(&setup.data_root).expect("recovery lock");
+
+    let records = recover_stream_with_options(
+        &instance_lock,
+        &setup.data_root,
+        &setup.stream,
+        RecoveryOptions {
+            before_empty_removal: Some(inject_unexpected_owner_file),
+            ..RecoveryOptions::default()
+        },
+    )
+    .expect("recovery");
+
+    let unexpected = setup.source.join("unexpected-owner-file");
+    assert_eq!(records[0].action, RecoveryAction::Retain);
+    assert!(records[0].detail.contains("changed before removal"));
+    assert!(setup.source.is_dir());
+    assert!(setup.metadata.is_file());
+    assert_eq!(
+        fs::read(unexpected).expect("unexpected file preserved"),
+        b"owner data"
+    );
 }
 
 // AC 13: a dangling .failed target is a collision and cannot be replaced.
@@ -469,6 +522,10 @@ fn assert_contradictory_metadata(label: &str, mutate: impl FnOnce(&mut SegmentMe
     setup.write_metadata(&metadata);
     let records = recover(&setup);
     assert_eq!(records[0].action, RecoveryAction::Quarantine, "{label}");
+}
+
+fn inject_unexpected_owner_file(source: &std::path::Path) -> std::io::Result<()> {
+    fs::write(source.join("unexpected-owner-file"), b"owner data")
 }
 
 impl Incomplete {
