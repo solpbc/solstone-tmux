@@ -9,7 +9,7 @@ use std::process::Command;
 
 use solstone_tmux_observer::instance_lock::{InstanceLock, InstanceLockError, LOCK_FILENAME};
 use solstone_tmux_observer::paths::ensure_private_directory;
-use support::TestDirectory;
+use support::{IsolatedRoots, TestDirectory};
 
 #[test]
 fn second_run_lock_fails_before_any_observer_side_effect() {
@@ -50,17 +50,14 @@ fn release_never_unlinks_lock_inode() {
 #[test]
 fn status_does_not_lock() {
     let temporary = TestDirectory::new("status-no-lock");
-    let data_home = temporary.path().join("data");
-    let data_root = data_home.join("solstone-tmux");
-    let home = temporary.path().join("home");
+    let roots = IsolatedRoots::new(temporary.path());
+    let data_root = roots.data_root();
     fs::create_dir_all(&data_root).expect("data root");
-    fs::create_dir(&home).expect("home");
     let _writer = InstanceLock::acquire(&data_root).expect("writer lock");
 
     let status = Command::new(env!("CARGO_BIN_EXE_solstone-tmux-observer"))
         .arg("status")
-        .env("HOME", &home)
-        .env("XDG_DATA_HOME", &data_home)
+        .envs(roots.entries().iter().cloned())
         .status()
         .expect("run status");
 
@@ -70,19 +67,14 @@ fn status_does_not_lock() {
 #[test]
 fn service_uninstall_does_not_lock() {
     let temporary = TestDirectory::new("service-no-lock");
-    let data_home = temporary.path().join("data");
-    let config_home = temporary.path().join("config");
-    let data_root = data_home.join("solstone-tmux");
-    let home = temporary.path().join("home");
+    let roots = IsolatedRoots::new(temporary.path());
+    let data_root = roots.data_root();
     fs::create_dir_all(&data_root).expect("data root");
-    fs::create_dir(&home).expect("home");
     let _writer = InstanceLock::acquire(&data_root).expect("writer lock");
 
     let status = Command::new(env!("CARGO_BIN_EXE_solstone-tmux-observer"))
         .arg("uninstall-service")
-        .env("HOME", &home)
-        .env("XDG_DATA_HOME", &data_home)
-        .env("XDG_CONFIG_HOME", &config_home)
+        .envs(roots.entries().iter().cloned())
         .status()
         .expect("run uninstall-service");
 

@@ -92,9 +92,10 @@ cargo test --locked -p solstone-tmux-observer test_name
 
 `make ci` runs, in order: repository guards; Python format, lint, and tests;
 Rust format, clippy, and tests; the offline Rust license/source/ban policy;
-then `cargo check` for every target read from `rust-toolchain.toml`. Every Cargo
-invocation that resolves dependencies uses `--locked`. The target list exists only in
-`rust-toolchain.toml`; `scripts/rust-targets.sh` parses it for CI and drift checks.
+then `cargo check --locked --workspace --all-targets --target <target>` for every
+target read from `rust-toolchain.toml`. Every Cargo invocation that resolves
+dependencies uses `--locked`. The target list exists only in `rust-toolchain.toml`;
+`scripts/rust-targets.sh` parses it for CI and drift checks.
 `cargo-deny --version` must be exactly `cargo-deny 0.20.2` or CI stops with an
 installation message. Advisories are deliberately excluded because cargo-deny's
 advisory database requires network access, while this CI policy is deterministic and
@@ -103,7 +104,7 @@ offline.
 The matrix emitted by `make ci` has this meaning:
 
 ```text
-Rust target evidence (cargo check only; no linked/native artifact claim):
+Rust target evidence (cargo check --locked --workspace --all-targets --target <target>; no linked/native artifact claim):
 <host target from rust-toolchain.toml>: PASS — host cargo check; no executable linked
 <non-host target from rust-toolchain.toml>: PASS — cross-target type/check only; no native binary produced
 ```

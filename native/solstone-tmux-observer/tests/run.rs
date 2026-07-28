@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use solstone_tmux_observer::config::CONFIG_FILENAME;
 use solstone_tmux_observer::instance_lock::LOCK_FILENAME;
 use solstone_tmux_observer::service::{LocalObserver, STATE_FILENAME};
-use support::TestDirectory;
+use support::{IsolatedRoots, TestDirectory};
 
 #[test]
 fn production_run_holds_lock_before_config_or_observer_side_effects() {
@@ -21,7 +21,7 @@ fn production_run_holds_lock_before_config_or_observer_side_effects() {
     fixture.write_config("main", 1, 300);
     fixture.write_local_observer();
     let mut first = fixture.spawn_run();
-    fixture.wait_until_started(&mut first);
+    fixture.wait_for_startup_segment_metadata(&mut first);
 
     fixture.write_config(&"a".repeat(201), 1, 300);
     let second = fixture.run_output();
@@ -51,20 +51,17 @@ fn overlong_stream_name_fails_before_capture_directory_creation() {
 
 struct RunFixture {
     _temporary: TestDirectory,
-    home: PathBuf,
-    data_home: PathBuf,
-    config_home: PathBuf,
+    roots: IsolatedRoots,
     tmux: PathBuf,
+    first_child_stderr: PathBuf,
 }
 
 impl RunFixture {
     fn new(label: &str) -> Self {
         let temporary = TestDirectory::new(label);
-        let home = temporary.path().join("home");
-        let data_home = temporary.path().join("data");
-        let config_home = temporary.path().join("config");
+        let roots = IsolatedRoots::new(temporary.path());
         let tmux = temporary.path().join("stub-bin/tmux");
-        fs::create_dir(&home).expect("home");
+        let first_child_stderr = temporary.path().join("first-child.stderr");
         fs::create_dir_all(tmux.parent().expect("stub parent")).expect("stub parent");
         let source = ["/usr/bin/true", "/bin/true"]
             .into_iter()
@@ -75,19 +72,18 @@ impl RunFixture {
         fs::set_permissions(&tmux, fs::Permissions::from_mode(0o700)).expect("chmod tmux stub");
         Self {
             _temporary: temporary,
-            home,
-            data_home,
-            config_home,
+            roots,
             tmux,
+            first_child_stderr,
         }
     }
 
     fn data_root(&self) -> PathBuf {
-        self.data_home.join("solstone-tmux")
+        self.roots.data_root()
     }
 
     fn config_root(&self) -> PathBuf {
-        self.config_home.join("solstone-tmux")
+        self.roots.config_root()
     }
 
     fn write_config(&self, stream: &str, capture_interval: u64, segment_interval: u64) {
@@ -117,16 +113,16 @@ impl RunFixture {
         command
             .arg("run")
             .env_clear()
-            .env("HOME", &self.home)
-            .env("XDG_DATA_HOME", &self.data_home)
-            .env("XDG_CONFIG_HOME", &self.config_home);
+            .envs(self.roots.entries().iter().cloned());
         command
     }
 
     fn spawn_run(&self) -> Child {
+        let stderr =
+            fs::File::create(&self.first_child_stderr).expect("create first child stderr file");
         self.command()
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stderr(Stdio::from(stderr))
             .spawn()
             .expect("spawn observer run")
     }
@@ -135,19 +131,30 @@ impl RunFixture {
         self.command().output().expect("run observer")
     }
 
-    fn wait_until_started(&self, child: &mut Child) {
+    fn wait_for_startup_segment_metadata(&self, child: &mut Child) {
         let deadline = Instant::now() + Duration::from_secs(5);
         while Instant::now() < deadline {
             assert!(
                 child.try_wait().expect("observer status").is_none(),
-                "observer exited before reaching the poll loop"
+                "observer exited before startup segment metadata was observed; first-child stderr: {:?}",
+                self.read_first_child_stderr()
             );
             if contains_incomplete_metadata(&self.data_root()) {
                 return;
             }
             thread::sleep(Duration::from_millis(10));
         }
-        panic!("observer did not create an open segment within five seconds");
+        panic!(
+            "startup segment metadata was not observed within five seconds; first-child stderr: {:?}",
+            self.read_first_child_stderr()
+        );
+    }
+
+    fn read_first_child_stderr(&self) -> String {
+        fs::read(&self.first_child_stderr).map_or_else(
+            |error| format!("<could not read first-child stderr: {error}>"),
+            |bytes| String::from_utf8_lossy(&bytes).into_owned(),
+        )
     }
 }
 

@@ -112,9 +112,9 @@ ci: .installed
 	@set -o pipefail; \
 	host="$$(rustc -vV | sed -n 's/^host: //p')"; \
 	targets="$$($(RUST_TARGETS))"; \
-	echo "Rust target evidence (cargo check only; no linked/native artifact claim):"; \
+	echo "Rust target evidence (cargo check --locked --workspace --all-targets --target <target>; no linked/native artifact claim):"; \
 	while IFS= read -r target; do \
-		if $(CARGO) check --locked --target "$$target"; then \
+		if $(CARGO) check --locked --workspace --all-targets --target "$$target"; then \
 			if [[ "$$target" == "$$host" ]]; then \
 				echo "$$target: PASS — host cargo check; no executable linked"; \
 			else \

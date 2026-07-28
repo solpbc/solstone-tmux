@@ -16,7 +16,8 @@ use solstone_tmux_observer::command::{
     CommandError, CommandInvocation, CommandOutput, CommandRunner,
 };
 use solstone_tmux_observer::model::{CaptureResult, PaneInfo, WindowInfo};
-use solstone_tmux_observer::paths::Environment;
+use solstone_tmux_observer::paths::{Environment, resolve_config_root, resolve_data_root};
+use solstone_tmux_observer::service::current_platform;
 use solstone_tmux_observer::tmux::WarningSink;
 
 #[derive(Clone, Debug)]
@@ -189,6 +190,38 @@ impl<const N: usize> From<[(&str, &str); N]> for FakeEnvironment {
 impl Environment for FakeEnvironment {
     fn var_os(&self, key: &str) -> Option<OsString> {
         self.0.get(key).cloned()
+    }
+}
+
+pub struct IsolatedRoots {
+    entries: [(&'static str, OsString); 3],
+}
+
+impl IsolatedRoots {
+    pub fn new(base: &Path) -> Self {
+        let home = base.join("home");
+        fs::create_dir(&home).expect("create synthetic HOME");
+        Self {
+            entries: [
+                ("HOME", home.into_os_string()),
+                ("XDG_DATA_HOME", base.join("data").into_os_string()),
+                ("XDG_CONFIG_HOME", base.join("config").into_os_string()),
+            ],
+        }
+    }
+
+    pub fn entries(&self) -> &[(&'static str, OsString)] {
+        &self.entries
+    }
+
+    pub fn data_root(&self) -> PathBuf {
+        let environment = FakeEnvironment::from_paths(self.entries().iter().cloned());
+        resolve_data_root(current_platform(), &environment).expect("resolve isolated data root")
+    }
+
+    pub fn config_root(&self) -> PathBuf {
+        let environment = FakeEnvironment::from_paths(self.entries().iter().cloned());
+        resolve_config_root(current_platform(), &environment).expect("resolve isolated config root")
     }
 }
 
