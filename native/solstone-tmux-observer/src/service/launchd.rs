@@ -112,32 +112,24 @@ pub async fn activate(
         bootstrap(runner, user_id, &prepared.path).await?;
     } else {
         let loaded = print(runner, user_id).await?;
-        if loaded.status != 0 {
-            if !reports_absent(&loaded) {
-                return Err(manager_error("launchd loaded check", &loaded));
-            }
-            require_success(
-                "launchd enable",
-                run(
-                    runner,
-                    ServiceOperation::LaunchdEnable,
-                    vec!["enable".into(), target(user_id).into()],
-                )
-                .await?,
-            )?;
-            bootstrap(runner, user_id, &prepared.path).await?;
+        if loaded.status == 0 {
+            return Ok(());
         }
+        if !reports_absent(&loaded) {
+            return Err(manager_error("launchd loaded check", &loaded));
+        }
+        require_success(
+            "launchd enable",
+            run(
+                runner,
+                ServiceOperation::LaunchdEnable,
+                vec!["enable".into(), target(user_id).into()],
+            )
+            .await?,
+        )?;
+        bootstrap(runner, user_id, &prepared.path).await?;
     }
 
-    require_success(
-        "launchd kickstart",
-        run(
-            runner,
-            ServiceOperation::LaunchdKickstart,
-            vec!["kickstart".into(), "-k".into(), target(user_id).into()],
-        )
-        .await?,
-    )?;
     require_success("launchd loaded check", print(runner, user_id).await?)
 }
 

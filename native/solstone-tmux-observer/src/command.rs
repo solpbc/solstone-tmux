@@ -35,7 +35,6 @@ pub enum ServiceOperation {
     LaunchdBootout,
     LaunchdEnable,
     LaunchdBootstrap,
-    LaunchdKickstart,
     LaunchdPrint,
 }
 
