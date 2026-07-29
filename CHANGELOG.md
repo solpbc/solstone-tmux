@@ -4,6 +4,19 @@ All notable changes to solstone-tmux will be documented in this file.
 
 Format adapted from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.0.0] - 2026-07-29
+
+### Changed
+- solstone-tmux is now one native application that experiences tmux sessions
+  along with you, keeps observations local while your journal is unavailable,
+  and syncs when the connection returns.
+- on Linux, the first native run automatically adopts the previous stream,
+  intervals, retention, and status-indicator settings and continues using the
+  existing cache in place. pairing is fresh; previous credentials are not
+  carried over.
+- native packages support Linux on x86_64 and aarch64 and macOS on Apple
+  silicon. Intel macOS, 32-bit systems, and Windows are not supported.
+
 ## [0.3.1] - 2026-06-15
 
 ### Changed
