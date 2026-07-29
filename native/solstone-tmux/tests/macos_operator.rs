@@ -83,7 +83,7 @@ fn every_operator_command_failure_stops_before_later_work() {
 }
 
 fn expected_command_names() -> Vec<&'static str> {
-    let mut names = vec!["sh"; 42];
+    let mut names = vec!["sh"; 44];
     names.extend([
         "rust-targets.sh",
         "git",

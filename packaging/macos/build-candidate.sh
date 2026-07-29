@@ -69,9 +69,9 @@ fi
 
 required_tools=(
     bash cargo cargo-deny chmod codesign cmp date env find git grep gzip id install
-    jq kill launchctl lipo mkdir mktemp mv otool pkgbuild pkgutil productsign rm
-    rustc rustup script security sed seq shasum sleep spctl stat sudo tar test
-    tmux touch xcrun
+    installer jq kill launchctl lipo mkdir mktemp mv nohup otool pkgbuild pkgutil
+    productsign rm rustc rustup script security sed seq shasum sleep spctl stat
+    sudo tar test tmux touch xcrun
 )
 for tool in "${required_tools[@]}"; do
     # $1 belongs to the dispatched shell.

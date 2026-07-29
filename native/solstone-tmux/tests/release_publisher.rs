@@ -1,29 +1,29 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 sol pbc
 
+#[allow(dead_code)]
+#[path = "support/package_model.rs"]
+mod package_model;
 mod support;
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use flate2::Compression;
 use flate2::write::GzEncoder;
+use package_model::{ARTIFACTS, Lane, PRODUCT_VERSION, artifacts_for_lane, checksummed_names};
 use serde_json::{Value, json};
 use support::TestDirectory;
 use tar::{Builder, Header};
 
-const VERSION: &str = "1.0.0";
+const VERSION: &str = PRODUCT_VERSION;
 const TAG: &str = "v1.0.0";
 const TITLE: &str = "solstone-tmux 1.0.0";
 const NOTES: &str = "## [1.0.0] - 2026-07-29\n\n### Added\n- native candidate release.";
 type RefusalSetup = for<'a> fn(&'a PublisherFixture) -> RunRequest<'a>;
-const TARGETS: [&str; 3] = [
-    "x86_64-unknown-linux-gnu",
-    "aarch64-unknown-linux-gnu",
-    "aarch64-apple-darwin",
-];
 
 #[test]
 fn state_none_creates_exact_release() {
@@ -169,6 +169,24 @@ fn interrupted_exact_states_resume_without_replacement() {
 }
 
 #[test]
+fn concurrent_remote_drift_is_rejected_before_publication() {
+    for mutation in ["wrong-title", "wrong-notes", "wrong-target", "tag-target"] {
+        let fixture = PublisherFixture::new();
+        let output = fixture.request().remote_mutation(mutation).run();
+        assert_failure(&output);
+        assert!(
+            !fixture
+                .mutation_kinds()
+                .iter()
+                .any(|kind| kind == "publish"),
+            "concurrent drift {mutation:?} reached publication:\n{}",
+            fixture.log()
+        );
+        assert_eq!(fixture.state()["releases"][0]["draft"], true);
+    }
+}
+
+#[test]
 fn every_local_refusal_precedes_any_remote_call() {
     let cases: &[(&str, RefusalSetup)] = &[
         ("dirty tree", |fixture| {
@@ -210,10 +228,22 @@ fn every_local_refusal_precedes_any_remote_call() {
             fs::write(fixture.candidate.join("extra"), b"extra\n").expect("write extra file");
             fixture.request()
         }),
+        ("candidate directory symlink", |fixture| {
+            let real_candidate = fixture.root.path().join("candidate-real");
+            fs::rename(&fixture.candidate, &real_candidate).expect("move candidate directory");
+            symlink(&real_candidate, &fixture.candidate).expect("symlink candidate directory");
+            fixture.request()
+        }),
+        ("secret key symlink", |fixture| {
+            let real_secret = fixture.root.path().join("test-only-minisign-real.key");
+            fs::rename(&fixture.secret_key, &real_secret).expect("move secret key");
+            symlink(&real_secret, &fixture.secret_key).expect("symlink secret key");
+            fixture.request()
+        }),
         ("target record mismatch", |fixture| {
             let record = fixture.candidate.join(format!(
                 "solstone-tmux-{VERSION}-{}.target.json",
-                TARGETS[0]
+                Lane::LinuxX86_64.rust_target()
             ));
             let mut value: Value = serde_json::from_slice(&fs::read(&record).expect("read record"))
                 .expect("parse record");
@@ -384,7 +414,11 @@ impl PublisherFixture {
             repo.join("scripts/rust-targets.sh"),
             format!(
                 "#!/usr/bin/env bash\nprintf '%s\\n' {} \n",
-                TARGETS.join(" ")
+                Lane::ALL
+                    .into_iter()
+                    .map(Lane::rust_target)
+                    .collect::<Vec<_>>()
+                    .join(" ")
             ),
         )
         .expect("write target authority");
@@ -428,7 +462,9 @@ impl PublisherFixture {
                 "releases": [],
                 "next_release_id": 1,
                 "next_asset_id": 100,
-                "upload_count": 0
+                "upload_count": 0,
+                "release_reads": 0,
+                "tag_reads": 0
             }))
             .expect("encode fake state"),
         )
@@ -467,6 +503,7 @@ impl PublisherFixture {
             source_commit: self.head(),
             cargo_fail_at: 0,
             interrupt: None,
+            remote_mutation: None,
         }
     }
 
@@ -495,46 +532,59 @@ impl PublisherFixture {
             fs::remove_dir_all(&self.candidate).expect("clear candidate");
         }
         fs::create_dir(&self.candidate).expect("recreate candidate");
-        for name in self.unsigned_names() {
-            if name.ends_with("x86_64-linux.tar.gz") {
+        for artifact in ARTIFACTS.iter() {
+            if artifact.lane == Lane::LinuxX86_64
+                && artifact.kind == package_model::ArtifactKind::TarGz
+            {
                 self.write_executable_tar(&format!(
                     "printf 'solstone-tmux {VERSION} (source {})\\n'",
                     self.head()
                 ));
-            } else if name.ends_with(".target.json") {
-                let target = TARGETS
-                    .iter()
-                    .find(|target| name.contains(*target))
-                    .expect("record target");
-                let record = json!({
-                    "schema_version": 1,
-                    "product_version": VERSION,
-                    "source_commit": self.head(),
-                    "rust_target": target,
-                    "rustc_vv": "rustc fixture\n",
-                    "executable": {
-                        "name": "solstone-tmux",
-                        "sha256": "a".repeat(64)
-                    },
-                    "artifacts": []
-                });
-                fs::write(
-                    self.candidate.join(name),
-                    serde_json::to_vec(&record).expect("encode record"),
-                )
-                .expect("write record");
             } else {
                 fs::write(
-                    self.candidate.join(&name),
-                    format!("fixture bytes for {name}\n"),
+                    self.candidate.join(&artifact.name),
+                    format!("fixture bytes for {}\n", artifact.name),
                 )
                 .expect("write artifact");
             }
         }
+        for lane in Lane::ALL {
+            let mut artifacts = artifacts_for_lane(lane)
+                .into_iter()
+                .map(|artifact| {
+                    json!({
+                        "name": artifact.name,
+                        "sha256": "a".repeat(64)
+                    })
+                })
+                .collect::<Vec<_>>();
+            artifacts.sort_by(|left, right| left["name"].as_str().cmp(&right["name"].as_str()));
+            let record = json!({
+                "schema_version": 1,
+                "product_version": VERSION,
+                "source_commit": self.head(),
+                "rust_target": lane.rust_target(),
+                "rustc_vv": "rustc fixture\n",
+                "executable": {
+                    "name": "solstone-tmux",
+                    "sha256": "a".repeat(64)
+                },
+                "artifacts": artifacts
+            });
+            fs::write(
+                self.candidate.join(lane.record_name()),
+                serde_json::to_vec(&record).expect("encode record"),
+            )
+            .expect("write record");
+        }
     }
 
     fn write_executable_tar(&self, body: &str) {
-        let name = format!("solstone-tmux-{VERSION}-x86_64-linux.tar.gz");
+        let name = artifacts_for_lane(Lane::LinuxX86_64)
+            .into_iter()
+            .find(|artifact| artifact.kind == package_model::ArtifactKind::TarGz)
+            .expect("x86 Linux tar artifact")
+            .name;
         let file = fs::File::create(self.candidate.join(name)).expect("create tar fixture");
         let encoder = GzEncoder::new(file, Compression::best());
         let mut archive = Builder::new(encoder);
@@ -553,23 +603,7 @@ impl PublisherFixture {
     }
 
     fn unsigned_names(&self) -> Vec<String> {
-        let mut names = vec![
-            format!("solstone-tmux-{VERSION}-1.aarch64.rpm"),
-            format!("solstone-tmux-{VERSION}-1.x86_64.rpm"),
-            format!("solstone-tmux-{VERSION}-aarch64-linux.tar.gz"),
-            format!("solstone-tmux-{VERSION}-aarch64-macos.pkg"),
-            format!("solstone-tmux-{VERSION}-aarch64-macos.tar.gz"),
-            format!("solstone-tmux-{VERSION}-x86_64-linux.tar.gz"),
-            format!("solstone-tmux_{VERSION}_amd64.deb"),
-            format!("solstone-tmux_{VERSION}_arm64.deb"),
-        ];
-        names.extend(
-            TARGETS
-                .iter()
-                .map(|target| format!("solstone-tmux-{VERSION}-{target}.target.json")),
-        );
-        names.sort();
-        names
+        checksummed_names()
     }
 
     fn commit_repo_mutation(&self, path: &str, bytes: &[u8]) {
@@ -738,6 +772,7 @@ struct RunRequest<'a> {
     source_commit: String,
     cargo_fail_at: usize,
     interrupt: Option<String>,
+    remote_mutation: Option<String>,
 }
 
 impl RunRequest<'_> {
@@ -753,6 +788,11 @@ impl RunRequest<'_> {
 
     fn interrupt(mut self, point: &str) -> Self {
         self.interrupt = Some(point.to_owned());
+        self
+    }
+
+    fn remote_mutation(mut self, mutation: &str) -> Self {
+        self.remote_mutation = Some(mutation.to_owned());
         self
     }
 
@@ -778,6 +818,10 @@ impl RunRequest<'_> {
             .env("FAKE_GH_LOG", &fixture.log_path)
             .env("FAKE_GH_EXPECTED_COMMIT", fixture.head())
             .env("FAKE_GH_INTERRUPT", self.interrupt.unwrap_or_default())
+            .env(
+                "FAKE_GH_REMOTE_MUTATION",
+                self.remote_mutation.unwrap_or_default(),
+            )
             .env("FAKE_CARGO_COUNT", &fixture.cargo_count)
             .env("FAKE_CARGO_FAIL_AT", self.cargo_fail_at.to_string());
         fs::create_dir_all(fixture.root.path().join("home")).expect("create fake home");
@@ -831,6 +875,17 @@ count=$((count + 1))
 printf '%s\n' "$count" >"$FAKE_CARGO_COUNT"
 if [[ "${FAKE_CARGO_FAIL_AT:-0}" != "0" && "$count" == "$FAKE_CARGO_FAIL_AT" ]]; then
     exit 97
+fi
+if [[ "$count" == "1" ]]; then
+    source_binding_found=false
+    while IFS= read -r candidate_tar; do
+        if tar -xOf "$candidate_tar" 2>/dev/null |
+            grep -aFq "solstone-tmux 1.0.0 (source $FAKE_GH_EXPECTED_COMMIT)"; then
+            source_binding_found=true
+            break
+        fi
+    done < <(find "$SOLSTONE_TMUX_TEST_UNSIGNED_CANDIDATE" -type f -name '*.tar.gz' | sort)
+    $source_binding_found || exit 98
 fi
 "#
 }
@@ -944,6 +999,11 @@ log_call "$kind" "$mutation" gh api "$method" "$endpoint" "${fields[@]}"
 
 case "$method:$endpoint" in
     GET:*/git/matching-refs/tags/*)
+        write_state '.tag_reads += 1'
+        tag_reads="$(jq -r '.tag_reads' "$FAKE_GH_STATE")"
+        if [[ "$tag_reads" == "2" && "${FAKE_GH_REMOTE_MUTATION:-}" == "tag-target" ]]; then
+            write_state '.remote_tag.commit = ("b" * 40)'
+        fi
         jq -c '
             if .remote_tag == null then []
             else [{
@@ -965,6 +1025,21 @@ case "$method:$endpoint" in
         }' "$FAKE_GH_STATE"
         ;;
     GET:*/releases\?per_page=100)
+        write_state '.release_reads += 1'
+        release_reads="$(jq -r '.release_reads' "$FAKE_GH_STATE")"
+        if [[ "$release_reads" == "2" ]]; then
+            case "${FAKE_GH_REMOTE_MUTATION:-}" in
+                wrong-title)
+                    write_state '.releases[0].name = "concurrent title"'
+                    ;;
+                wrong-notes)
+                    write_state '.releases[0].body = "concurrent notes"'
+                    ;;
+                wrong-target)
+                    write_state '.releases[0].target_commitish = ("b" * 40)'
+                    ;;
+            esac
+        fi
         if $paginate && $slurp; then
             jq -c '[.releases]' "$FAKE_GH_STATE"
         else

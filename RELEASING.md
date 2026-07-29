@@ -83,6 +83,10 @@ make validate-release \
 This invokes the complete-set validator. It checks the eight packages, three
 target records, sorted `SHA256SUMS`, and detached minisign signature. The source
 commit is read from executable output and bytes before metadata is trusted.
+Run aggregate validation and publication on a platform represented by one of
+the three candidate lanes: Linux x86_64, Linux aarch64, or macOS aarch64. The
+validator executes `--version` only from the lane matching that machine and
+uses fixed-byte source-commit checks for the other two lanes.
 
 The variable contract is:
 

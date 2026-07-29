@@ -53,6 +53,7 @@ pub enum ValidationError {
     ExecutableDigest,
     SourceCommit,
     VersionOutput,
+    HostPlatform,
     Io,
 }
 
@@ -86,6 +87,9 @@ impl fmt::Display for ValidationError {
             Self::ExecutableDigest => "packaged executable bytes differ from the target record",
             Self::SourceCommit => "executable source commit does not match the target record",
             Self::VersionOutput => "executable --version output is not source-bound",
+            Self::HostPlatform => {
+                "aggregate validation requires Linux x86_64, Linux aarch64, or macOS aarch64"
+            }
             Self::Io => "candidate validation I/O failed",
         })
     }
@@ -347,7 +351,7 @@ fn validate_complete_files(
         records.insert(lane, record);
     }
 
-    let host_lane = Lane::LinuxX86_64;
+    let host_lane = host_lane()?;
     let mut source_commit = None;
     for lane in Lane::ALL {
         let tar = ARTIFACTS
@@ -418,6 +422,15 @@ fn validate_complete_files(
         return Err(ValidationError::SourceCommit);
     }
     Ok(())
+}
+
+fn host_lane() -> Result<Lane, ValidationError> {
+    match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("linux", "x86_64") => Ok(Lane::LinuxX86_64),
+        ("linux", "aarch64") => Ok(Lane::LinuxAarch64),
+        ("macos", "aarch64") => Ok(Lane::MacosAarch64),
+        _ => Err(ValidationError::HostPlatform),
+    }
 }
 
 fn read_candidate_directory(

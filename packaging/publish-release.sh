@@ -22,8 +22,8 @@ candidate_directory="$2"
 secret_key="$3"
 
 required_tools=(
-    cargo find gh git grep install jq minisign mktemp realpath rm sed sha256sum
-    sort tar
+    awk cargo find gh git grep install jq minisign mktemp realpath rm sed
+    sha256sum sort uniq
 )
 for tool in "${required_tools[@]}"; do
     command -v "$tool" >/dev/null 2>&1 ||
@@ -42,12 +42,14 @@ repo_root="$(realpath "$repo_root")"
 [[ "$(git -C "$repo_root" rev-parse HEAD)" == "$source_commit" ]] ||
     die "source commit must equal HEAD"
 
-candidate_directory="$(realpath "$candidate_directory")"
-secret_key="$(realpath "$secret_key")"
 [[ -d "$candidate_directory" && ! -L "$candidate_directory" ]] ||
     die "unsigned candidate must be a real directory"
 [[ -f "$secret_key" && ! -L "$secret_key" ]] ||
     die "minisign secret key must be a regular file"
+candidate_directory="$(realpath "$candidate_directory")" ||
+    die "could not resolve the unsigned candidate directory"
+secret_key="$(realpath "$secret_key")" ||
+    die "could not resolve the minisign secret key"
 case "$secret_key" in
     "$repo_root" | "$repo_root"/*)
         die "minisign secret key must remain outside the repository"
@@ -116,22 +118,10 @@ mapfile -t configured_targets < <("$repo_root/scripts/rust-targets.sh")
 ((${#configured_targets[@]} == 3)) ||
     die "expected exactly three configured Rust targets"
 
-unsigned_names=(
-    "solstone-tmux-$version-1.aarch64.rpm"
-    "solstone-tmux-$version-1.x86_64.rpm"
-    "solstone-tmux-$version-aarch64-linux.tar.gz"
-    "solstone-tmux-$version-aarch64-macos.pkg"
-    "solstone-tmux-$version-aarch64-macos.tar.gz"
-    "solstone-tmux-$version-x86_64-linux.tar.gz"
-    "solstone-tmux_${version}_amd64.deb"
-    "solstone-tmux_${version}_arm64.deb"
-)
+record_names=()
 for target in "${configured_targets[@]}"; do
-    unsigned_names+=("solstone-tmux-$version-$target.target.json")
+    record_names+=("solstone-tmux-$version-$target.target.json")
 done
-mapfile -t unsigned_names < <(printf '%s\n' "${unsigned_names[@]}" | sort)
-publishable_names=("${unsigned_names[@]}" "SHA256SUMS" "SHA256SUMS.minisig")
-mapfile -t publishable_names < <(printf '%s\n' "${publishable_names[@]}" | sort)
 
 assert_exact_files() {
     local root="$1"
@@ -153,6 +143,36 @@ assert_exact_files() {
     done
 }
 
+artifact_names=()
+for record_name in "${record_names[@]}"; do
+    record="$candidate_directory/$record_name"
+    [[ -f "$record" && ! -L "$record" ]] ||
+        die "candidate target records are incomplete"
+    record_artifact_text="$(
+        jq -er '
+            if (.artifacts | type) != "array" or (.artifacts | length) == 0 then
+                error("target record has no artifacts")
+            else
+                .artifacts[].name
+            end
+        ' "$record"
+    )" || die "candidate target record artifact set is invalid"
+    mapfile -t record_artifacts <<<"$record_artifact_text"
+    for name in "${record_artifacts[@]}"; do
+        [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9._+-]*$ ]] ||
+            die "candidate target record contains an invalid artifact name"
+        artifact_names+=("$name")
+    done
+done
+mapfile -t artifact_names < <(printf '%s\n' "${artifact_names[@]}" | sort)
+if [[ -n "$(printf '%s\n' "${artifact_names[@]}" | uniq -d)" ]]; then
+    die "candidate target records contain duplicate artifacts"
+fi
+unsigned_names=("${record_names[@]}" "${artifact_names[@]}")
+mapfile -t unsigned_names < <(printf '%s\n' "${unsigned_names[@]}" | sort)
+publishable_names=("${unsigned_names[@]}" "SHA256SUMS" "SHA256SUMS.minisig")
+mapfile -t publishable_names < <(printf '%s\n' "${publishable_names[@]}" | sort)
+
 assert_exact_files "$candidate_directory" "${unsigned_names[@]}"
 
 stage_root="$(mktemp -d "${TMPDIR:-/tmp}/solstone-tmux-publish.XXXXXX")"
@@ -162,8 +182,7 @@ cleanup() {
 trap cleanup EXIT
 publishable="$stage_root/publishable"
 downloads="$stage_root/downloads"
-extracted="$stage_root/extracted"
-install -d -m 0700 "$publishable" "$downloads" "$extracted"
+install -d -m 0700 "$publishable" "$downloads"
 for name in "${unsigned_names[@]}"; do
     install -m 0644 "$candidate_directory/$name" "$publishable/$name"
 done
@@ -174,25 +193,6 @@ done
         cargo test --locked -p solstone-tmux --test release_validator \
         validates_real_unsigned_set_when_requested -- --exact
 ) || die "unsigned aggregate candidate validation failed"
-
-executable_tar="solstone-tmux-$version-x86_64-linux.tar.gz"
-tar -xzf "$publishable/$executable_tar" -C "$extracted" solstone-tmux ||
-    die "could not extract the source-bound executable"
-executable="$extracted/solstone-tmux"
-[[ -f "$executable" && ! -L "$executable" && -x "$executable" ]] ||
-    die "candidate executable is not a regular executable"
-version_stdout="$stage_root/version.stdout"
-version_stderr="$stage_root/version.stderr"
-"$executable" --version >"$version_stdout" 2>"$version_stderr" ||
-    die "candidate executable --version failed"
-[[ ! -s "$version_stderr" ]] ||
-    die "candidate executable --version wrote to stderr"
-[[ "$(sed -n '$=' "$version_stdout")" == "1" ]] ||
-    die "candidate executable --version output is not one line"
-[[ "$(sed -n '1p' "$version_stdout")" == "$title (source $source_commit)" ]] ||
-    die "candidate executable version, version number, or source commit disagrees"
-grep -aFq "$source_commit" "$executable" ||
-    die "source commit is absent from candidate executable bytes"
 
 for target in "${configured_targets[@]}"; do
     record="$publishable/solstone-tmux-$version-$target.target.json"
@@ -254,34 +254,42 @@ repo="$(gh repo view --json nameWithOwner --jq .nameWithOwner)" ||
 [[ "$repo" =~ ^[^/]+/[^/]+$ ]] ||
     die "GitHub repository identity is ambiguous"
 
-remote_refs="$(
-    gh api "repos/$repo/git/matching-refs/tags/$tag"
-)" || die "could not inspect the remote release tag"
-remote_ref_count="$(
-    jq --arg ref "refs/tags/$tag" '[.[] | select(.ref == $ref)] | length' <<<"$remote_refs"
-)"
-[[ "$remote_ref_count" == "0" || "$remote_ref_count" == "1" ]] ||
-    die "remote release tag state is ambiguous"
-remote_tag_present=false
-if [[ "$remote_ref_count" == "1" ]]; then
-    remote_tag_present=true
-    remote_tag_type="$(
-        jq -r --arg ref "refs/tags/$tag" '.[] | select(.ref == $ref) | .object.type' \
-            <<<"$remote_refs"
+inspect_remote_tag() {
+    local require_present="$1"
+    local remote_refs remote_ref_count remote_tag_type remote_tag_object remote_tag
+    remote_refs="$(
+        gh api "repos/$repo/git/matching-refs/tags/$tag"
+    )" || die "could not inspect the remote release tag"
+    remote_ref_count="$(
+        jq --arg ref "refs/tags/$tag" '[.[] | select(.ref == $ref)] | length' <<<"$remote_refs"
     )"
-    remote_tag_object="$(
-        jq -r --arg ref "refs/tags/$tag" '.[] | select(.ref == $ref) | .object.sha' \
-            <<<"$remote_refs"
-    )"
-    [[ "$remote_tag_type" == "tag" && "$remote_tag_object" =~ ^[0-9a-f]{40}$ ]] ||
-        die "remote release tag is not annotated"
-    remote_tag="$(
-        gh api "repos/$repo/git/tags/$remote_tag_object"
-    )" || die "could not peel the remote release tag"
-    [[ "$(jq -r '.object.type' <<<"$remote_tag")" == "commit" &&
-        "$(jq -r '.object.sha' <<<"$remote_tag")" == "$source_commit" ]] ||
-        die "remote release tag does not peel to the exact source commit"
-fi
+    [[ "$remote_ref_count" == "0" || "$remote_ref_count" == "1" ]] ||
+        die "remote release tag state is ambiguous"
+    remote_tag_present=false
+    if [[ "$remote_ref_count" == "1" ]]; then
+        remote_tag_present=true
+        remote_tag_type="$(
+            jq -r --arg ref "refs/tags/$tag" '.[] | select(.ref == $ref) | .object.type' \
+                <<<"$remote_refs"
+        )"
+        remote_tag_object="$(
+            jq -r --arg ref "refs/tags/$tag" '.[] | select(.ref == $ref) | .object.sha' \
+                <<<"$remote_refs"
+        )"
+        [[ "$remote_tag_type" == "tag" && "$remote_tag_object" =~ ^[0-9a-f]{40}$ ]] ||
+            die "remote release tag is not annotated"
+        remote_tag="$(
+            gh api "repos/$repo/git/tags/$remote_tag_object"
+        )" || die "could not peel the remote release tag"
+        [[ "$(jq -r '.object.type' <<<"$remote_tag")" == "commit" &&
+            "$(jq -r '.object.sha' <<<"$remote_tag")" == "$source_commit" ]] ||
+            die "remote release tag does not peel to the exact source commit"
+    elif [[ "$require_present" == "true" ]]; then
+        die "remote release tag disappeared before publication"
+    fi
+}
+
+inspect_remote_tag false
 
 release_pages="$(
     gh api --paginate --slurp "repos/$repo/releases?per_page=100"
@@ -428,9 +436,32 @@ relevant_releases="$(
 [[ "$(jq 'length' <<<"$relevant_releases")" == "1" ]] ||
     die "completed draft release state is ambiguous"
 [[ "$(jq -r '.[0].id' <<<"$relevant_releases")" == "$release_id" &&
-    "$(jq -r '.[0].draft' <<<"$relevant_releases")" == "true" ]] ||
-    die "completed draft identity or state changed"
+    "$(jq -r '.[0].draft' <<<"$relevant_releases")" == "true" &&
+    "$(jq -r '.[0].tag_name' <<<"$relevant_releases")" == "$tag" &&
+    "$(jq -r '.[0].target_commitish' <<<"$relevant_releases")" == "$source_commit" &&
+    "$(jq -r '.[0].name' <<<"$relevant_releases")" == "$title" &&
+    "$(jq -r '.[0].body' <<<"$relevant_releases")" == "$notes" ]] ||
+    die "completed draft metadata or state changed"
 verify_remote_assets "$relevant_releases" true
+inspect_remote_tag true
+prepublish_release="$(
+    gh api "repos/$repo/releases/$release_id"
+)" || die "could not perform the final draft recheck"
+[[ "$(jq -r '.id' <<<"$prepublish_release")" == "$release_id" &&
+    "$(jq -r '.draft' <<<"$prepublish_release")" == "true" &&
+    "$(jq -r '.tag_name' <<<"$prepublish_release")" == "$tag" &&
+    "$(jq -r '.target_commitish' <<<"$prepublish_release")" == "$source_commit" &&
+    "$(jq -r '.name' <<<"$prepublish_release")" == "$title" &&
+    "$(jq -r '.body' <<<"$prepublish_release")" == "$notes" ]] ||
+    die "draft metadata changed immediately before publication"
+mapfile -t prepublish_asset_names < <(jq -r '.assets[].name' <<<"$prepublish_release" | sort)
+if ((${#prepublish_asset_names[@]} != ${#publishable_names[@]})); then
+    die "draft asset set changed immediately before publication"
+fi
+for index in "${!publishable_names[@]}"; do
+    [[ "${prepublish_asset_names[$index]}" == "${publishable_names[$index]}" ]] ||
+        die "draft asset set changed immediately before publication"
+done
 
 gh api -X PATCH "repos/$repo/releases/$release_id" -F draft=false >/dev/null ||
     die "could not publish the verified draft"
