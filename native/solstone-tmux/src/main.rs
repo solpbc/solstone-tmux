@@ -48,6 +48,18 @@ fn run() -> Result<i32, String> {
         }
     };
 
+    match command {
+        cli::CliCommand::Help => {
+            println!("{}", cli::usage());
+            return Ok(0);
+        }
+        cli::CliCommand::Version => {
+            println!("{}", cli::version());
+            return Ok(0);
+        }
+        _ => {}
+    }
+
     let environment = ProcessEnvironment;
     let platform = current_platform();
     match command {
@@ -115,6 +127,12 @@ fn run() -> Result<i32, String> {
                         unreachable!("setup was dispatched before service setup")
                     }
                     cli::CliCommand::Run => unreachable!("run was dispatched before service setup"),
+                    cli::CliCommand::Help => {
+                        unreachable!("help was dispatched before service setup")
+                    }
+                    cli::CliCommand::Version => {
+                        unreachable!("version was dispatched before service setup")
+                    }
                 }
             })
         }

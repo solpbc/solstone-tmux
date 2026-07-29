@@ -13,6 +13,8 @@ pub enum CliCommand {
     Status,
     InstallService,
     UninstallService,
+    Help,
+    Version,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -39,9 +41,8 @@ where
         Some(value) if value == "status" => CliCommand::Status,
         Some(value) if value == "install-service" => CliCommand::InstallService,
         Some(value) if value == "uninstall-service" => CliCommand::UninstallService,
-        Some(value) if value == "-h" || value == "--help" => {
-            return Err(CliError(usage().to_owned()));
-        }
+        Some(value) if value == "-h" || value == "--help" => CliCommand::Help,
+        Some(value) if value == "-V" || value == "--version" => CliCommand::Version,
         Some(value) => {
             return Err(CliError(format!(
                 "unknown command '{}'\n{}",
@@ -61,5 +62,13 @@ where
 }
 
 pub const fn usage() -> &'static str {
-    "usage: solstone-tmux [run|setup|status|install-service|uninstall-service]"
+    "usage: solstone-tmux [run|setup|status|install-service|uninstall-service|--help|--version]"
+}
+
+pub fn version() -> String {
+    let source = option_env!("SOLSTONE_TMUX_SOURCE_COMMIT").unwrap_or("development");
+    format!(
+        "solstone-tmux {} (source {source})",
+        env!("CARGO_PKG_VERSION")
+    )
 }
