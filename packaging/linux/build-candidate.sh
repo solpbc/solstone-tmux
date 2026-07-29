@@ -171,6 +171,14 @@ if [[ "$(git -C "$repo_root" rev-parse HEAD)" != "$source_commit" ]]; then
     echo "source commit must equal the checked-out HEAD" >&2
     exit 1
 fi
+if ! dirty_tree="$(git -C "$repo_root" status --porcelain=v1 --untracked-files=all)"; then
+    echo "could not inspect the Linux candidate source tree" >&2
+    exit 1
+fi
+if [[ -n "$dirty_tree" ]]; then
+    echo "Linux candidate source tree must be clean" >&2
+    exit 1
+fi
 if [[ ! -f "$source_executable" || -L "$source_executable" || ! -x "$source_executable" ]]; then
     echo "source executable must be an executable regular file" >&2
     exit 1

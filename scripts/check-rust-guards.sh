@@ -128,6 +128,32 @@ else
     done
 fi
 
+package_model_file="$native_root/tests/support/package_model.rs"
+mapfile -t package_model_targets < <(
+    awk '
+        /pub const fn rust_target/ { in_targets = 1; next }
+        in_targets && /^    }/ { exit }
+        in_targets && /Self::[A-Za-z0-9_]+ => "/ {
+            value = $0
+            sub(/^.*=> "/, "", value)
+            sub(/",$/, "", value)
+            print value
+        }
+    ' "$package_model_file"
+)
+if ((${#package_model_targets[@]} != ${#targets[@]})); then
+    echo "$package_model_file: target replica does not match rust-toolchain.toml" >&2
+    failed=true
+else
+    for index in "${!targets[@]}"; do
+        if [[ "${package_model_targets[$index]}" != "${targets[$index]}" ]]; then
+            echo "$package_model_file: target order does not match rust-toolchain.toml" >&2
+            failed=true
+            break
+        fi
+    done
+fi
+
 workflow_runners=()
 workflow_targets=()
 workflow_target_lines=()
@@ -213,7 +239,22 @@ else
         echo "$native_candidate_workflow: candidate lanes may not tag, publish, or mutate releases" >&2
         failed=true
     fi
-    if signing_access="$(rg -ni 'minisign|codesign|notarytool|signing[_ -]?key|secrets\.' "$native_candidate_workflow")"; then
+    # The workflow must scan the literal minisign canary as candidate data; that
+    # one exact line is not signing access.
+    minisign_canary_line='            MINISIGN_SECRET_CANARY_DO_NOT_SHIP'
+    if [[ "$(rg -cFx "$minisign_canary_line" "$native_candidate_workflow" || true)" != "1" ]]; then
+        echo "$native_candidate_workflow: expected one exact minisign canary scan entry" >&2
+        failed=true
+    fi
+    signing_access="$(
+        rg -ni 'minisign|codesign|notarytool|signing[_ -]?key|secrets\.' \
+            "$native_candidate_workflow" |
+            while IFS=: read -r signing_line signing_text; do
+                [[ "$signing_text" == "$minisign_canary_line" ]] ||
+                    printf '%s:%s\n' "$signing_line" "$signing_text"
+            done
+    )"
+    if [[ -n "$signing_access" ]]; then
         printf '%s\n' "$signing_access" >&2
         echo "$native_candidate_workflow: candidate lanes may not access signing material" >&2
         failed=true
@@ -221,6 +262,24 @@ else
     if rg -n '^[[:space:]]+(push|pull_request|schedule):' "$native_candidate_workflow" >/dev/null ||
         [[ "$(rg -c '^  workflow_dispatch:$' "$native_candidate_workflow" || true)" != "1" ]]; then
         echo "$native_candidate_workflow: native candidates must be manually dispatched only" >&2
+        failed=true
+    fi
+    package_version="$(
+        awk '
+            $0 == "[package]" { in_package = 1; next }
+            in_package && /^\[/ { exit }
+            in_package && /^version = "/ {
+                value = $0
+                sub(/^version = "/, "", value)
+                sub(/"$/, "", value)
+                print value
+                exit
+            }
+        ' "$native_root/Cargo.toml"
+    )"
+    if [[ -z "$package_version" ]] ||
+        rg -nF "$package_version" "$native_candidate_workflow" >/dev/null; then
+        echo "$native_candidate_workflow: package version must be derived from Cargo metadata" >&2
         failed=true
     fi
 fi

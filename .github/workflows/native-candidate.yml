@@ -63,6 +63,16 @@ jobs:
           set -euo pipefail
           bash scripts/check-rust-guards.sh
 
+      - name: Resolve the package version
+        shell: bash
+        run: |
+          set -euo pipefail
+          product_version="$(
+            cargo metadata --locked --no-deps --format-version 1 |
+              jq -er '.packages[] | select(.name == "solstone-tmux") | .version'
+          )"
+          echo "PRODUCT_VERSION=$product_version" >> "$GITHUB_ENV"
+
       - name: Run the locked native gate
         shell: bash
         run: |
@@ -81,7 +91,7 @@ jobs:
             cargo build --locked --release --target "$RUST_TARGET"
           executable="$PWD/target/$RUST_TARGET/release/solstone-tmux"
           version_output="$("$executable" --version)"
-          if [[ "$version_output" != "solstone-tmux 1.0.0 (source $SOURCE_COMMIT)" ]]; then
+          if [[ "$version_output" != "solstone-tmux $PRODUCT_VERSION (source $SOURCE_COMMIT)" ]]; then
             echo "candidate executable is not bound to the requested source" >&2
             exit 1
           fi
@@ -236,12 +246,13 @@ jobs:
           executable="$PWD/target/$RUST_TARGET/release/solstone-tmux"
           docker run --rm \
             -e SOURCE_COMMIT \
+            -e PRODUCT_VERSION \
             -v "$rpm_file:/candidate.rpm:ro" \
             -v "$executable:/lane-executable:ro" \
             "$FEDORA_IMAGE" \
             bash -s <<'FEDORA_PROOF'
           set -euo pipefail
-          dnf install -y --setopt=install_weak_deps=False rpm tmux
+          dnf install -y --setopt=install_weak_deps=False cpio rpm tmux
           package_metadata="$(
             rpm -qp --queryformat '%{NAME}|%{VERSION}|%{RELEASE}|%{ARCH}\n' /candidate.rpm
           )"
@@ -250,7 +261,7 @@ jobs:
             aarch64) expected_arch="aarch64" ;;
             *) exit 1 ;;
           esac
-          if [[ "$package_metadata" != "solstone-tmux|1.0.0|1|$expected_arch" ]]; then
+          if [[ "$package_metadata" != "solstone-tmux|$PRODUCT_VERSION|1|$expected_arch" ]]; then
             echo "RPM metadata does not match the lane" >&2
             exit 1
           fi
@@ -271,11 +282,28 @@ jobs:
             echo "RPM unexpectedly contains maintainer scripts" >&2
             exit 1
           fi
+          scan_root="$(mktemp -d)"
+          rpm -qp --xml /candidate.rpm >"$scan_root/metadata.xml"
+          mkdir "$scan_root/payload"
+          (
+            cd "$scan_root/payload"
+            rpm2cpio /candidate.rpm | cpio -idm --quiet
+          )
+          for canary in \
+            LEGACYKEYCANARY-do-not-copy \
+            SOLSTONE_TMUX_SECRET_CANARY_DO_NOT_SHIP \
+            MINISIGN_SECRET_CANARY_DO_NOT_SHIP
+          do
+            if grep -aRF "$canary" "$scan_root/metadata.xml" "$scan_root/payload"; then
+              echo "RPM metadata or payload contains a release canary" >&2
+              exit 1
+            fi
+          done
           rpm -ivh /candidate.rpm
           cmp /usr/bin/solstone-tmux /lane-executable
           /usr/bin/solstone-tmux --help
           /usr/bin/solstone-tmux --version | grep -Fx \
-            "solstone-tmux 1.0.0 (source $SOURCE_COMMIT)"
+            "solstone-tmux $PRODUCT_VERSION (source $SOURCE_COMMIT)"
           rpm -e solstone-tmux
           FEDORA_PROOF
 
@@ -300,7 +328,7 @@ jobs:
           test "$(stat -c '%a' /usr/local/bin/solstone-tmux)" = 755
           /usr/local/bin/solstone-tmux --help
           /usr/local/bin/solstone-tmux --version | grep -Fx \
-            "solstone-tmux 1.0.0 (source $SOURCE_COMMIT)"
+            "solstone-tmux $PRODUCT_VERSION (source $SOURCE_COMMIT)"
           sudo rm -f /usr/local/bin/solstone-tmux
 
           if [[ "$(dpkg-deb -f "$deb_file" Depends)" != "tmux" ]]; then
@@ -312,7 +340,7 @@ jobs:
           test "$(stat -c '%a' /usr/bin/solstone-tmux)" = 755
           /usr/bin/solstone-tmux --help
           /usr/bin/solstone-tmux --version | grep -Fx \
-            "solstone-tmux 1.0.0 (source $SOURCE_COMMIT)"
+            "solstone-tmux $PRODUCT_VERSION (source $SOURCE_COMMIT)"
           sudo dpkg --purge solstone-tmux
 
       - name: Smoke foreground observation with real tmux
