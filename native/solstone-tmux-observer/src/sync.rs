@@ -823,6 +823,7 @@ impl SyncScheduler {
                 }
             };
             if matches!(upload.status, UploadStatus::Conflict | UploadStatus::Failed) {
+                summary.diagnostic = Some(DiagnosticCode::LocalSegmentInvalid);
                 continue;
             }
             let Some(authoritative_key) = upload.authoritative_key else {
@@ -856,6 +857,7 @@ impl SyncScheduler {
                 &authoritative_key,
                 &local_files,
             ) {
+                summary.diagnostic = Some(DiagnosticCode::LocalSegmentInvalid);
                 continue;
             }
             summary.custodied += 1;

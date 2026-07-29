@@ -271,13 +271,128 @@ fn conflict_and_failed_contacts_do_not_claim_successful_custody() {
                 })]),
             );
             let (mut journal, _calls) = FakeJournal::with_upload_outcomes(scripted);
-            let mut scheduler = scheduler(&temporary, clock(), SyncWake::default());
+            let mut scheduler = retaining_scheduler(&temporary);
 
             let summary = scheduler.run_pass(&mut journal).await;
 
             assert!(summary.contacted);
             assert_eq!(summary.custodied, 0);
+            assert_eq!(
+                summary.diagnostic,
+                Some(DiagnosticCode::LocalSegmentInvalid)
+            );
+            assert!(segment_path(temporary.path(), "120000_300").is_dir());
         }
+    });
+}
+
+#[test]
+fn an_unproven_fresh_listing_records_a_diagnostic_and_keeps_the_segment() {
+    run(async {
+        let temporary = TestDirectory::new("sync-unproven-custody");
+        create_segment(temporary.path(), "120000_300", b"fixture\n");
+        let mut scripted = HashMap::new();
+        scripted.insert(
+            "120000_300".to_owned(),
+            VecDeque::from([Ok(UploadResult {
+                status: UploadStatus::Ok,
+                authoritative_key: Some("120000_300".to_owned()),
+            })]),
+        );
+        let (mut journal, _calls) = FakeJournal::with_upload_outcomes(scripted);
+        let mut scheduler = retaining_scheduler(&temporary);
+
+        let summary = scheduler.run_pass(&mut journal).await;
+
+        assert!(summary.contacted);
+        assert_eq!(summary.custodied, 0);
+        assert_eq!(
+            summary.diagnostic,
+            Some(DiagnosticCode::LocalSegmentInvalid)
+        );
+        assert!(segment_path(temporary.path(), "120000_300").is_dir());
+    });
+}
+
+#[test]
+fn a_retained_candidate_still_lets_later_candidates_be_attempted() {
+    run(async {
+        let temporary = TestDirectory::new("sync-retained-then-later");
+        create_segment(temporary.path(), "120000_300", b"earlier\n");
+        create_segment(temporary.path(), "130000_300", b"later\n");
+        let mut scripted = HashMap::new();
+        scripted.insert(
+            "130000_300".to_owned(),
+            VecDeque::from([Ok(UploadResult {
+                status: UploadStatus::Conflict,
+                authoritative_key: None,
+            })]),
+        );
+        let (mut journal, mut calls) = FakeJournal::with_upload_outcomes(scripted);
+        let mut scheduler = retaining_scheduler(&temporary);
+
+        let summary = scheduler.run_pass(&mut journal).await;
+
+        assert_eq!(
+            drain_uploads(&mut calls),
+            vec!["130000_300".to_owned(), "120000_300".to_owned()]
+        );
+        assert_eq!(summary.attempted, 2);
+        assert_eq!(summary.custodied, 1);
+        assert_eq!(
+            summary.diagnostic,
+            Some(DiagnosticCode::LocalSegmentInvalid)
+        );
+        assert!(segment_path(temporary.path(), "130000_300").is_dir());
+        assert!(!segment_path(temporary.path(), "120000_300").exists());
+    });
+}
+
+#[test]
+fn a_retained_candidate_keeps_operator_visible_error_truth() {
+    run(async {
+        let temporary = TestDirectory::new("sync-retained-error-truth");
+        ensure_private_directory(temporary.path()).expect("prepare data root");
+        create_segment(temporary.path(), "120000_300", b"fixture\n");
+        let lock = InstanceLock::acquire(temporary.path()).expect("instance lock");
+        let health = HealthWriter::new(temporary.path().to_path_buf(), &lock);
+        let (activity, _activity_receiver) = tokio::sync::watch::channel(SyncActivity::Idle);
+        let mut scripted = HashMap::new();
+        scripted.insert(
+            "120000_300".to_owned(),
+            VecDeque::from([Ok(UploadResult {
+                status: UploadStatus::Conflict,
+                authoritative_key: None,
+            })]),
+        );
+        let (journal, mut calls) = FakeJournal::with_upload_outcomes(scripted);
+        let (stop, stopped) = oneshot::channel();
+        let mut scheduler = SyncScheduler::new(
+            temporary.path().join("captures"),
+            stream(),
+            0,
+            clock(),
+            SyncWake::default(),
+        )
+        .with_observability(activity, health);
+        let task = tokio::spawn(async move {
+            let mut journal = journal;
+            scheduler
+                .run(&mut journal, async move {
+                    let _ = stopped.await;
+                })
+                .await;
+        });
+        let _ = expect_upload(&mut calls).await;
+        let snapshot = wait_for_idle_snapshot(temporary.path()).await;
+
+        assert_eq!(snapshot["last_error_code"], "local_segment_invalid");
+        assert_eq!(snapshot["recent_error_count"], 1);
+        assert!(!snapshot["last_successful_contact_unix_seconds"].is_null());
+        assert!(snapshot["last_successful_sync_unix_seconds"].is_null());
+        assert_eq!(snapshot["pending_segments"], 1);
+        let _ = stop.send(());
+        task.await.expect("join retained scheduler");
     });
 }
 
@@ -804,9 +919,23 @@ fn clock() -> Arc<TestClock> {
 }
 
 fn create_segment(root: &Path, segment: &str, bytes: &[u8]) {
-    let path = root.join("captures").join(DAY).join(STREAM).join(segment);
+    let path = segment_path(root, segment);
     std::fs::create_dir_all(&path).expect("create scheduler segment");
     std::fs::write(path.join(FILE), bytes).expect("write scheduler segment");
+}
+
+fn segment_path(root: &Path, segment: &str) -> PathBuf {
+    root.join("captures").join(DAY).join(STREAM).join(segment)
+}
+
+fn retaining_scheduler(temporary: &TestDirectory) -> SyncScheduler {
+    SyncScheduler::new(
+        temporary.path().join("captures"),
+        stream(),
+        0,
+        clock(),
+        SyncWake::default(),
+    )
 }
 
 fn empty_listing() -> SegmentsEnvelope {
