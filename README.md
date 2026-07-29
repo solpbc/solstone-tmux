@@ -1,103 +1,66 @@
 # solstone-tmux
 
-Standalone tmux terminal observer for [solstone](https://solpbc.org). Experiences your tmux sessions along with you, accumulating observations to a local cache and syncing them to your journal.
+solstone-tmux is a standalone observer for
+[solstone](https://solpbc.org). It experiences tmux sessions along with you,
+keeps observations locally while your journal is unavailable, and syncs them
+when the connection returns.
+
+Version 1.0.0 is one native executable with tmux as its runtime prerequisite.
+Supported systems are Linux on x86_64 or aarch64 and macOS on Apple silicon.
+Intel macOS, 32-bit systems, and Windows are not supported.
 
 ## Install
 
-solstone (the journal) must already be installed and running on the host this observer reports to. If it isn't, start here: https://solstone.app/install.
+Download the native release from
+[GitHub Releases](https://github.com/solpbc/solstone-tmux/releases):
 
-On the machine that will host the observer:
+- Linux tarball: install `solstone-tmux` at
+  `/usr/local/bin/solstone-tmux`.
+- Linux deb or RPM: the package installs
+  `/usr/bin/solstone-tmux` and declares its tmux dependency.
+- macOS: install the notarized pkg at
+  `/usr/local/bin/solstone-tmux`.
 
-```bash
-pipx install solstone-tmux
+See [INSTALL.md](INSTALL.md) for format-specific commands, the one-time Linux
+service cutover, verification, and uninstall instructions.
+
+Pairing and service activation are separate:
+
+```sh
+solstone-tmux setup < pairing-link.txt
 solstone-tmux install-service
-solstone-tmux setup
-```
-
-`setup` registers the observer against your journal over the local `http://localhost:5015` link, so there's no URL to type. If this machine reaches your solstone host directly instead, run `solstone-tmux setup --server-url <journal-url>`.
-
-### From source
-
-For working on solstone-tmux itself:
-
-```bash
-git clone https://github.com/solpbc/solstone-tmux.git
-cd solstone-tmux
-make install-service
-```
-
-This installs the `solstone-tmux` command via pipx and writes the systemd user unit. The manual setup steps below cover registration and config.
-
-## Manual setup
-
-If `solstone-tmux setup` isn't a good fit (no interactive shell, scripted provisioning, custom config layout), work through these steps by hand.
-
-### 1. Register an observer with your journal
-
-```bash
-journal observer create solstone-tmux
-```
-
-This prints the journal URL and API key. You'll need both for the next step.
-
-### 2. Write the config
-
-Create `~/.local/share/solstone-tmux/config/config.json`:
-
-```json
-{
-  "server_url": "http://localhost:5015",
-  "key": "<api-key-from-journal-observer-create>",
-  "stream": "<hostname>.tmux",
-  "capture_interval": 5,
-  "segment_interval": 300
-}
-```
-
-Set `stream` to `<your-hostname>.tmux` (e.g., `fedora.tmux`, `archon.tmux`). This matches the stream naming convention used by the built-in observers.
-
-Alternatively, `solstone-tmux setup` registers against your journal automatically — over the local `http://localhost:5015` link by default, or pass `--server-url` for a direct-to-remote journal.
-
-### 3. Install the systemd service
-
-```bash
-solstone-tmux install-service
-```
-
-This writes the unit file to `~/.config/systemd/user/solstone-tmux.service`, enables it, and starts it.
-
-### 4. Verify
-
-```bash
-systemctl --user status solstone-tmux
 solstone-tmux status
-journal observer list  # should show the observer as "connected"
 ```
 
-## Manual run
+`setup` reads one private-link pairing link from standard input.
+`install-service` activates the current user's systemd or launchd service.
 
-```bash
-solstone-tmux run         # foreground, ctrl-c to stop
-solstone-tmux run -v      # verbose/debug logging
-```
-
-## How it works
-
-- Polls all active tmux sessions every 5 seconds for content changes
-- Accumulates observations in 5-minute segments under `~/.local/share/solstone-tmux/captures/`
-- Background sync service uploads completed segments to your journal
-- Emits a diagnostics-only health beacon to your journal that intentionally excludes pane content and tmux session names
-- Works offline — syncs when your journal is reachable
-- Recovers incomplete segments on startup after crashes
+On first native run, Linux adopts only the previous stream, intervals,
+retention, and status-indicator settings and continues using the existing cache
+in place. Previous credentials are not copied; pairing is fresh.
 
 ## Commands
 
-| Command | What it does |
-|---------|-------------|
-| `solstone-tmux run` | Start capture + sync (default if no subcommand) |
-| `solstone-tmux setup` | Interactive config wizard |
-| `solstone-tmux install-service` | Install and start systemd user service |
-| `solstone-tmux status` | Show observer state, sync state, cache size |
+| Command | Purpose |
+| --- | --- |
+| `solstone-tmux run` | Run in the foreground; this is the default command |
+| `solstone-tmux setup` | Pair through one standard-input private link |
+| `solstone-tmux status` | Report service and sync health |
+| `solstone-tmux install-service` | Install and activate the user service |
+| `solstone-tmux uninstall-service` | Remove the owned user service |
+| `solstone-tmux --help` | Show command usage |
+| `solstone-tmux --version` | Show version and source identity |
+
+## How it works
+
+- Experiences active tmux panes every five seconds and writes changed
+  observations into five-minute segments.
+- Keeps segments under
+  `~/.local/share/solstone-tmux/captures/` and recovers incomplete work after a
+  restart.
+- Syncs sequentially and retains local data until journal custody is proven.
+- Keeps local observation running when pairing or sync is unavailable.
+- Emits diagnostics that exclude pane content and tmux session names.
 
 ## License
 

@@ -1,87 +1,211 @@
-# installing solstone-tmux
+# Installing solstone-tmux
 
-these instructions are for a coding agent and human working together. solstone-tmux experiences your tmux sessions along with you — every 5 seconds it takes in what's on each pane. lightweight, pure python, no system dependencies. works alongside a desktop observer or standalone.
+solstone-tmux experiences tmux sessions along with you and syncs completed
+observations to your journal. Version 1.0.0 is a native application and requires
+tmux.
 
-solstone must already be installed and running. if it isn't, start there: https://solstone.app/install
+Supported systems are Linux on x86_64 or aarch64 and macOS on Apple silicon.
+Intel macOS, 32-bit systems, and Windows are not supported.
 
-> **most owners install solstone-tmux from PyPI in three commands** on the machine that will host the observer: `pipx install solstone-tmux`, `solstone-tmux install-service`, then `solstone-tmux setup` (which registers against your journal over the local `http://localhost:5015` link — no URL to type). if the observer machine reaches your solstone host directly instead, run `solstone-tmux setup --server-url <journal-url>`. the instructions below are for developers building from source or troubleshooting the install.
+Download packages from the
+[solstone-tmux releases](https://github.com/solpbc/solstone-tmux/releases) page
+and verify them with the published `SHA256SUMS` signature before installation.
 
-## before you begin
+## Linux
 
-if `sol` is not in PATH, check `~/.local/bin/sol`.
+Choose one format. The deb and RPM packages install
+`/usr/bin/solstone-tmux`; the tarball installs
+`/usr/local/bin/solstone-tmux`.
 
-check if solstone-tmux is already installed and running:
+| System | Tar name | deb name | RPM name |
+| --- | --- | --- | --- |
+| Linux x86_64 | `x86_64` | `amd64` | `x86_64` |
+| Linux aarch64 | `aarch64` | `arm64` | `aarch64` |
 
+### Tarball
+
+Install tmux with your system package manager, then:
+
+```sh
+tar -xzf solstone-tmux-1.0.0-<architecture>-linux.tar.gz
+sudo install -m 0755 solstone-tmux /usr/local/bin/solstone-tmux
+/usr/local/bin/solstone-tmux --version
 ```
-systemctl --user status solstone-tmux
-journal observer list
+
+### deb
+
+```sh
+sudo apt install ./solstone-tmux_1.0.0_<architecture>.deb
+/usr/bin/solstone-tmux --version
 ```
 
-if it's already active and connected, you're done.
+The package declares its tmux dependency.
 
-## install
+### RPM
 
-the steps below install solstone-tmux from a local clone — the developer-from-source path.
+```sh
+sudo dnf install ./solstone-tmux-1.0.0-1.<architecture>.rpm
+/usr/bin/solstone-tmux --version
+```
 
-1. **clone and install the service.**
-   ```
-   git clone https://github.com/solpbc/solstone-tmux.git solstone-tmux
-   cd solstone-tmux
-   make install-service
-   ```
-   this installs the `solstone-tmux` command via pipx and sets up the systemd user unit.
+The package declares its tmux dependency.
 
-2. **run setup.**
-   ```
-   solstone-tmux setup
-   ```
-   this registers the observer against your journal over the local `http://localhost:5015` link and writes the config file. pass `--server-url <journal-url>` for a direct-to-remote journal.
+If this is a new installation, continue with [Pair and activate](#pair-and-activate).
+If a Python installation already owns `solstone-tmux.service`, complete the
+cutover below first.
 
-3. **verify.**
+### Retire a previous Python installation
+
+The native service refuses to alter a unit it did not write. A surviving
+`~/.local/bin/solstone-tmux` shim can also shadow the native executable.
+Preserve `~/.local/share/solstone-tmux`; it contains the settings and cache used
+during adoption.
+
+Set `native_bin` to `/usr/bin/solstone-tmux` for deb or RPM, or to
+`/usr/local/bin/solstone-tmux` for the tarball.
+
+<!-- legacy-python-retirement:start -->
+
+1. Stop and disable the previous user service:
+
+   ```sh
+   systemctl --user disable --now solstone-tmux.service
    ```
+
+2. Confirm that
+   `~/.config/systemd/user/solstone-tmux.service` is the previous Python unit,
+   then remove it and reload systemd:
+
+   ```sh
+   grep -Fx 'Description=Solstone Tmux Terminal Observer' \
+     ~/.config/systemd/user/solstone-tmux.service
+   rm ~/.config/systemd/user/solstone-tmux.service
+   systemctl --user daemon-reload
+   systemctl --user status solstone-tmux.service
+   ```
+
+   The final status should report that the unit is absent.
+
+3. Remove the previous package with the tool that installed it:
+
+   ```sh
+   uv tool uninstall solstone-tmux
+   ```
+
+   or:
+
+   ```sh
+   pipx uninstall solstone-tmux
+   ```
+
+4. Refresh command lookup and verify the native executable wins:
+
+   ```sh
+   hash -r
+   command -v solstone-tmux
+   ```
+
+   The result must equal the format-specific `native_bin` path above. If it
+   still resolves to `~/.local/bin/solstone-tmux`, remove that shim only after
+   confirming it belongs to the retired installation, then repeat these two
+   commands.
+
+<!-- legacy-python-retirement:end -->
+
+When no native config exists, the first native run on Linux imports the
+previous `stream`, `capture_interval`, `segment_interval`,
+`cache_retention_days`, and `status_indicator` settings and continues using the
+existing cache in place. This is limited settings adoption, not a general
+migration. Previous credentials are not carried over; pair again through
+`setup`.
+
+## macOS
+
+The notarized pkg supports Apple silicon and installs
+`/usr/local/bin/solstone-tmux`:
+
+```sh
+sudo installer -pkg solstone-tmux-1.0.0-aarch64-macos.pkg -target /
+/usr/local/bin/solstone-tmux --version
+```
+
+Install tmux before activation. The tarball contains a Developer-ID-signed
+binary, but only the pkg is notarized and stapled.
+
+## Pair and activate
+
+`setup` and `install-service` are separate steps:
+
+1. `setup` reads one private-link pairing link from standard input and stores
+   the new pairing:
+
+   ```sh
+   solstone-tmux setup < pairing-link.txt
+   ```
+
+2. `install-service` activates the observer as the current user's service:
+
+   ```sh
+   solstone-tmux install-service
    solstone-tmux status
-   systemctl --user status solstone-tmux
    ```
 
-## updating after a code change
+Run these through the format-specific absolute path during a Linux cutover if
+command lookup has not yet been refreshed. Service installation records the
+exact executable invoked; it does not assume an install prefix.
 
-```
-git pull && make install-service
-```
+To run without activating a service:
 
-`make install-service` skips CI for a fresh install, but runs `make ci` before upgrading an existing owned install. if tests fail, the upgrade aborts before touching the installed service.
-
-## optional cache retention
-
-by default, synced segments are deleted after 7 days. to change this, add `cache_retention_days` to config.json:
-
-- positive number: keep synced segments for that many days (default: `7`)
-- `0`: delete immediately after confirmed sync
-- `-1`: keep forever (never auto-delete)
-
-## status bar indicator
-
-solstone-tmux shows a ☼ symbol at the left edge of your tmux status bar while running:
-
-- **yellow ☼** — observer active, sync connected
-- **grey ☼** — observer active, sync offline (your journal unreachable or not configured)
-- **absent** — observer not running
-
-the indicator is removed automatically on clean shutdown (SIGTERM, SIGINT). if the observer is killed with SIGKILL or the system crashes, the indicator may persist. to clear it manually:
-
-```
-tmux set -g @solstone ""
+```sh
+solstone-tmux run
 ```
 
-to disable the indicator entirely, add to config.json:
+## Status indicator
 
-```json
-{
-  "status_indicator": false
-}
+By default, solstone-tmux owns a small tmux status indicator while it runs:
+
+- yellow means observation is active and sync is connected;
+- grey means observation is active and sync is unavailable;
+- absent means the observer is not running.
+
+Set `"status_indicator": false` in the native `config.json` to leave tmux
+options untouched.
+
+## Uninstall
+
+On Linux, remove the owned user service first:
+
+```sh
+solstone-tmux uninstall-service
 ```
 
-## notes
+Then remove the installed format:
 
-- if pipx is not installed: `pip install --user pipx` or install via your package manager.
-- the observer works offline — segments sync when your journal is reachable.
+```sh
+sudo apt remove solstone-tmux
+```
+
+or:
+
+```sh
+sudo dnf remove solstone-tmux
+```
+
+For a tar installation, remove `/usr/local/bin/solstone-tmux` after
+`uninstall-service` succeeds.
+
+On macOS:
+
+```sh
+/usr/local/bin/solstone-tmux uninstall-service
+sudo rm /usr/local/bin/solstone-tmux
+```
+
+These commands leave settings and cached observations in place.
+
+## Rollback window
+
+The previous Python path remains available only during the operator's short
+pre-publication cutover window. It may be restored from the operator's own
+rollback materials during that window after the native service is removed.
+The 1.0.0 release provides no long-lived Python fallback.
