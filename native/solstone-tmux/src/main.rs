@@ -12,6 +12,7 @@ use solstone_tmux::config::{RuntimeConfig, system_hostname};
 use solstone_tmux::health::{HealthWriter, StatusHealth, emit_diagnostic, read_status_health};
 use solstone_tmux::indicator::{CommandIndicatorIo, IndicatorOwnership};
 use solstone_tmux::instance_lock::InstanceLock;
+use solstone_tmux::migration::migrate_legacy_config;
 use solstone_tmux::observer::{
     NoopShutdownIndicator, ObserverConfig, SegmentManager, ShutdownIndicator, SupervisionControl,
     production_shutdown_future, run_observer, shutdown_barrier, stream_directory,
@@ -155,6 +156,8 @@ fn run_native(
     let _private_state_lock = private_link::acquire_private_state_lock(&config_root)
         .map_err(|_| "private state is already in use".to_owned())?;
     let hostname = system_hostname().map_err(|error| error.to_string())?;
+    migrate_legacy_config(platform, &data_root, &config_root, &hostname)
+        .map_err(|error| error.to_string())?;
     let config = RuntimeConfig::load(&config_root, &hostname).map_err(|error| error.to_string())?;
     let local_observer = load_local_observer(&config_root).map_err(|error| error.to_string())?;
     let tmux_path = local_observer.tmux_path;

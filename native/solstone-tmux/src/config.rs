@@ -7,7 +7,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::name::{DerivedName, NameError, derive_component};
 
@@ -25,9 +25,9 @@ pub struct RuntimeConfig {
     pub status_indicator: bool,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
-struct ConfigFile {
+pub(crate) struct ConfigFile {
     stream: Option<String>,
     capture_interval: u64,
     segment_interval: u64,
@@ -84,6 +84,10 @@ impl RuntimeConfig {
             }
         };
 
+        Self::from_config_file(&file, hostname)
+    }
+
+    pub(crate) fn from_config_file(file: &ConfigFile, hostname: &str) -> Result<Self, ConfigError> {
         if file.capture_interval == 0 {
             return Err(ConfigError::InvalidInterval {
                 field: "capture_interval",
@@ -96,7 +100,8 @@ impl RuntimeConfig {
         }
         let stream = file
             .stream
-            .map_or_else(|| default_stream(hostname), Ok)
+            .as_deref()
+            .map_or_else(|| default_stream(hostname), |stream| Ok(stream.to_owned()))
             .and_then(|identity| {
                 derive_component(&identity)
                     .map_err(|source| ConfigError::InvalidStream { identity, source })

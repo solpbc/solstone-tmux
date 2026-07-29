@@ -1,0 +1,16 @@
+{
+  "server_url": "http://localhost:5015",
+  "key": "",
+  "stream": "",
+  "capture_interval": 7,
+  "segment_interval": 600,
+  "sync_retry_delays": [
+    5,
+    30,
+    120,
+    300
+  ],
+  "sync_max_retries": 10,
+  "cache_retention_days": 14,
+  "status_indicator": false
+}
