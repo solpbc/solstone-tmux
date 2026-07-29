@@ -517,14 +517,17 @@ else
     fi
 fi
 
-# Legacy migration fixtures retain the old endpoint as inert input so tests can
-# prove it is ignored. No executable, configuration, documentation, or other
-# tracked surface may depend on that endpoint.
+# One legacy migration fixture retains one old endpoint as inert input so tests
+# can prove it is ignored. The exact count is enforced before that file is
+# exempted; no other tracked surface may depend on the endpoint.
+legacy_endpoint_fixture="native/solstone-tmux/tests/data/legacy/config-empty-stream.json"
+if [[ "$(rg -cF 'localhost:5015' "$repo_root/$legacy_endpoint_fixture" || true)" != "1" ]]; then
+    echo "$legacy_endpoint_fixture: expected exactly one inert localhost endpoint" >&2
+    failed=true
+fi
 while IFS= read -r -d '' tracked_path; do
     case "$tracked_path" in
-        native/solstone-tmux/tests/data/legacy/config.json | \
-            native/solstone-tmux/tests/data/legacy/config-empty-stream.json | \
-            scripts/check-rust-guards.sh)
+        "$legacy_endpoint_fixture" | scripts/check-rust-guards.sh)
             continue
             ;;
     esac

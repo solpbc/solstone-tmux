@@ -237,7 +237,7 @@ async fn stale_cached_observer_name_forces_reregistration() {
 }
 
 #[test]
-fn registration_binding_adds_exactly_two_actionable_diagnostics() {
+fn registration_binding_diagnostics_are_actionable() {
     assert_eq!(
         DiagnosticCode::ConfiguredStreamMismatch.as_str(),
         "configured_stream_mismatch"

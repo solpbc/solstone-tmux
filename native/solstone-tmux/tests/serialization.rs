@@ -7,8 +7,8 @@ use solstone_tmux::serialize::serialize_frame;
 use support::{golden_capture, sha256};
 
 #[test]
-fn python_main_golden_is_byte_exact() {
-    let expected = include_bytes!("data/golden/python-envelope-main.jsonl");
+fn observer_main_golden_is_byte_exact() {
+    let expected = include_bytes!("data/golden/observer-envelope-main.jsonl");
     let actual = serialize_frame(&golden_capture("main"), 1, 0.25).expect("serialize frame");
 
     assert_eq!(actual.as_slice(), expected);
@@ -24,8 +24,8 @@ fn python_main_golden_is_byte_exact() {
 }
 
 #[test]
-fn python_special_golden_preserves_raw_identity() {
-    let expected = include_bytes!("data/golden/python-envelope-special.jsonl");
+fn observer_special_golden_preserves_raw_identity() {
+    let expected = include_bytes!("data/golden/observer-envelope-special.jsonl");
     let actual =
         serialize_frame(&golden_capture("my/session name"), 2, 12.5).expect("serialize frame");
 
