@@ -165,13 +165,17 @@ scratch_home="$scratch_root/home"
 scratch_tmux="$scratch_root/tmux"
 client_pid_file="$scratch_root/tmux-client.pid"
 client_pid=""
-home_environment_set=false
-tmux_environment_set=false
+observer_pid=""
 service_installed=false
 package_installed=false
 
 cleanup() {
     set +e
+    if [[ -n "$observer_pid" ]]; then
+        SOLSTONE_TMUX_OPERATOR_CLEANUP=1 \
+            operator_exec kill -TERM "$observer_pid" >/dev/null 2>&1
+        wait "$observer_pid" >/dev/null 2>&1
+    fi
     if $service_installed; then
         SOLSTONE_TMUX_OPERATOR_CLEANUP=1 \
             HOME="$scratch_home" \
@@ -187,12 +191,6 @@ cleanup() {
     SOLSTONE_TMUX_OPERATOR_CLEANUP=1 \
         TMUX_TMPDIR="$scratch_tmux" \
         operator_exec tmux kill-server >/dev/null 2>&1
-    if $home_environment_set; then
-        SOLSTONE_TMUX_OPERATOR_CLEANUP=1 operator_exec launchctl unsetenv HOME >/dev/null 2>&1
-    fi
-    if $tmux_environment_set; then
-        SOLSTONE_TMUX_OPERATOR_CLEANUP=1 operator_exec launchctl unsetenv TMUX_TMPDIR >/dev/null 2>&1
-    fi
     if $package_installed; then
         SOLSTONE_TMUX_OPERATOR_CLEANUP=1 \
             operator_exec sudo rm -f /usr/local/bin/solstone-tmux >/dev/null 2>&1
@@ -439,10 +437,7 @@ installed_version="$(operator_exec /usr/local/bin/solstone-tmux --version)"
 operator_exec grep -Fx "solstone-tmux $product_version (source $source_commit)" \
     <<<"$installed_version"
 
-operator_exec launchctl setenv HOME "$scratch_home"
-home_environment_set=true
-operator_exec launchctl setenv TMUX_TMPDIR "$scratch_tmux"
-tmux_environment_set=true
+export TERM=xterm-256color
 TMUX_TMPDIR="$scratch_tmux" \
     operator_exec tmux -f /dev/null new-session -d -s candidate \
     "while :; do printf 'durable candidate observation\\n'; sleep 1; done"
@@ -462,6 +457,11 @@ TMUX_TMPDIR="$scratch_tmux" \
     operator_exec /usr/local/bin/solstone-tmux install-service
 operator_exec launchctl print "gui/$user_id/com.solstone.tmux" >"$scratch_root/launchd-print.txt"
 operator_exec grep -Eq '^[[:space:]]*pid = [1-9][0-9]*$' "$scratch_root/launchd-print.txt"
+HOME="$scratch_home" \
+TMUX_TMPDIR="$scratch_tmux" \
+    "$signed_executable" run \
+    >"$scratch_root/observer.stdout" 2>"$scratch_root/observer.stderr" &
+observer_pid="$!"
 # Loop variables and $1 belong to the dispatched shell.
 # shellcheck disable=SC2016
 operator_exec sh -c \
@@ -476,6 +476,17 @@ operator_exec sh -c \
      done
      exit 1' \
     sh "$scratch_home"
+operator_exec kill -TERM "$observer_pid"
+wait "$observer_pid"
+observer_pid=""
+incomplete_output="$(
+    operator_exec find "$scratch_home/Library/Application Support/solstone-tmux/captures" \
+        \( -name '*.incomplete' -o -name '*.incomplete.meta' \) -print -quit
+)"
+if [[ -n "$incomplete_output" ]]; then
+    echo "foreground macOS observer did not shut down cleanly" >&2
+    exit 1
+fi
 HOME="$scratch_home" \
 TMUX_TMPDIR="$scratch_tmux" \
     operator_exec /usr/local/bin/solstone-tmux uninstall-service
@@ -493,10 +504,6 @@ service_installed=false
 operator_exec kill -TERM "$client_pid"
 client_pid=""
 TMUX_TMPDIR="$scratch_tmux" operator_exec tmux kill-server
-operator_exec launchctl unsetenv HOME
-home_environment_set=false
-operator_exec launchctl unsetenv TMUX_TMPDIR
-tmux_environment_set=false
 operator_exec sudo rm -f /usr/local/bin/solstone-tmux
 operator_exec sudo pkgutil --forget com.solstone.tmux
 package_installed=false

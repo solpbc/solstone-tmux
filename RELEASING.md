@@ -60,8 +60,9 @@ The script refuses dirty or inconsistent source, runs guards and the locked
 gate, builds with the 14.0 deployment floor, signs and verifies the executable,
 constructs the signed-binary tarball, builds and product-signs the script-free
 pkg, notarizes and staples the pkg, verifies every payload and hash, installs
-and smokes the exact package against isolated tmux and launchd state, cleans up,
-and emits the macOS target record.
+the exact package, proves its LaunchAgent loads and unloads, foreground-smokes
+the byte-identical signed executable against isolated tmux and owner state,
+cleans up, and emits the macOS target record.
 
 The tarball claim is limited to containing a Developer-ID-signed binary. Only
 the pkg is notarized and stapled. This lane finalizes its candidate and stops;

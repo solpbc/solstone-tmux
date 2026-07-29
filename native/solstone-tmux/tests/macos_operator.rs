@@ -166,20 +166,18 @@ fn expected_command_names() -> Vec<&'static str> {
         "cmp",
         "solstone-tmux",
         "grep",
-        "launchctl",
-        "launchctl",
         "tmux",
         "sh",
         "solstone-tmux",
         "launchctl",
         "grep",
         "sh",
+        "kill",
+        "find",
         "solstone-tmux",
         "launchctl",
         "kill",
         "tmux",
-        "launchctl",
-        "launchctl",
         "sudo",
         "sudo",
         "rustc",
@@ -302,6 +300,9 @@ impl OperatorFixture {
 
 fn normalize_command(command: &str, run_root: &Path) -> String {
     let mut normalized = command.replace(run_root.to_str().expect("UTF-8 test run root"), "$RUN");
+    if normalized.starts_with("kill -TERM ") {
+        normalized = "kill -TERM $PID ".to_owned();
+    }
     while let Some(start) = normalized.find(".solstone-tmux-macos.") {
         let suffix_start = start + ".solstone-tmux-macos.".len();
         let suffix_len = normalized[suffix_start..]
@@ -338,6 +339,15 @@ if [[ "$cleanup" != "1" &&
     "$count" == "$FAKE_OPERATOR_FAIL_AT" ]]; then
     exit 97
 fi
+
+write_fixture_executable() {
+    printf '%s\n' \
+        '#!/bin/sh' \
+        "trap 'exit 0' TERM INT" \
+        'while :; do sleep 1; done' \
+        >"$1"
+    /bin/chmod 0755 "$1"
+}
 
 command_name="$1"
 shift
@@ -403,7 +413,10 @@ case "$command_name" in
             echo 1
         fi
         ;;
-    xcrun | bash | env | codesign | spctl | cmp | kill) ;;
+    xcrun | bash | env | codesign | spctl | cmp) ;;
+    kill)
+        /bin/kill "$@" 2>/dev/null || true
+        ;;
     mktemp)
         /usr/bin/mktemp "$@"
         ;;
@@ -464,8 +477,7 @@ case "$command_name" in
     install)
         destination="${*: -1}"
         /bin/mkdir -p "${destination%/*}"
-        printf 'fixture executable\n' >"$destination"
-        /bin/chmod 0755 "$destination"
+        write_fixture_executable "$destination"
         ;;
     date)
         echo 202311142213.20
@@ -499,8 +511,7 @@ case "$command_name" in
                 previous="$argument"
             done
             /bin/mkdir -p "$destination"
-            printf 'fixture executable\n' >"$destination/solstone-tmux"
-            /bin/chmod 0755 "$destination/solstone-tmux"
+            write_fixture_executable "$destination/solstone-tmux"
         fi
         ;;
     gzip)
@@ -516,8 +527,7 @@ case "$command_name" in
             --expand-full)
                 destination="${*: -1}"
                 /bin/mkdir -p "$destination/Payload/usr/local/bin"
-                printf 'fixture executable\n' >"$destination/Payload/usr/local/bin/solstone-tmux"
-                /bin/chmod 0755 "$destination/Payload/usr/local/bin/solstone-tmux"
+                write_fixture_executable "$destination/Payload/usr/local/bin/solstone-tmux"
                 ;;
             --payload-files)
                 echo "usr/local/bin/solstone-tmux"
