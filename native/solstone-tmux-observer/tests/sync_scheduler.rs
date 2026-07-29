@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use solstone_tmux_observer::clock::{Clock, TestClock};
 use solstone_tmux_observer::health::{DiagnosticCode, HEALTH_FILENAME, HealthWriter};
@@ -32,12 +32,14 @@ use solstone_tmux_observer::sync::{
 };
 use support::TestDirectory;
 use time::{Date, Month, PrimitiveDateTime, Time, UtcOffset};
+use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::{mpsc, oneshot};
 
 const DAY: &str = "20260701";
 const STREAM: &str = "host.tmux";
 const FILE: &str = "tmux_main_screen.jsonl";
 const SCHEDULER_TURNS: usize = 1_024;
+const WAIT_CEILING: Duration = Duration::from_secs(5);
 
 #[test]
 fn startup_finalization_and_periodic_wakes_converge_on_a_rescan() {
@@ -228,6 +230,31 @@ fn scheduler_immediately_drains_the_remainder_of_a_bounded_sweep() {
 
         let _ = stop.send(());
         task.await.expect("join scheduler");
+    });
+}
+
+#[test]
+fn upload_wait_is_bounded_and_channel_closure_short_circuits() {
+    paused(async {
+        let (silent_sender, mut silent_calls) = mpsc::unbounded_channel::<ObservedCall>();
+        let bound = Duration::from_millis(25);
+        let started = Instant::now();
+        let result = wait_for_upload(&mut silent_calls, bound).await;
+        let elapsed = started.elapsed();
+        assert_eq!(result, Err(ObservationWaitError::DeadlineExpired));
+        assert!(elapsed >= bound, "upload wait returned before its deadline");
+        drop(silent_sender);
+
+        let (closed_sender, mut closed_calls) = mpsc::unbounded_channel::<ObservedCall>();
+        drop(closed_sender);
+        let started = Instant::now();
+        let result = wait_for_upload(&mut closed_calls, WAIT_CEILING).await;
+        let elapsed = started.elapsed();
+        assert_eq!(result, Err(ObservationWaitError::ChannelClosed));
+        assert!(
+            elapsed < Duration::from_secs(1),
+            "closed upload channel did not short-circuit"
+        );
     });
 }
 
@@ -715,6 +742,12 @@ enum ObservedCall {
     Listing(String),
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum ObservationWaitError {
+    DeadlineExpired,
+    ChannelClosed,
+}
+
 struct FakeJournal {
     calls: mpsc::UnboundedSender<ObservedCall>,
     list_outcomes: VecDeque<Result<SegmentsEnvelope, SyncOperationError>>,
@@ -951,27 +984,72 @@ fn failure<T>(class: SyncFailureClass) -> Result<T, SyncOperationError> {
 }
 
 async fn expect_listing(calls: &mut mpsc::UnboundedReceiver<ObservedCall>, context: &str) {
-    for _ in 0..SCHEDULER_TURNS {
-        while let Ok(call) = calls.try_recv() {
-            if matches!(call, ObservedCall::Listing(_)) {
-                return;
+    match wait_for_call(calls, WAIT_CEILING, |call| match call {
+        ObservedCall::Listing(_) => Some(()),
+        _ => None,
+    })
+    .await
+    {
+        Ok(()) => {}
+        Err(ObservationWaitError::DeadlineExpired) => {
+            panic!("scheduler did not make the expected listing contact: {context}")
+        }
+        Err(ObservationWaitError::ChannelClosed) => {
+            panic!(
+                "scheduler did not make the expected listing contact: {context}: observation channel closed"
+            )
+        }
+    }
+}
+
+async fn wait_for_call<T>(
+    calls: &mut mpsc::UnboundedReceiver<ObservedCall>,
+    bound: Duration,
+    mut match_call: impl FnMut(ObservedCall) -> Option<T>,
+) -> Result<T, ObservationWaitError> {
+    let deadline = Instant::now() + bound;
+    loop {
+        loop {
+            match calls.try_recv() {
+                Ok(call) => {
+                    if let Some(value) = match_call(call) {
+                        return Ok(value);
+                    }
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    return Err(ObservationWaitError::ChannelClosed);
+                }
             }
+        }
+        if Instant::now() >= deadline {
+            return Err(ObservationWaitError::DeadlineExpired);
         }
         tokio::task::yield_now().await;
     }
-    panic!("scheduler did not make the expected listing contact: {context}");
+}
+
+async fn wait_for_upload(
+    calls: &mut mpsc::UnboundedReceiver<ObservedCall>,
+    bound: Duration,
+) -> Result<String, ObservationWaitError> {
+    wait_for_call(calls, bound, |call| match call {
+        ObservedCall::Upload(segment) => Some(segment),
+        _ => None,
+    })
+    .await
 }
 
 async fn expect_upload(calls: &mut mpsc::UnboundedReceiver<ObservedCall>) -> String {
-    for _ in 0..SCHEDULER_TURNS {
-        while let Ok(call) = calls.try_recv() {
-            if let ObservedCall::Upload(segment) = call {
-                return segment;
-            }
+    match wait_for_upload(calls, WAIT_CEILING).await {
+        Ok(segment) => segment,
+        Err(ObservationWaitError::DeadlineExpired) => {
+            panic!("scheduler did not attempt the expected candidate: deadline expired")
         }
-        tokio::task::yield_now().await;
+        Err(ObservationWaitError::ChannelClosed) => {
+            panic!("scheduler did not attempt the expected candidate: observation channel closed")
+        }
     }
-    panic!("scheduler did not attempt the expected candidate");
 }
 
 async fn assert_no_listing(calls: &mut mpsc::UnboundedReceiver<ObservedCall>) {
@@ -1009,16 +1087,19 @@ async fn advance_both(clock: &TestClock, duration: Duration) {
 }
 
 async fn wait_for_idle_snapshot(root: &Path) -> serde_json::Value {
-    for _ in 0..SCHEDULER_TURNS {
+    let deadline = Instant::now() + WAIT_CEILING;
+    loop {
         if let Ok(bytes) = std::fs::read(root.join(HEALTH_FILENAME))
             && let Ok(snapshot) = serde_json::from_slice::<serde_json::Value>(&bytes)
             && snapshot["sync_in_progress"] == false
         {
             return snapshot;
         }
+        if Instant::now() >= deadline {
+            panic!("scheduler did not publish its idle health snapshot");
+        }
         tokio::task::yield_now().await;
     }
-    panic!("scheduler did not publish its idle health snapshot");
 }
 
 fn paused(future: impl Future<Output = ()>) {
