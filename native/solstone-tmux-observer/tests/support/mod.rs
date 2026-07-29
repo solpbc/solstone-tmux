@@ -3,6 +3,8 @@
 
 #![allow(dead_code)]
 
+pub mod private_link_peer;
+
 use std::collections::{HashMap, VecDeque};
 use std::ffi::OsString;
 use std::fs;
@@ -12,6 +14,8 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
+use serde::Deserialize;
+use serde_json::Value;
 use solstone_tmux_observer::command::{
     CommandError, CommandInvocation, CommandOutput, CommandRunner,
 };
@@ -263,6 +267,38 @@ impl Drop for TestDirectory {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.0);
     }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct ObserverWireFixture {
+    pub id: String,
+    pub kind: String,
+    pub payload: Value,
+    pub provenance: Value,
+    pub schema_validation: Value,
+}
+
+#[derive(Deserialize)]
+struct ObserverWireBundle {
+    fixtures: Vec<ObserverWireFixture>,
+}
+
+pub fn observer_wire_fixture(id: &str) -> ObserverWireFixture {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("vendor/observer-client-contract/fixtures/wire-behavior.json");
+    let bytes = fs::read(path).expect("read observer wire fixture bundle");
+    let bundle = serde_json::from_slice::<ObserverWireBundle>(&bytes)
+        .expect("parse observer fixture bundle");
+    let mut matches = bundle
+        .fixtures
+        .into_iter()
+        .filter(|fixture| fixture.id == id);
+    let fixture = matches.next().expect("named observer fixture exists");
+    assert!(
+        matches.next().is_none(),
+        "observer fixture identifier is unique"
+    );
+    fixture
 }
 
 pub fn golden_capture(session: &str) -> CaptureResult {

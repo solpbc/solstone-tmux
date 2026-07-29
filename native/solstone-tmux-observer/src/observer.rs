@@ -9,15 +9,18 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use time::{OffsetDateTime, UtcOffset};
+use tokio::sync::watch;
 use tokio::task::{JoinError, JoinSet};
 
 use crate::clock::{Clock, local_date_and_time};
 use crate::command::CommandRunner;
+use crate::health::DiagnosticCode;
 use crate::indicator::{IndicatorIo, IndicatorOwnership};
 use crate::instance_lock::InstanceLock;
 use crate::model::CaptureResult;
 use crate::name::DerivedName;
 use crate::segment::{SegmentClose, SegmentError, SegmentState};
+use crate::sync::{SyncActivity, SyncWake};
 use crate::tmux::{TmuxAdapter, WarningSink};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -80,6 +83,7 @@ pub struct SegmentManager {
     data_root: PathBuf,
     stream: DerivedName,
     local_offset: UtcOffset,
+    sync_wake: SyncWake,
 }
 
 impl SegmentManager {
@@ -88,12 +92,14 @@ impl SegmentManager {
         data_root: PathBuf,
         stream: DerivedName,
         local_offset: UtcOffset,
+        sync_wake: SyncWake,
     ) -> Self {
         Self {
             segment,
             data_root,
             stream,
             local_offset,
+            sync_wake,
         }
     }
 }
@@ -107,9 +113,11 @@ impl SegmentLifecycle for SegmentManager {
         segment_interval: Duration,
     ) -> Result<(), ObserverOperationError> {
         if self.segment.rotation_due(monotonic_now, segment_interval) {
-            self.segment
+            let close = self
+                .segment
                 .finalize(monotonic_now)
                 .map_err(operation_error)?;
+            self.sync_wake.segment_closed(&close);
             let stream_dir =
                 stream_directory(&self.data_root, &self.stream, wall_now, self.local_offset)?;
             self.segment =
@@ -139,9 +147,12 @@ impl SegmentLifecycle for SegmentManager {
         &mut self,
         monotonic_now: Duration,
     ) -> Result<SegmentClose, ObserverOperationError> {
-        self.segment
+        let close = self
+            .segment
             .finalize(monotonic_now)
-            .map_err(operation_error)
+            .map_err(operation_error)?;
+        self.sync_wake.segment_closed(&close);
+        Ok(close)
     }
 }
 
@@ -162,12 +173,39 @@ fn operation_error(error: SegmentError) -> ObserverOperationError {
 }
 
 pub trait ShutdownIndicator: Send {
+    fn set_activity<'a>(
+        &'a mut self,
+        _activity: SyncActivity,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ObserverOperationError>> + Send + 'a>> {
+        Box::pin(async { Ok(()) })
+    }
+
     fn restore<'a>(
         &'a mut self,
     ) -> Pin<Box<dyn Future<Output = Result<(), ObserverOperationError>> + Send + 'a>>;
 }
 
 impl<I: IndicatorIo> ShutdownIndicator for IndicatorOwnership<I> {
+    fn set_activity<'a>(
+        &'a mut self,
+        activity: SyncActivity,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ObserverOperationError>> + Send + 'a>> {
+        Box::pin(async move {
+            let value = match activity {
+                SyncActivity::Idle => crate::indicator::OBSERVING_VALUE,
+                SyncActivity::Working => crate::indicator::SYNCING_VALUE,
+            };
+            self.update_solstone(value.to_owned())
+                .await
+                .map(|_| ())
+                .map_err(|_| {
+                    ObserverOperationError(
+                        DiagnosticCode::IndicatorUpdateFailed.message().to_owned(),
+                    )
+                })
+        })
+    }
+
     fn restore<'a>(
         &'a mut self,
     ) -> Pin<Box<dyn Future<Output = Result<(), ObserverOperationError>> + Send + 'a>> {
@@ -186,8 +224,6 @@ impl LifecycleLock for InstanceLock {}
 pub async fn run_observer(
     provider: Arc<dyn CaptureProvider>,
     mut segment: Box<dyn SegmentLifecycle>,
-    mut indicator: Box<dyn ShutdownIndicator>,
-    instance_lock: Box<dyn LifecycleLock>,
     clock: Arc<dyn Clock>,
     mut shutdown: Pin<Box<dyn Future<Output = ShutdownEvent> + Send>>,
     config: ObserverConfig,
@@ -256,7 +292,11 @@ pub async fn run_observer(
                     "blocking segment task failed: {}",
                     join_error_message(error)
                 ));
-                return finish_without_segment(indicator, instance_lock, failures, None).await;
+                return ObserverExit {
+                    exit_code: 1,
+                    shutdown_event: None,
+                    failures,
+                };
             }
         }
     };
@@ -274,12 +314,6 @@ pub async fn run_observer(
             join_error_message(error)
         )),
     }
-    if let Err(error) = indicator.restore().await {
-        failures.push(format!("indicator shutdown failed: {error}"));
-    }
-    drop(indicator);
-    drop(instance_lock);
-
     ObserverExit {
         exit_code: i32::from(!failures.is_empty()),
         shutdown_event,
@@ -287,46 +321,128 @@ pub async fn run_observer(
     }
 }
 
-async fn finish_without_segment(
+pub async fn supervise_observer<O, S>(
+    observer: O,
+    sync: S,
     mut indicator: Box<dyn ShutdownIndicator>,
     instance_lock: Box<dyn LifecycleLock>,
-    mut failures: Vec<String>,
-    shutdown_event: Option<ShutdownEvent>,
+    mut activity: watch::Receiver<SyncActivity>,
+    sync_stop: watch::Sender<bool>,
+    observer_stop: watch::Sender<Option<ShutdownEvent>>,
+) -> ObserverExit
+where
+    O: Future<Output = ObserverExit> + Send + 'static,
+    S: Future<Output = Result<(), DiagnosticCode>> + Send + 'static,
+{
+    let mut observer_task = tokio::spawn(observer);
+    let mut sync_task = tokio::spawn(sync);
+    let mut activity_open = true;
+    let (mut exit, sync_finished) = loop {
+        tokio::select! {
+            result = &mut observer_task => {
+                let exit = match result {
+                    Ok(exit) => exit,
+                    Err(error) => ObserverExit {
+                        exit_code: 1,
+                        shutdown_event: None,
+                        failures: vec![format!(
+                            "observer task failed: {}",
+                            join_error_message(error)
+                        )],
+                    },
+                };
+                break (exit, false);
+            }
+            result = &mut sync_task => {
+                let failure = match result {
+                    Ok(Ok(())) => DiagnosticCode::SyncTaskExited.message().to_owned(),
+                    Ok(Err(code)) => format!("sync task failed: {}", code.message()),
+                    Err(error) if error.is_panic() => {
+                        DiagnosticCode::SyncTaskPanicked.message().to_owned()
+                    }
+                    Err(_) => DiagnosticCode::SyncTaskCancelled.message().to_owned(),
+                };
+                break (ObserverExit {
+                    exit_code: 1,
+                    shutdown_event: None,
+                    failures: vec![failure],
+                }, true);
+            }
+            changed = activity.changed(), if activity_open => {
+                if changed.is_err() {
+                    activity_open = false;
+                } else if indicator.set_activity(*activity.borrow_and_update()).await.is_err() {
+                    sync_stop.send_replace(true);
+                    observer_stop.send_replace(Some(ShutdownEvent::Injected));
+                    let _ = sync_task.await;
+                    let observer_exit = observer_task.await.ok();
+                    let mut failures =
+                        vec![DiagnosticCode::IndicatorUpdateFailed.message().to_owned()];
+                    let shutdown_event = observer_exit.as_ref().and_then(|exit| exit.shutdown_event);
+                    if let Some(observer_exit) = observer_exit {
+                        failures.extend(observer_exit.failures);
+                    }
+                    return finish_supervision(
+                        ObserverExit {
+                            exit_code: 1,
+                            shutdown_event,
+                            failures,
+                        },
+                        indicator,
+                        instance_lock,
+                    ).await;
+                }
+            }
+        }
+    };
+
+    if sync_finished {
+        observer_stop.send_replace(Some(ShutdownEvent::Injected));
+        match observer_task.await {
+            Ok(observer_exit) => {
+                exit.failures.extend(observer_exit.failures);
+                exit.shutdown_event = observer_exit.shutdown_event;
+            }
+            Err(error) => exit.failures.push(format!(
+                "observer task failed: {}",
+                join_error_message(error)
+            )),
+        }
+    } else {
+        sync_stop.send_replace(true);
+        match sync_task.await {
+            Ok(Ok(())) => {}
+            Ok(Err(code)) => exit
+                .failures
+                .push(format!("sync task failed: {}", code.message())),
+            Err(error) if error.is_panic() => {
+                exit.failures
+                    .push(DiagnosticCode::SyncTaskPanicked.message().to_owned());
+            }
+            Err(_) => exit
+                .failures
+                .push(DiagnosticCode::SyncTaskCancelled.message().to_owned()),
+        }
+    }
+    if !exit.failures.is_empty() {
+        exit.exit_code = 1;
+    }
+    finish_supervision(exit, indicator, instance_lock).await
+}
+
+async fn finish_supervision(
+    mut exit: ObserverExit,
+    mut indicator: Box<dyn ShutdownIndicator>,
+    instance_lock: Box<dyn LifecycleLock>,
 ) -> ObserverExit {
     if let Err(error) = indicator.restore().await {
-        failures.push(format!("indicator shutdown failed: {error}"));
+        exit.failures
+            .push(format!("indicator shutdown failed: {error}"));
+        exit.exit_code = 1;
     }
     drop(indicator);
     drop(instance_lock);
-    ObserverExit {
-        exit_code: 1,
-        shutdown_event,
-        failures,
-    }
-}
-
-pub async fn supervise_observer<F>(observer: F) -> ObserverExit
-where
-    F: Future<Output = ObserverExit> + Send + 'static,
-{
-    let mut tasks = JoinSet::new();
-    tasks.spawn(observer);
-    match tasks.join_next().await {
-        Some(Ok(exit)) => exit,
-        Some(Err(error)) => ObserverExit {
-            exit_code: 1,
-            shutdown_event: None,
-            failures: vec![format!(
-                "observer task failed: {}",
-                join_error_message(error)
-            )],
-        },
-        None => ObserverExit {
-            exit_code: 1,
-            shutdown_event: None,
-            failures: vec!["observer task exited without a result".to_owned()],
-        },
-    }
+    exit
 }
 
 pub fn production_shutdown_future()

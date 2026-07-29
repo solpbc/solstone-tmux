@@ -9,6 +9,7 @@ pub const USAGE_EXIT_CODE: i32 = 2;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CliCommand {
     Run,
+    Setup,
     Status,
     InstallService,
     UninstallService,
@@ -34,6 +35,7 @@ where
     let command = match args.next() {
         None => CliCommand::Run,
         Some(value) if value == "run" => CliCommand::Run,
+        Some(value) if value == "setup" => CliCommand::Setup,
         Some(value) if value == "status" => CliCommand::Status,
         Some(value) if value == "install-service" => CliCommand::InstallService,
         Some(value) if value == "uninstall-service" => CliCommand::UninstallService,
@@ -59,5 +61,5 @@ where
 }
 
 pub const fn usage() -> &'static str {
-    "usage: solstone-tmux-observer [run|status|install-service|uninstall-service]"
+    "usage: solstone-tmux-observer [run|setup|status|install-service|uninstall-service]"
 }

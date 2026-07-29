@@ -19,6 +19,7 @@ fn missing_config_uses_hostname_defaults() {
     assert_eq!(config.stream.as_str(), "owner-host.tmux");
     assert_eq!(config.capture_interval, Duration::from_secs(5));
     assert_eq!(config.segment_interval, Duration::from_secs(300));
+    assert_eq!(config.cache_retention_days, 7);
 }
 
 #[test]
@@ -35,7 +36,7 @@ fn present_config_overrides_defaults_and_is_private() {
     let path = temporary.path().join(CONFIG_FILENAME);
     fs::write(
         &path,
-        br#"{"stream":"main","capture_interval":2,"segment_interval":30}"#,
+        br#"{"stream":"main","capture_interval":2,"segment_interval":30,"cache_retention_days":-1}"#,
     )
     .expect("write config");
     fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).expect("set config mode");
@@ -45,6 +46,7 @@ fn present_config_overrides_defaults_and_is_private() {
     assert_eq!(config.stream.as_str(), "main");
     assert_eq!(config.capture_interval, Duration::from_secs(2));
     assert_eq!(config.segment_interval, Duration::from_secs(30));
+    assert_eq!(config.cache_retention_days, -1);
     assert_eq!(
         fs::metadata(path)
             .expect("config metadata")

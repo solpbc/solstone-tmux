@@ -4,6 +4,7 @@
 mod support;
 
 use std::fs;
+use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -47,6 +48,35 @@ fn overlong_stream_name_fails_before_capture_directory_creation() {
     assert!(String::from_utf8_lossy(&output.stderr).contains("update stream in config.json"));
     assert!(fixture.data_root().join(LOCK_FILENAME).is_file());
     assert!(!fixture.data_root().join("captures").exists());
+}
+
+#[test]
+fn setup_checks_existing_run_lock_before_pairing_or_config_creation() {
+    let fixture = RunFixture::new("binary-setup-lock");
+    fs::create_dir_all(fixture.data_root()).expect("data root");
+    let _active =
+        solstone_tmux_observer::instance_lock::InstanceLock::acquire(&fixture.data_root())
+            .expect("active run lock");
+    let pair_input = "sentinel-pair-input";
+    let mut command = fixture.command_for("setup");
+    command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn().expect("spawn setup");
+    child
+        .stdin
+        .take()
+        .expect("setup stdin")
+        .write_all(pair_input.as_bytes())
+        .expect("write setup input");
+    let output = child.wait_with_output().expect("setup output");
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("setup is unavailable"));
+    assert!(!stderr.contains(pair_input));
+    assert!(!fixture.config_root().exists());
 }
 
 struct RunFixture {
@@ -109,9 +139,13 @@ impl RunFixture {
     }
 
     fn command(&self) -> Command {
+        self.command_for("run")
+    }
+
+    fn command_for(&self, subcommand: &str) -> Command {
         let mut command = Command::new(env!("CARGO_BIN_EXE_solstone-tmux-observer"));
         command
-            .arg("run")
+            .arg(subcommand)
             .env_clear()
             .envs(self.roots.entries().iter().cloned());
         command

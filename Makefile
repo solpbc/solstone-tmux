@@ -107,29 +107,32 @@ ci: .installed
 		exit 1; \
 	fi
 	@cargo deny --offline --locked check licenses sources bans
+	@targets="$$($(RUST_TARGETS))"; \
+	echo "Rust dependency graph evidence (cargo deny --offline --locked with deny.toml [graph].targets; resolution only; no compile, link, runnable, or native-artifact claim):"; \
+	while IFS= read -r target; do \
+		echo "$$target: PASS — dependency graph resolves; resolution only; no compile, link, runnable, or native-artifact claim"; \
+	done <<< "$$targets"
 	@echo ""
-	@echo "=== Checking Rust target matrix ==="
+	@echo "=== Checking Rust host compile ==="
 	@set -o pipefail; \
 	host="$$(rustc -vV | sed -n 's/^host: //p')"; \
 	targets="$$($(RUST_TARGETS))"; \
-	echo "Rust target evidence (cargo check --locked --workspace --all-targets --target <target>; no linked/native artifact claim):"; \
+	host_configured=false; \
 	while IFS= read -r target; do \
-		if $(CARGO) check --locked --workspace --all-targets --target "$$target"; then \
-			if [[ "$$target" == "$$host" ]]; then \
-				echo "$$target: PASS — host cargo check; no executable linked"; \
-			else \
-				echo "$$target: PASS — cross-target type/check only; no native binary produced"; \
-			fi; \
-		else \
-			status=$$?; \
-			if [[ "$$target" == "$$host" ]]; then \
-				echo "$$target: FAIL — host cargo check; no executable linked"; \
-			else \
-				echo "$$target: FAIL — cross-target type/check only; no native binary produced"; \
-			fi; \
-			exit $$status; \
-		fi; \
-	done <<< "$$targets"
+		if [[ "$$target" == "$$host" ]]; then host_configured=true; fi; \
+	done <<< "$$targets"; \
+	if [[ "$$host_configured" != true ]]; then \
+		echo "host target is absent from rust-toolchain.toml" >&2; \
+		exit 1; \
+	fi; \
+	echo "Rust host compile evidence (cargo check --locked --workspace --all-targets; host only; no executable linked; no native-artifact claim):"; \
+	if $(CARGO) check --locked --workspace --all-targets; then \
+		echo "$$host: PASS — host cargo check; no executable linked; no native-artifact claim"; \
+	else \
+		status=$$?; \
+		echo "$$host: FAIL — host cargo check; no executable linked; no native-artifact claim"; \
+		exit $$status; \
+	fi
 	@echo ""
 	@echo "All CI checks passed!"
 

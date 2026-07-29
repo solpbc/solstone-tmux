@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use solstone_tmux_observer::clock::{Clock, TestClock};
+use solstone_tmux_observer::health::DiagnosticCode;
 use solstone_tmux_observer::model::CaptureResult;
 use solstone_tmux_observer::name::{DerivedName, derive_component};
 use solstone_tmux_observer::observer::{
@@ -19,6 +20,7 @@ use solstone_tmux_observer::observer::{
     stream_directory, supervise_observer,
 };
 use solstone_tmux_observer::segment::{SegmentClose, SegmentState};
+use solstone_tmux_observer::sync::{SyncActivity, SyncWake};
 use support::{TestDirectory, golden_capture};
 use time::{Date, Month, OffsetDateTime, PrimitiveDateTime, Time, UtcOffset};
 
@@ -64,7 +66,13 @@ fn signal_future_maps_to_same_shutdown_event() {
 fn nonempty_segment_finalizes_exactly_once() {
     let (temporary, segment, clock, data_root, stream) = actual_segment("lifecycle-finalize", true);
     let segment_stream = segment.stream_dir().to_owned();
-    let manager = SegmentManager::new(segment, data_root, stream, clock.local_offset());
+    let manager = SegmentManager::new(
+        segment,
+        data_root,
+        stream,
+        clock.local_offset(),
+        SyncWake::default(),
+    );
 
     let exit = run_with_clock(
         Box::new(manager),
@@ -92,7 +100,13 @@ fn confirmed_empty_segment_is_removed() {
     let (temporary, segment, clock, data_root, stream) = actual_segment("lifecycle-empty", false);
     let source = segment.incomplete_dir().to_owned();
     let metadata = segment.metadata_path().to_owned();
-    let manager = SegmentManager::new(segment, data_root, stream, clock.local_offset());
+    let manager = SegmentManager::new(
+        segment,
+        data_root,
+        stream,
+        clock.local_offset(),
+        SyncWake::default(),
+    );
 
     let exit = run_with_clock(
         Box::new(manager),
@@ -136,7 +150,13 @@ fn finalize_failure_exits_nonzero_and_keeps_source() {
     let source = segment.incomplete_dir().to_owned();
     let collision = segment.stream_dir().join("120000_005");
     std::fs::create_dir(&collision).expect("create finalization collision");
-    let manager = SegmentManager::new(segment, data_root, stream, clock.local_offset());
+    let manager = SegmentManager::new(
+        segment,
+        data_root,
+        stream,
+        clock.local_offset(),
+        SyncWake::default(),
+    );
 
     let exit = run_with_clock(
         Box::new(manager),
@@ -178,7 +198,7 @@ fn unexpected_task_exit_surfaces_cause() {
 
 #[test]
 fn panic_string_payload_surfaces_and_exits_nonzero() {
-    let exit = runtime().block_on(supervise_observer(panic_with_string()));
+    let exit = supervise_test(panic_with_string());
     assert_eq!(exit.exit_code, 1);
     assert!(
         exit.failures
@@ -189,7 +209,7 @@ fn panic_string_payload_surfaces_and_exits_nonzero() {
 
 #[test]
 fn nonstring_panic_is_reported() {
-    let exit = runtime().block_on(supervise_observer(panic_without_string()));
+    let exit = supervise_test(panic_without_string());
     assert_eq!(exit.exit_code, 1);
     assert!(
         exit.failures
@@ -231,18 +251,56 @@ fn run_with_clock(
     provider: Arc<dyn CaptureProvider>,
     clock: Arc<dyn Clock>,
 ) -> ObserverExit {
-    runtime().block_on(run_observer(
-        provider,
-        segment,
+    runtime().block_on(async move {
+        let observer = run_observer(
+            provider,
+            segment,
+            clock,
+            shutdown,
+            ObserverConfig {
+                capture_interval: Duration::from_millis(10),
+                segment_interval: Duration::from_secs(300),
+            },
+        );
+        supervise_test_future(observer, indicator, instance_lock).await
+    })
+}
+
+fn supervise_test(observer: impl Future<Output = ObserverExit> + Send + 'static) -> ObserverExit {
+    runtime().block_on(supervise_test_future(
+        observer,
+        Box::new(RecordingIndicator::default()),
+        Box::new(RecordingLock::default()),
+    ))
+}
+
+async fn supervise_test_future(
+    observer: impl Future<Output = ObserverExit> + Send + 'static,
+    indicator: Box<dyn ShutdownIndicator>,
+    instance_lock: Box<dyn LifecycleLock>,
+) -> ObserverExit {
+    let (_activity, activity_receiver) = tokio::sync::watch::channel(SyncActivity::Idle);
+    let (sync_stop, mut sync_shutdown) = tokio::sync::watch::channel(false);
+    let (observer_stop, _observer_shutdown) =
+        tokio::sync::watch::channel::<Option<ShutdownEvent>>(None);
+    let sync = async move {
+        while !*sync_shutdown.borrow_and_update() {
+            if sync_shutdown.changed().await.is_err() {
+                break;
+            }
+        }
+        Ok::<(), DiagnosticCode>(())
+    };
+    supervise_observer(
+        observer,
+        sync,
         indicator,
         instance_lock,
-        clock,
-        shutdown,
-        ObserverConfig {
-            capture_interval: Duration::from_millis(10),
-            segment_interval: Duration::from_secs(300),
-        },
-    ))
+        activity_receiver,
+        sync_stop,
+        observer_stop,
+    )
+    .await
 }
 
 fn runtime() -> tokio::runtime::Runtime {

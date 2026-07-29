@@ -8,8 +8,10 @@ use std::sync::{Arc, Mutex};
 
 use solstone_tmux_observer::indicator::{
     IndicatorError, IndicatorIo, IndicatorOwnership, OBSERVING_VALUE, OptionValue, SOLSTONE_OPTION,
-    STATUS_LEFT,
+    STATUS_LEFT, SYNCING_VALUE,
 };
+use solstone_tmux_observer::observer::ShutdownIndicator;
+use solstone_tmux_observer::sync::SyncActivity;
 
 const WRITTEN_STATUS_LEFT: &str = "owner status | ☼ #{@solstone} ☼";
 const NORMALIZED_STATUS_LEFT: &str = "owner status | _ #{@solstone} _";
@@ -36,6 +38,32 @@ async fn production_install_uses_native_indicator_values() {
         OptionValue::Present(OBSERVING_VALUE.to_owned())
     );
     ownership.restore().await.expect("restore");
+}
+
+#[tokio::test]
+async fn activity_seam_sets_yellow_only_while_working() {
+    let io = MemoryIndicator::with([
+        (STATUS_LEFT, OptionValue::Present("owner status".to_owned())),
+        (SOLSTONE_OPTION, OptionValue::Absent),
+    ]);
+    let mut ownership = IndicatorOwnership::install_default(io.clone())
+        .await
+        .expect("install production indicator");
+
+    ShutdownIndicator::set_activity(&mut ownership, SyncActivity::Working)
+        .await
+        .expect("start sync activity");
+    assert_eq!(
+        io.value(SOLSTONE_OPTION),
+        OptionValue::Present(SYNCING_VALUE.to_owned())
+    );
+    ShutdownIndicator::set_activity(&mut ownership, SyncActivity::Idle)
+        .await
+        .expect("clear sync activity");
+    assert_eq!(
+        io.value(SOLSTONE_OPTION),
+        OptionValue::Present(OBSERVING_VALUE.to_owned())
+    );
 }
 
 #[tokio::test]

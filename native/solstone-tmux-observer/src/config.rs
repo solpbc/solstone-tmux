@@ -14,12 +14,14 @@ use crate::name::{DerivedName, NameError, derive_component};
 pub const CONFIG_FILENAME: &str = "config.json";
 pub const DEFAULT_CAPTURE_INTERVAL_SECONDS: u64 = 5;
 pub const DEFAULT_SEGMENT_INTERVAL_SECONDS: u64 = 300;
+pub const DEFAULT_CACHE_RETENTION_DAYS: i64 = 7;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RuntimeConfig {
     pub stream: DerivedName,
     pub capture_interval: Duration,
     pub segment_interval: Duration,
+    pub cache_retention_days: i64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -28,6 +30,7 @@ struct ConfigFile {
     stream: Option<String>,
     capture_interval: u64,
     segment_interval: u64,
+    cache_retention_days: i64,
 }
 
 impl Default for ConfigFile {
@@ -36,6 +39,7 @@ impl Default for ConfigFile {
             stream: None,
             capture_interval: DEFAULT_CAPTURE_INTERVAL_SECONDS,
             segment_interval: DEFAULT_SEGMENT_INTERVAL_SECONDS,
+            cache_retention_days: DEFAULT_CACHE_RETENTION_DAYS,
         }
     }
 }
@@ -99,6 +103,7 @@ impl RuntimeConfig {
             stream,
             capture_interval: Duration::from_secs(file.capture_interval),
             segment_interval: Duration::from_secs(file.segment_interval),
+            cache_retention_days: file.cache_retention_days,
         })
     }
 }

@@ -48,6 +48,40 @@ fn release_never_unlinks_lock_inode() {
 }
 
 #[test]
+fn existing_lock_probe_never_creates_data_root_or_lock_file() {
+    let temporary = TestDirectory::new("existing-lock-probe");
+    let missing_data_root = temporary.path().join("missing");
+
+    assert!(
+        InstanceLock::acquire_existing(&missing_data_root)
+            .expect("inspect missing data root")
+            .is_none()
+    );
+    assert!(!missing_data_root.exists());
+
+    let data_root = temporary.path().join("present");
+    fs::create_dir(&data_root).expect("create data root");
+    assert!(
+        InstanceLock::acquire_existing(&data_root)
+            .expect("inspect missing lock")
+            .is_none()
+    );
+    assert!(!data_root.join(LOCK_FILENAME).exists());
+}
+
+#[test]
+fn existing_lock_probe_contends_with_active_run_lock() {
+    let temporary = TestDirectory::new("existing-lock-contention");
+    ensure_private_directory(temporary.path()).expect("private data root");
+    let _active = InstanceLock::acquire(temporary.path()).expect("active lock");
+
+    assert!(matches!(
+        InstanceLock::acquire_existing(temporary.path()),
+        Err(InstanceLockError::AlreadyLocked(_))
+    ));
+}
+
+#[test]
 fn status_does_not_lock() {
     let temporary = TestDirectory::new("status-no-lock");
     let roots = IsolatedRoots::new(temporary.path());

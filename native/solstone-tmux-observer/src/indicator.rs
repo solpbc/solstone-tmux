@@ -13,6 +13,7 @@ use crate::tmux::TMUX_TIMEOUT;
 pub const STATUS_LEFT: &str = "status-left";
 pub const SOLSTONE_OPTION: &str = "@solstone";
 pub const OBSERVING_VALUE: &str = "observing";
+pub const SYNCING_VALUE: &str = "syncing";
 const INDICATOR_PREFIX: &str = "#{?@solstone,#{?#{==:#{@solstone},syncing},#[fg=yellow]☼#[default],#[fg=colour245]☼#[default]},}";
 
 #[derive(Clone, Debug, Eq, PartialEq)]

@@ -281,6 +281,29 @@ impl FileStorage {
     }
 }
 
+pub fn open_regular_readonly(path: &Path) -> Result<File, StorageError> {
+    let descriptor = rustix::fs::open(
+        path,
+        rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::CLOEXEC | rustix::fs::OFlags::NOFOLLOW,
+        rustix::fs::Mode::empty(),
+    )
+    .map_err(|source| StorageError::Io {
+        stage: "open regular file",
+        path: path.to_owned(),
+        source: source.into(),
+    })?;
+    let file = File::from(descriptor);
+    let metadata = file.metadata().map_err(|source| StorageError::Io {
+        stage: "inspect regular file",
+        path: path.to_owned(),
+        source,
+    })?;
+    if !metadata.is_file() {
+        return Err(StorageError::InvalidTarget(path.to_owned()));
+    }
+    Ok(file)
+}
+
 impl DurableStorage for FileStorage {
     fn append_frame(&mut self, frame: AppendFrame<'_>) -> Result<DurableAppend, StorageError> {
         let previous_metadata =
