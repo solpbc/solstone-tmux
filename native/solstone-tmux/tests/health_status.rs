@@ -185,10 +185,13 @@ fn production_failure_paths_redact_secrets_and_owner_content() {
             .await
             .expect("start redaction registration owner");
         owner
-            .ensure_registration(&RegistrationDescriptor {
-                platform: "linux".to_owned(),
-                hostname: "redaction".to_owned(),
-            })
+            .ensure_registration(
+                &RegistrationDescriptor {
+                    platform: "linux".to_owned(),
+                    hostname: "redaction".to_owned(),
+                },
+                "redaction",
+            )
             .await
             .expect("register redaction observer");
 

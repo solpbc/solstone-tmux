@@ -39,8 +39,8 @@ fn authority_fixtures_define_registration_and_closed_success_vocabularies() {
     );
 
     let response = fixture_bytes("example.observer.register.response.200.application-json.default");
-    let registration =
-        decode_registration_response(&response, "credential-instance").expect("decode fixture");
+    let registration = decode_registration_response(&response, "credential-instance", "archon")
+        .expect("decode fixture");
     assert_eq!(registration.credential_instance_id, "credential-instance");
     assert!(!registration.key.is_empty());
     assert!(!registration.prefix.is_empty());
@@ -153,7 +153,11 @@ fn local_case_registration_ingest_location_stays_on_the_bridge() {
         let mut payload = fixture.clone();
         payload["ingest_url"] = Value::String(ingest_url.to_owned());
         let bytes = serde_json::to_vec(&payload).expect("serialize local confinement case");
-        assert_contract_error(decode_registration_response(&bytes, "credential-instance"));
+        assert_contract_error(decode_registration_response(
+            &bytes,
+            "credential-instance",
+            "archon",
+        ));
     }
 }
 
@@ -177,10 +181,13 @@ fn journal_operations_use_authority_fixtures_and_exact_streaming_multipart() {
                 .await
                 .expect("start registration owner");
             let (observer, _) = owner
-                .ensure_registration(&RegistrationDescriptor {
-                    platform: "linux".to_owned(),
-                    hostname: "archon".to_owned(),
-                })
+                .ensure_registration(
+                    &RegistrationDescriptor {
+                        platform: "linux".to_owned(),
+                        hostname: "archon".to_owned(),
+                    },
+                    "archon",
+                )
                 .await
                 .expect("register from authority fixture");
 
@@ -276,10 +283,13 @@ fn over_limit_multipart_fails_before_an_http_request() {
                 .await
                 .expect("start registration owner");
             let (observer, _) = owner
-                .ensure_registration(&RegistrationDescriptor {
-                    platform: "linux".to_owned(),
-                    hostname: "archon".to_owned(),
-                })
+                .ensure_registration(
+                    &RegistrationDescriptor {
+                        platform: "linux".to_owned(),
+                        hostname: "archon".to_owned(),
+                    },
+                    "archon",
+                )
                 .await
                 .expect("register from authority fixture");
 

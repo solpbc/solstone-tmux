@@ -125,7 +125,7 @@ pub fn system_hostname() -> Result<String, ConfigError> {
         .map_err(|error| ConfigError::InvalidHostname(error.to_string()))
 }
 
-fn default_stream(hostname: &str) -> Result<String, ConfigError> {
+pub(crate) fn default_stream(hostname: &str) -> Result<String, ConfigError> {
     let hostname = hostname.trim();
     let parts = hostname
         .split('.')

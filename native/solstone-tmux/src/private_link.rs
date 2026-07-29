@@ -286,13 +286,14 @@ pub fn persist_credential(
 pub fn load_observer(
     config_root: &Path,
     credential_instance_id: &str,
+    expected_name: &str,
 ) -> Result<Option<ObserverState>, DiagnosticCode> {
     let Some(bytes) = read_private_file(&config_root.join(OBSERVER_FILENAME))? else {
         return Ok(None);
     };
     let observer = serde_json::from_slice::<ObserverState>(&bytes)
         .map_err(|_| DiagnosticCode::PrivateStateInvalid)?;
-    if observer.credential_instance_id != credential_instance_id {
+    if observer.credential_instance_id != credential_instance_id || observer.name != expected_name {
         return Ok(None);
     }
     Ok(Some(observer))

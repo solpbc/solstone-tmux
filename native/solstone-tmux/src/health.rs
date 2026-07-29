@@ -30,6 +30,8 @@ pub enum DiagnosticCode {
     JournalTimeout,
     RegistrationFailed,
     JournalContractInvalid,
+    ConfiguredStreamMismatch,
+    RegistrationNameMismatch,
     LocalSegmentInvalid,
     RequestTooLarge,
     JournalRejected,
@@ -53,6 +55,8 @@ impl DiagnosticCode {
             Self::JournalTimeout => "journal_timeout",
             Self::RegistrationFailed => "registration_failed",
             Self::JournalContractInvalid => "journal_contract_invalid",
+            Self::ConfiguredStreamMismatch => "configured_stream_mismatch",
+            Self::RegistrationNameMismatch => "registration_name_mismatch",
             Self::LocalSegmentInvalid => "local_segment_invalid",
             Self::RequestTooLarge => "request_too_large",
             Self::JournalRejected => "journal_rejected",
@@ -76,6 +80,10 @@ impl DiagnosticCode {
             Self::JournalTimeout => "paired journal request timed out",
             Self::RegistrationFailed => "journal registration failed",
             Self::JournalContractInvalid => "journal response did not match the contract",
+            Self::ConfiguredStreamMismatch => {
+                "set stream to the hostname-derived tmux name and restart"
+            }
+            Self::RegistrationNameMismatch => "update the paired journal and retry registration",
             Self::LocalSegmentInvalid => "local segment is invalid",
             Self::RequestTooLarge => "local request exceeds the bridge limit",
             Self::JournalRejected => "journal request was rejected",
@@ -159,6 +167,8 @@ impl SyncFacts {
             self.last_error_code,
             Some(
                 DiagnosticCode::JournalContractInvalid
+                    | DiagnosticCode::ConfiguredStreamMismatch
+                    | DiagnosticCode::RegistrationNameMismatch
                     | DiagnosticCode::PrivateStateInvalid
                     | DiagnosticCode::PrivateStateIo
                     | DiagnosticCode::HealthSnapshotIo

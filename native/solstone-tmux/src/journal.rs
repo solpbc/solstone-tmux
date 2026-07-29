@@ -406,6 +406,7 @@ impl JournalClient {
         &self,
         descriptor: &RegistrationDescriptor,
         credential_instance_id: &str,
+        expected_name: &str,
     ) -> Result<ObserverState, JournalError> {
         let request = RegistrationRequest {
             platform: &descriptor.platform,
@@ -437,7 +438,7 @@ impl JournalClient {
         if status != StatusCode::OK {
             return Err(classify_error_response(status.as_u16(), &body));
         }
-        decode_registration_response(&body, credential_instance_id)
+        decode_registration_response(&body, credential_instance_id, expected_name)
     }
 
     pub fn validate_observer(&self, observer: &ObserverState) -> Result<(), DiagnosticCode> {
@@ -603,10 +604,17 @@ impl JournalClient {
 pub fn decode_registration_response(
     body: &[u8],
     credential_instance_id: &str,
+    expected_name: &str,
 ) -> Result<ObserverState, JournalError> {
     let response = serde_json::from_slice::<RegistrationResponse>(body)
         .map_err(|_| JournalError::local(DiagnosticCode::JournalContractInvalid))?;
     validate_registration(&response).map_err(JournalError::local)?;
+    // Journal registration-name behavior pinned at dbe1b0fb316fe127fa8ea55dd2aeb605546c5351.
+    if response.name != expected_name {
+        return Err(JournalError::local(
+            DiagnosticCode::RegistrationNameMismatch,
+        ));
+    }
     Ok(ObserverState {
         credential_instance_id: credential_instance_id.to_owned(),
         key: response.key,

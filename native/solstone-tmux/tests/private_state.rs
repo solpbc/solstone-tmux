@@ -65,7 +65,7 @@ fn private_state_targets_refuse_symlinks_without_changing_referents() {
 }
 
 #[test]
-fn observer_state_is_bound_to_credential_instance_without_deleting_stale_state() {
+fn observer_state_is_bound_to_credential_instance_and_expected_name() {
     let temporary = TestDirectory::new("observer-instance-binding");
     ensure_private_directory(temporary.path()).expect("private config root");
     let observer = ObserverState {
@@ -80,7 +80,7 @@ fn observer_state_is_bound_to_credential_instance_without_deleting_stale_state()
     let observer_path = temporary.path().join(OBSERVER_FILENAME);
     let original = fs::read(&observer_path).expect("read observer state");
 
-    let matching = load_observer(temporary.path(), "instance-one")
+    let matching = load_observer(temporary.path(), "instance-one", "observer-name")
         .expect("load matching observer")
         .expect("matching observer exists");
     assert!(
@@ -88,8 +88,13 @@ fn observer_state_is_bound_to_credential_instance_without_deleting_stale_state()
         "observer binding differs"
     );
     assert!(
-        load_observer(temporary.path(), "instance-two")
+        load_observer(temporary.path(), "instance-two", "observer-name")
             .expect("load stale observer")
+            .is_none()
+    );
+    assert!(
+        load_observer(temporary.path(), "instance-one", "stale-name")
+            .expect("load stale observer name")
             .is_none()
     );
     assert!(

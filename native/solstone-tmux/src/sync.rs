@@ -19,7 +19,7 @@ use tokio::sync::{Notify, watch};
 use tokio::time::Instant;
 
 use crate::clock::Clock;
-use crate::config::RuntimeConfig;
+use crate::config::{RuntimeConfig, default_stream};
 use crate::health::{DiagnosticCode, HealthWriter, SyncFacts};
 use crate::journal::{
     JournalClient, JournalError, JournalReasonCode, ListingFileStatus, LocalFile,
@@ -211,14 +211,17 @@ impl RegistrationOwner {
     pub async fn ensure_registration(
         &self,
         descriptor: &RegistrationDescriptor,
+        expected_name: &str,
     ) -> Result<(ObserverState, bool), JournalError> {
         self.token_persistence.persist_pending().await?;
         let config_root = self.config_root.clone();
         let instance_id = self.credential_instance_id.clone();
-        let existing =
-            tokio::task::spawn_blocking(move || load_observer(&config_root, &instance_id))
-                .await
-                .map_err(|_| DiagnosticCode::PrivateStateIo)??;
+        let expected = expected_name.to_owned();
+        let existing = tokio::task::spawn_blocking(move || {
+            load_observer(&config_root, &instance_id, &expected)
+        })
+        .await
+        .map_err(|_| DiagnosticCode::PrivateStateIo)??;
         if let Some(observer) = existing {
             self.journal.validate_observer(&observer)?;
             self.bridge.opener().set_registered(&observer)?;
@@ -227,7 +230,7 @@ impl RegistrationOwner {
 
         let observer = self
             .journal
-            .register(descriptor, &self.credential_instance_id)
+            .register(descriptor, &self.credential_instance_id, expected_name)
             .await?;
         let config_root = self.config_root.clone();
         let persisted = observer.clone();
@@ -977,6 +980,7 @@ struct ProductionJournal {
     credential: Credential,
     config_root: PathBuf,
     descriptor: RegistrationDescriptor,
+    configured_stream: DerivedName,
     owner: Option<RegistrationOwner>,
     observer: Option<ObserverState>,
 }
@@ -987,6 +991,7 @@ impl ProductionJournal {
         config_root: PathBuf,
         platform: PlatformKind,
         hostname: String,
+        configured_stream: DerivedName,
     ) -> Self {
         Self {
             credential,
@@ -999,6 +1004,7 @@ impl ProductionJournal {
                 .to_owned(),
                 hostname,
             },
+            configured_stream,
             owner: None,
             observer: None,
         }
@@ -1016,6 +1022,19 @@ impl SyncJournal for ProductionJournal {
         &'a mut self,
     ) -> Pin<Box<dyn Future<Output = Result<bool, SyncOperationError>> + Send + 'a>> {
         Box::pin(async move {
+            let expected_name = default_stream(&self.descriptor.hostname)
+                .ok()
+                .and_then(|stream| derive_component(&stream).ok())
+                .ok_or(SyncOperationError::EndPassDiagnostic(
+                    SyncFailureClass::Contract,
+                    DiagnosticCode::ConfiguredStreamMismatch,
+                ))?;
+            if self.configured_stream != expected_name {
+                return Err(SyncOperationError::EndPassDiagnostic(
+                    SyncFailureClass::Contract,
+                    DiagnosticCode::ConfiguredStreamMismatch,
+                ));
+            }
             if self.owner.is_none() {
                 self.owner = Some(
                     RegistrationOwner::start(self.credential.clone(), self.config_root.clone())
@@ -1027,7 +1046,7 @@ impl SyncJournal for ProductionJournal {
                 .owner
                 .as_ref()
                 .ok_or(SyncOperationError::EndPass(SyncFailureClass::Contract))?
-                .ensure_registration(&self.descriptor)
+                .ensure_registration(&self.descriptor, expected_name.as_str())
                 .await
                 .map_err(map_journal_error)?;
             self.observer = Some(observer);
@@ -1128,8 +1147,14 @@ impl SyncTask {
                 return Ok(());
             }
         };
-        let mut journal =
-            ProductionJournal::new(credential, self.config_root, self.platform, self.hostname);
+        let configured_stream = self.config.stream.clone();
+        let mut journal = ProductionJournal::new(
+            credential,
+            self.config_root,
+            self.platform,
+            self.hostname,
+            configured_stream,
+        );
         let mut scheduler = SyncScheduler::new(
             self.data_root.join("captures"),
             self.config.stream,
@@ -1187,6 +1212,8 @@ fn map_diagnostic(code: DiagnosticCode) -> SyncOperationError {
             DiagnosticCode::JournalTimeout,
         ),
         DiagnosticCode::JournalContractInvalid
+        | DiagnosticCode::ConfiguredStreamMismatch
+        | DiagnosticCode::RegistrationNameMismatch
         | DiagnosticCode::PrivateStateInvalid
         | DiagnosticCode::PrivateStateIo => {
             SyncOperationError::EndPassDiagnostic(SyncFailureClass::Contract, code)
@@ -1229,6 +1256,8 @@ fn map_journal_error(error: JournalError) -> SyncOperationError {
             ),
         },
         DiagnosticCode::JournalContractInvalid
+        | DiagnosticCode::ConfiguredStreamMismatch
+        | DiagnosticCode::RegistrationNameMismatch
         | DiagnosticCode::PrivateStateInvalid
         | DiagnosticCode::PrivateStateIo => {
             SyncOperationError::EndPassDiagnostic(SyncFailureClass::Contract, diagnostic)

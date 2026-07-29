@@ -75,10 +75,10 @@ fn bridge_registration_composes_on_the_production_runtime_shape() {
                 .await
                 .expect("start registration owner");
             owner
-                .ensure_registration(&descriptor())
+                .ensure_registration(&descriptor(), "test-name")
                 .await
                 .expect("register observer");
-            let persisted = load_observer(temporary.path(), &credential_instance_id)
+            let persisted = load_observer(temporary.path(), &credential_instance_id, "test-name")
                 .expect("load registered observer")
                 .expect("registered observer exists");
             assert!(
@@ -184,7 +184,7 @@ fn registration_rejects_unconfined_ingest_locations() {
                 "/app/observer/ingest#foreign",
             ] {
                 peer.enqueue_response(200, registration_response(ingest_url));
-                let result = owner.ensure_registration(&descriptor()).await;
+                let result = owner.ensure_registration(&descriptor(), "test-name").await;
                 assert!(
                     matches!(
                         result,
@@ -229,7 +229,7 @@ fn slow_large_multipart_preserves_capture_on_the_production_runtime() {
             .await
             .expect("start registration owner");
             let (observer, _) = owner
-                .ensure_registration(&descriptor())
+                .ensure_registration(&descriptor(), "test-name")
                 .await
                 .expect("register observer");
 
