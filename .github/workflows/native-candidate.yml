@@ -54,7 +54,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends binutils jq tmux
+          sudo apt-get install -y --no-install-recommends binutils jq ripgrep tmux
           cargo install cargo-deny --version 0.20.2 --locked
 
       - name: Run repository guards

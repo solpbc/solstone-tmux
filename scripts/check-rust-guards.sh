@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if ! command -v rg >/dev/null 2>&1; then
+    echo "required repository guard tool is unavailable: rg" >&2
+    exit 1
+fi
+
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 native_root="$repo_root/native/solstone-tmux"
 crate_roots=(
