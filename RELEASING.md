@@ -14,13 +14,11 @@ No individual lane can publish.
   real release public key.
 - The minisign private key remains outside the repository.
 
-## 0. Commit the release public key
+## 0. Committed release public key
 
-The labelled placeholder release key cannot validate a release. The release
-operator replaces it with the real public key and lands that repository-state
-change as its own commit before building any candidate. All three lanes then
-build from the resulting clean `HEAD`; do not replace the key in a
-release-calling worktree.
+The committed minisign release public key at
+`packaging/keys/solstone-tmux-release.pub` has ID `365708FAD9F80092`. All three
+candidate lanes build only from a clean `HEAD` that already contains it.
 
 ## 1. Linux candidate lanes
 
@@ -97,9 +95,6 @@ uses fixed-byte source-commit checks for the other two lanes.
 The variable contract is:
 
 - `CANDIDATE_DIRECTORY`: absolute path to the complete signed candidate.
-
-Validation fails closed while the committed public key is still the labelled
-placeholder.
 
 ## 4. Sign and publish the aggregate
 

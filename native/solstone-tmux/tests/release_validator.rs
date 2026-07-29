@@ -13,6 +13,7 @@ use std::path::Path;
 
 use flate2::Compression;
 use flate2::write::GzEncoder;
+use minisign_verify::PublicKey;
 use package_model::{
     ArtifactKind, ArtifactRecord, DEB_DEPENDS, EXECUTABLE_NAME, ExecutableRecord, Lane, PRODUCT,
     PRODUCT_VERSION, SHA256SUMS_NAME, SIGNATURE_NAME, TargetRecord, artifacts_for_lane,
@@ -333,19 +334,44 @@ fn minisign_fixtures_verify_cryptographically() {
 
 #[test]
 fn release_key_placeholder_fails_closed() {
-    let placeholder = std::fs::read(
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../packaging/keys/solstone-tmux-release.pub"),
-    )
-    .expect("read release key placeholder");
     assert_eq!(
-        validate_minisign(&placeholder, b"payload\n", b"signature\n"),
+        validate_minisign(
+            b"untrusted comment: PLACEHOLDER ONLY\nNOT_A_MINISIGN_PUBLIC_KEY\n",
+            b"payload\n",
+            b"signature\n",
+        ),
         Err(ValidationError::SignaturePlaceholder)
     );
     assert!(
         ValidationError::SignaturePlaceholder
             .to_string()
             .contains("release operator must replace")
+    );
+}
+
+#[test]
+fn committed_release_key_is_a_real_minisign_key() {
+    let public_key = std::fs::read(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../packaging/keys/solstone-tmux-release.pub"),
+    )
+    .expect("read committed release public key");
+    let public_key_text =
+        std::str::from_utf8(&public_key).expect("committed release public key should be UTF-8");
+    assert!(
+        public_key_text.ends_with('\n')
+            && !public_key_text.contains('\r')
+            && public_key_text.lines().count() == 2,
+        "committed release public key should be exactly two LF-terminated lines"
+    );
+    PublicKey::decode(public_key_text).expect("committed release public key should decode");
+    assert_eq!(
+        validate_minisign(
+            &public_key,
+            &fixture("payload.txt"),
+            &fixture("payload.txt.minisig"),
+        ),
+        Err(ValidationError::SignatureInvalid)
     );
 }
 
