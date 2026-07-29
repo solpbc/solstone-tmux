@@ -13,7 +13,9 @@ use std::time::{Duration, Instant};
 
 use solstone_tmux_observer::config::CONFIG_FILENAME;
 use solstone_tmux_observer::instance_lock::LOCK_FILENAME;
-use solstone_tmux_observer::private_link::acquire_private_state_lock;
+use solstone_tmux_observer::private_link::{
+    CREDENTIALS_FILENAME, OBSERVER_FILENAME, acquire_private_state_lock,
+};
 use solstone_tmux_observer::service::{LocalObserver, STATE_FILENAME};
 use support::{IsolatedRoots, TestDirectory};
 
@@ -52,8 +54,20 @@ fn overlong_stream_name_fails_before_capture_directory_creation() {
 }
 
 #[test]
-fn setup_checks_existing_run_lock_before_pairing_or_config_creation() {
-    let fixture = RunFixture::new("binary-setup-lock");
+fn setup_checks_existing_run_lock_before_pairing_or_private_state_creation_with_default_roots() {
+    let fixture = RunFixture::new("binary-setup-lock-default-roots");
+    assert_setup_checks_existing_run_lock_before_pairing_or_private_state_creation(fixture);
+}
+
+#[test]
+fn setup_checks_existing_run_lock_before_pairing_or_private_state_creation_with_aliased_roots() {
+    let fixture = RunFixture::new_aliased("binary-setup-lock-aliased-roots");
+    assert_setup_checks_existing_run_lock_before_pairing_or_private_state_creation(fixture);
+}
+
+fn assert_setup_checks_existing_run_lock_before_pairing_or_private_state_creation(
+    fixture: RunFixture,
+) {
     fs::create_dir_all(fixture.data_root()).expect("data root");
     let _active =
         solstone_tmux_observer::instance_lock::InstanceLock::acquire(&fixture.data_root())
@@ -77,7 +91,9 @@ fn setup_checks_existing_run_lock_before_pairing_or_config_creation() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("setup is unavailable"));
     assert!(!stderr.contains(pair_input));
-    assert!(!fixture.config_root().exists());
+    assert!(!fixture.config_root().join(CREDENTIALS_FILENAME).exists());
+    assert!(!fixture.config_root().join(OBSERVER_FILENAME).exists());
+    assert!(!fixture.data_root().join("captures").exists());
 }
 
 #[test]
@@ -102,8 +118,16 @@ struct RunFixture {
 
 impl RunFixture {
     fn new(label: &str) -> Self {
+        Self::new_with_roots(label, IsolatedRoots::new)
+    }
+
+    fn new_aliased(label: &str) -> Self {
+        Self::new_with_roots(label, IsolatedRoots::new_aliased)
+    }
+
+    fn new_with_roots(label: &str, make_roots: fn(&Path) -> IsolatedRoots) -> Self {
         let temporary = TestDirectory::new(label);
-        let roots = IsolatedRoots::new(temporary.path());
+        let roots = make_roots(temporary.path());
         let tmux = temporary.path().join("stub-bin/tmux");
         let first_child_stderr = temporary.path().join("first-child.stderr");
         fs::create_dir_all(tmux.parent().expect("stub parent")).expect("stub parent");

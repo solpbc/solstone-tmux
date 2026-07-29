@@ -12,6 +12,7 @@ use std::time::Duration;
 
 use solstone_tmux_observer::cli::{CliCommand, parse_args};
 use solstone_tmux_observer::health::DiagnosticCode;
+use solstone_tmux_observer::instance_lock::LOCK_FILENAME;
 use solstone_tmux_observer::paths::ensure_private_directory;
 use solstone_tmux_observer::private_link::{
     CREDENTIALS_FILENAME, OBSERVER_FILENAME, ObserverState, load_credential, load_observer,
@@ -107,9 +108,20 @@ fn setup_cli_accepts_no_positional_pair_link() {
 }
 
 #[test]
-fn invalid_setup_input_creates_only_config_root_and_redacts_input() {
-    let temporary = TestDirectory::new("setup-invalid-input");
+fn invalid_setup_input_creates_no_observer_runtime_state_with_default_roots() {
+    let temporary = TestDirectory::new("setup-invalid-input-default-roots");
     let roots = IsolatedRoots::new(temporary.path());
+    assert_invalid_setup_input_creates_no_observer_runtime_state(&roots);
+}
+
+#[test]
+fn invalid_setup_input_creates_no_observer_runtime_state_with_aliased_roots() {
+    let temporary = TestDirectory::new("setup-invalid-input-aliased-roots");
+    let roots = IsolatedRoots::new_aliased(temporary.path());
+    assert_invalid_setup_input_creates_no_observer_runtime_state(&roots);
+}
+
+fn assert_invalid_setup_input_creates_no_observer_runtime_state(roots: &IsolatedRoots) {
     let input = "sentinel setup input";
     let mut child = Command::new(env!("CARGO_BIN_EXE_solstone-tmux-observer"))
         .arg("setup")
@@ -132,16 +144,28 @@ fn invalid_setup_input_creates_only_config_root_and_redacts_input() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("setup input is invalid"));
     assert!(!stderr.contains(input));
-    assert!(!roots.data_root().exists());
+    assert!(!roots.data_root().join(LOCK_FILENAME).exists());
+    assert!(!roots.data_root().join("captures").exists());
     assert!(roots.config_root().is_dir());
     assert!(!roots.config_root().join(CREDENTIALS_FILENAME).exists());
     assert!(!roots.config_root().join(OBSERVER_FILENAME).exists());
 }
 
 #[test]
-fn setup_serializes_on_the_config_root_before_reading_input() {
-    let temporary = TestDirectory::new("setup-config-lock");
+fn setup_serializes_on_the_config_root_before_reading_input_with_default_roots() {
+    let temporary = TestDirectory::new("setup-config-lock-default-roots");
     let roots = IsolatedRoots::new(temporary.path());
+    assert_setup_serializes_on_the_config_root_before_reading_input(&roots);
+}
+
+#[test]
+fn setup_serializes_on_the_config_root_before_reading_input_with_aliased_roots() {
+    let temporary = TestDirectory::new("setup-config-lock-aliased-roots");
+    let roots = IsolatedRoots::new_aliased(temporary.path());
+    assert_setup_serializes_on_the_config_root_before_reading_input(&roots);
+}
+
+fn assert_setup_serializes_on_the_config_root_before_reading_input(roots: &IsolatedRoots) {
     let mut first = Command::new(env!("CARGO_BIN_EXE_solstone-tmux-observer"))
         .arg("setup")
         .env_clear()
@@ -183,7 +207,8 @@ fn setup_serializes_on_the_config_root_before_reading_input() {
     drop(first.stdin.take());
     let first = first.wait_with_output().expect("finish first setup");
     assert_eq!(first.status.code(), Some(1));
-    assert!(!roots.data_root().exists());
+    assert!(!roots.data_root().join(LOCK_FILENAME).exists());
+    assert!(!roots.data_root().join("captures").exists());
 }
 
 fn credential(instance_id: &str) -> Credential {

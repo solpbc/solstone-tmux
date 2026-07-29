@@ -211,13 +211,22 @@ pub struct IsolatedRoots {
 
 impl IsolatedRoots {
     pub fn new(base: &Path) -> Self {
+        Self::with_xdg_homes(base, base.join("data"), base.join("config"))
+    }
+
+    pub fn new_aliased(base: &Path) -> Self {
+        let shared = base.join("shared");
+        Self::with_xdg_homes(base, shared.clone(), shared)
+    }
+
+    fn with_xdg_homes(base: &Path, data_home: PathBuf, config_home: PathBuf) -> Self {
         let home = base.join("home");
         fs::create_dir(&home).expect("create synthetic HOME");
         Self {
             entries: [
                 ("HOME", home.into_os_string()),
-                ("XDG_DATA_HOME", base.join("data").into_os_string()),
-                ("XDG_CONFIG_HOME", base.join("config").into_os_string()),
+                ("XDG_DATA_HOME", data_home.into_os_string()),
+                ("XDG_CONFIG_HOME", config_home.into_os_string()),
             ],
         }
     }
