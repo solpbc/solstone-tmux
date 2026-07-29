@@ -6,6 +6,7 @@ mod package_model;
 #[path = "support/release_validator.rs"]
 mod validator;
 
+use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::io::{Cursor, Write};
 use std::path::Path;
@@ -19,8 +20,8 @@ use package_model::{
 };
 use sha2::{Digest, Sha256};
 use validator::{
-    ValidationError, validate_complete_files_for_test, validate_complete_set, validate_linux_lane,
-    validate_minisign, validate_unsigned_set,
+    ValidationError, validate_complete_files_for_test, validate_complete_files_with_hooks_for_test,
+    validate_complete_set, validate_linux_lane, validate_minisign, validate_unsigned_set,
 };
 
 const EPOCH: u64 = 1_700_000_000;
@@ -31,6 +32,45 @@ const FIXTURE_ROOT: &str = "tests/data/packaging/minisign";
 fn complete_candidate_fixture_is_accepted() {
     validate_complete_files_for_test(&complete_fixture(), EPOCH)
         .expect("complete fixture should validate");
+}
+
+#[test]
+fn unauthenticated_candidates_are_rejected_without_executing_a_probe() {
+    let signature_probe_called = Cell::new(false);
+    assert_eq!(
+        validate_complete_files_with_hooks_for_test(
+            &complete_fixture(),
+            EPOCH,
+            |_payload, _signature| Err(ValidationError::SignatureInvalid),
+            |_executable| {
+                signature_probe_called.set(true);
+                Ok(Vec::new())
+            },
+        ),
+        Err(ValidationError::SignatureInvalid)
+    );
+    assert!(!signature_probe_called.get());
+
+    let mut invalid_digest = complete_fixture();
+    let rpm = artifact(Lane::LinuxX86_64, ArtifactKind::Rpm);
+    invalid_digest
+        .get_mut(&rpm.name)
+        .expect("RPM fixture")
+        .push(0);
+    let digest_probe_called = Cell::new(false);
+    assert_eq!(
+        validate_complete_files_with_hooks_for_test(
+            &invalid_digest,
+            EPOCH,
+            |_payload, _signature| Ok(()),
+            |_executable| {
+                digest_probe_called.set(true);
+                Ok(Vec::new())
+            },
+        ),
+        Err(ValidationError::DigestMismatch)
+    );
+    assert!(!digest_probe_called.get());
 }
 
 #[test]

@@ -4,8 +4,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs;
-use std::io::{Cursor, Read};
-use std::os::unix::fs::PermissionsExt;
+use std::io::{Cursor, Read, Write};
+use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::{Component, Path};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -122,23 +122,8 @@ pub fn validate_minisign(
 
 pub fn validate_complete_set(candidate_root: &Path) -> Result<(), ValidationError> {
     let files = read_candidate_directory(candidate_root, &complete_candidate_names())?;
-    let x86_tar = ARTIFACTS
-        .iter()
-        .find(|artifact| artifact.lane == Lane::LinuxX86_64 && artifact.kind == ArtifactKind::TarGz)
-        .ok_or(ValidationError::CandidateSet)?;
-    let executable = inspect_tar(
-        files
-            .get(&x86_tar.name)
-            .ok_or(ValidationError::CandidateSet)?,
-        x86_tar,
-        None,
-    )?
-    .binary;
-    let source_commit = run_version_probe(&executable)?;
-    let epoch = git_source_epoch(&source_commit)?;
     validate_complete_files(
         &files,
-        epoch,
         |payload, signature| {
             let public_key = fs::read(
                 Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -147,7 +132,8 @@ pub fn validate_complete_set(candidate_root: &Path) -> Result<(), ValidationErro
             .map_err(|_| ValidationError::Io)?;
             validate_minisign(&public_key, payload, signature)
         },
-        embedded_version_output,
+        git_source_epoch,
+        run_version_probe,
     )
 }
 
@@ -161,25 +147,11 @@ pub fn validate_unsigned_set(candidate_root: &Path) -> Result<(), ValidationErro
     files.insert(SHA256SUMS_NAME.to_owned(), sums);
     files.insert(SIGNATURE_NAME.to_owned(), b"unsigned validation\n".to_vec());
 
-    let x86_tar = ARTIFACTS
-        .iter()
-        .find(|artifact| artifact.lane == Lane::LinuxX86_64 && artifact.kind == ArtifactKind::TarGz)
-        .ok_or(ValidationError::CandidateSet)?;
-    let executable = inspect_tar(
-        files
-            .get(&x86_tar.name)
-            .ok_or(ValidationError::CandidateSet)?,
-        x86_tar,
-        None,
-    )?
-    .binary;
-    let source_commit = run_version_probe(&executable)?;
-    let epoch = git_source_epoch(&source_commit)?;
     validate_complete_files(
         &files,
-        epoch,
         |_payload, _signature| Ok(()),
-        embedded_version_output,
+        git_source_epoch,
+        run_version_probe,
     )
 }
 
@@ -291,16 +263,30 @@ pub fn validate_complete_files_for_test(
 ) -> Result<(), ValidationError> {
     validate_complete_files(
         files,
-        epoch,
         |_payload, _signature| Ok(()),
+        |_source_commit| Ok(epoch),
         embedded_version_output,
+    )
+}
+
+pub fn validate_complete_files_with_hooks_for_test(
+    files: &BTreeMap<String, Vec<u8>>,
+    epoch: u64,
+    verify_signature: impl Fn(&[u8], &[u8]) -> Result<(), ValidationError>,
+    version_output: impl Fn(&[u8]) -> Result<Vec<u8>, ValidationError>,
+) -> Result<(), ValidationError> {
+    validate_complete_files(
+        files,
+        verify_signature,
+        |_source_commit| Ok(epoch),
+        version_output,
     )
 }
 
 fn validate_complete_files(
     files: &BTreeMap<String, Vec<u8>>,
-    epoch: u64,
     verify_signature: impl Fn(&[u8], &[u8]) -> Result<(), ValidationError>,
+    source_epoch: impl Fn(&str) -> Result<u64, ValidationError>,
     version_output: impl Fn(&[u8]) -> Result<Vec<u8>, ValidationError>,
 ) -> Result<(), ValidationError> {
     let expected = complete_candidate_names()
@@ -318,6 +304,12 @@ fn validate_complete_files(
     let sums_bytes = files
         .get(SHA256SUMS_NAME)
         .ok_or(ValidationError::CandidateSet)?;
+    verify_signature(
+        sums_bytes,
+        files
+            .get(SIGNATURE_NAME)
+            .ok_or(ValidationError::CandidateSet)?,
+    )?;
     let sums = parse_sha256sums(sums_bytes).map_err(map_checksum_error)?;
     let expected_sums = checksummed_names().into_iter().collect::<BTreeSet<_>>();
     if sums.keys().cloned().collect::<BTreeSet<_>>() != expected_sums {
@@ -329,13 +321,6 @@ fn validate_complete_files(
             return Err(ValidationError::DigestMismatch);
         }
     }
-    verify_signature(
-        sums_bytes,
-        files
-            .get(SIGNATURE_NAME)
-            .ok_or(ValidationError::CandidateSet)?,
-    )?;
-
     let mut records = BTreeMap::new();
     for lane in Lane::ALL {
         let record = decode_record(
@@ -362,7 +347,41 @@ fn validate_complete_files(
         records.insert(lane, record);
     }
 
-    let mut source_commit: Option<String> = None;
+    let host_lane = Lane::LinuxX86_64;
+    let mut source_commit = None;
+    for lane in Lane::ALL {
+        let tar = ARTIFACTS
+            .iter()
+            .find(|artifact| artifact.lane == lane && artifact.kind == ArtifactKind::TarGz)
+            .ok_or(ValidationError::CandidateSet)?;
+        let executable = inspect_tar(
+            files.get(&tar.name).ok_or(ValidationError::CandidateSet)?,
+            tar,
+            None,
+        )?
+        .binary;
+        let record = records.get(&lane).ok_or(ValidationError::Record)?;
+        if record.executable.sha256 != sha256_hex(&executable) {
+            return Err(ValidationError::ExecutableDigest);
+        }
+        let commit = parse_version_output(&embedded_version_output(&executable)?, &executable)?;
+        if source_commit
+            .as_ref()
+            .is_some_and(|existing| existing != &commit)
+        {
+            return Err(ValidationError::SourceCommit);
+        }
+        source_commit = Some(commit);
+    }
+    let source_commit = source_commit.ok_or(ValidationError::SourceCommit)?;
+    for record in records.values() {
+        if record.source_commit != source_commit {
+            return Err(ValidationError::SourceCommit);
+        }
+    }
+    let epoch = source_epoch(&source_commit)?;
+
+    let mut validated_host_executable = None;
     for spec in ARTIFACTS.iter() {
         let bytes = files.get(&spec.name).ok_or(ValidationError::CandidateSet)?;
         let packaged = match spec.kind {
@@ -373,15 +392,10 @@ fn validate_complete_files(
         let Some(executable) = packaged else {
             continue;
         };
-        let output = version_output(&executable)?;
-        let commit = parse_version_output(&output, &executable)?;
-        if source_commit
-            .as_ref()
-            .is_some_and(|existing| existing != &commit)
-        {
+        let commit = parse_version_output(&embedded_version_output(&executable)?, &executable)?;
+        if source_commit != commit {
             return Err(ValidationError::SourceCommit);
         }
-        source_commit = Some(commit.clone());
         let record = records.get(&spec.lane).ok_or(ValidationError::Record)?;
         if record.source_commit != commit {
             return Err(ValidationError::SourceCommit);
@@ -390,6 +404,18 @@ fn validate_complete_files(
             return Err(ValidationError::ExecutableDigest);
         }
         validate_executable(&executable, spec.lane.executable_architecture())?;
+        if spec.lane == host_lane && spec.kind == ArtifactKind::TarGz {
+            validated_host_executable = Some(executable);
+        }
+    }
+    let validated_host_executable =
+        validated_host_executable.ok_or(ValidationError::CandidateSet)?;
+    let executed_commit = parse_version_output(
+        &version_output(&validated_host_executable)?,
+        &validated_host_executable,
+    )?;
+    if executed_commit != source_commit {
+        return Err(ValidationError::SourceCommit);
     }
     Ok(())
 }
@@ -915,26 +941,41 @@ fn embedded_version_output(executable: &[u8]) -> Result<Vec<u8>, ValidationError
     Ok(line.to_vec())
 }
 
-fn run_version_probe(executable: &[u8]) -> Result<String, ValidationError> {
-    let path = std::env::temp_dir().join(format!(
+fn run_version_probe(executable: &[u8]) -> Result<Vec<u8>, ValidationError> {
+    let directory = std::env::temp_dir().join(format!(
         "solstone-tmux-version-probe-{}-{}",
         std::process::id(),
         PROBE_COUNTER.fetch_add(1, Ordering::Relaxed)
     ));
-    fs::write(&path, executable).map_err(|_| ValidationError::Io)?;
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o700))
+    fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&directory)
         .map_err(|_| ValidationError::Io)?;
-    let result = Command::new(&path)
-        .arg("--version")
-        .output()
-        .map_err(|_| ValidationError::VersionOutput)
-        .and_then(|output| {
-            if !output.status.success() || !output.stderr.is_empty() {
-                return Err(ValidationError::VersionOutput);
-            }
-            parse_version_output(&output.stdout, executable)
-        });
-    let _ = fs::remove_file(path);
+    let path = directory.join(EXECUTABLE_NAME);
+    let result = (|| {
+        if fs::symlink_metadata(&path).is_ok() {
+            return Err(ValidationError::CandidateType);
+        }
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .map_err(|_| ValidationError::Io)?;
+        file.write_all(executable)
+            .map_err(|_| ValidationError::Io)?;
+        file.sync_all().map_err(|_| ValidationError::Io)?;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o700))
+            .map_err(|_| ValidationError::Io)?;
+        let output = Command::new(&path)
+            .arg("--version")
+            .output()
+            .map_err(|_| ValidationError::VersionOutput)?;
+        if !output.status.success() || !output.stderr.is_empty() {
+            return Err(ValidationError::VersionOutput);
+        }
+        Ok(output.stdout)
+    })();
+    let _ = fs::remove_dir_all(directory);
     result
 }
 
