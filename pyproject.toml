@@ -1,13 +1,11 @@
 [project]
 name = "solstone-tmux"
-version = "0.3.1"
-description = "Standalone tmux terminal observer for solstone"
+version = "1.0.0"
+description = "Native installation pointer for solstone-tmux"
 readme = "README.md"
 license = "AGPL-3.0-only"
 requires-python = ">=3.10"
-dependencies = [
-    "requests",
-]
+dependencies = []
 
 [project.optional-dependencies]
 dev = [
@@ -17,11 +15,24 @@ dev = [
 ]
 
 [project.scripts]
-solstone-tmux = "solstone_tmux.cli:main"
+solstone-tmux = "solstone_tmux.pointer:main"
 
 [build-system]
 requires = ["hatchling>=1.18"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/solstone_tmux"]
+only-include = [
+    "src/solstone_tmux/__init__.py",
+    "src/solstone_tmux/pointer.py",
+]
+sources = ["src"]
+
+[tool.hatch.build.targets.sdist]
+only-include = [
+    "LICENSE",
+    "README.md",
+    "pyproject.toml",
+    "src/solstone_tmux/__init__.py",
+    "src/solstone_tmux/pointer.py",
+]

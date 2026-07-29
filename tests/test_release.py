@@ -3,7 +3,6 @@
 
 from pathlib import Path
 import os
-import shutil
 import subprocess
 import textwrap
 
@@ -111,6 +110,16 @@ def test_release_help_prints_usage():
 def test_production_path_omits_repository_url(tmp_path, monkeypatch):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    (project_dir / "pyproject.toml").write_text(
+        '[project]\nversion = "0.1.0"\n',
+        encoding="utf-8",
+    )
+    (project_dir / "CHANGELOG.md").write_text(
+        "# Changelog\n\n## [0.1.0] - 2026-05-19\n\n- release note.\n",
+        encoding="utf-8",
+    )
 
     shims = {
         "uv": """\
@@ -156,16 +165,13 @@ def test_production_path_omits_repository_url(tmp_path, monkeypatch):
     env.pop("TESTPYPI_TOKEN", None)
     monkeypatch.setenv("PATH", env["PATH"])
 
-    try:
-        result = subprocess.run(
-            ["bash", str(RELEASE_SCRIPT)],
-            cwd=REPO_ROOT,
-            env=env,
-            capture_output=True,
-            text=True,
-        )
-    finally:
-        shutil.rmtree(REPO_ROOT / "dist", ignore_errors=True)
+    result = subprocess.run(
+        ["bash", str(RELEASE_SCRIPT)],
+        cwd=project_dir,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
 
     assert result.returncode == 0, result.stderr
     uvx_log = (bin_dir / "uvx.log").read_text(encoding="utf-8")
