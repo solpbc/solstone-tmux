@@ -105,27 +105,33 @@ fi
 
 require_version git "$(git --version)" \
     "git version 2.34.1" \
-    "git version 2.43.0"
+    "git version 2.43.0" \
+    "git version 2.54.0"
 require_version rustc "$(rustc --version)" \
     "rustc 1.97.1 (8bab26f4f 2026-07-14)"
 require_version sha256sum "$(sha256sum --version | sed -n '1p')" \
     "sha256sum (GNU coreutils) 8.32" \
-    "sha256sum (GNU coreutils) 9.4"
+    "sha256sum (GNU coreutils) 9.4" \
+    "sha256sum (GNU coreutils) 9.6"
 require_version jq "$(jq --version)" \
     "jq-1.6" \
-    "jq-1.7"
+    "jq-1.7" \
+    "jq-1.7.1"
 require_version install "$(install --version | sed -n '1p')" \
     "install (GNU coreutils) 8.32" \
-    "install (GNU coreutils) 9.4"
+    "install (GNU coreutils) 9.4" \
+    "install (GNU coreutils) 9.6"
 require_version touch "$(touch --version | sed -n '1p')" \
     "touch (GNU coreutils) 8.32" \
-    "touch (GNU coreutils) 9.4"
+    "touch (GNU coreutils) 9.4" \
+    "touch (GNU coreutils) 9.6"
 require_version tar "$(tar --version | sed -n '1p')" \
     "tar (GNU tar) 1.34" \
     "tar (GNU tar) 1.35"
 require_version gzip "$(gzip --version | sed -n '1p')" \
     "gzip 1.10" \
-    "gzip 1.12"
+    "gzip 1.12" \
+    "gzip 1.13"
 require_version sed "$(sed --version | sed -n '1p')" \
     "sed (GNU sed) 4.8" \
     "sed (GNU sed) 4.9"
@@ -148,7 +154,8 @@ if [[ -n "${requested[rpm]:-}" ]]; then
     require_version rpmbuild "$(rpmbuild --version)" \
         "RPM version 4.17.0" \
         "RPM version 4.18.2" \
-        "RPM version 4.19.1.1"
+        "RPM version 4.19.1.1" \
+        "RPM version 4.20.1"
 fi
 
 if [[ ! "$source_commit" =~ ^[0-9a-f]{40}$ ]]; then
