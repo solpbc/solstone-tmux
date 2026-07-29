@@ -251,8 +251,10 @@ else
         echo "$native_candidate_workflow: expected one exact minisign canary scan entry" >&2
         failed=true
     fi
+    # Candidate lanes may install the public minisign executable for publisher
+    # tests, but they may not receive release signing material.
     signing_access="$(
-        rg -ni 'minisign|codesign|notarytool|signing[_ -]?key|secrets\.' \
+        rg -ni 'minisign[_ -]?secret|codesign|notarytool|signing[_ -]?key|secrets\.' \
             "$native_candidate_workflow" |
             while IFS=: read -r signing_line signing_text; do
                 [[ "$signing_text" == "$minisign_canary_line" ]] ||
@@ -511,7 +513,7 @@ else
     )"
     if [[ "$(rg -cF 'uv tool uninstall solstone-tmux' <<<"$retirement_block" || true)" != "1" ||
         "$(rg -cF 'pipx uninstall solstone-tmux' <<<"$retirement_block" || true)" != "1" ||
-        "$(rg -io '(^|[^[:alnum:]_])(uv|pipx)([^[:alnum:]_]|$)' <<<"$retirement_block" | wc -l)" != "2" ]]; then
+        "$(rg -io '(^|[^[:alnum:]_])(uv|pipx)([^[:alnum:]_]|$)' <<<"$retirement_block" | awk 'END { print NR }')" != "2" ]]; then
         echo "$install_file: retirement block must contain only the two approved tool references" >&2
         failed=true
     fi

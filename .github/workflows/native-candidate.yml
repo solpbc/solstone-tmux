@@ -55,6 +55,15 @@ jobs:
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends binutils jq ripgrep tmux
+          minisign_archive="$RUNNER_TEMP/minisign-0.11-linux.tar.gz"
+          curl --fail --location --silent --show-error \
+            --output "$minisign_archive" \
+            https://github.com/jedisct1/minisign/releases/download/0.11/minisign-0.11-linux.tar.gz
+          echo "f0a0954413df8531befed169e447a66da6868d79052ed7e892e50a4291af7ae0  $minisign_archive" |
+            sha256sum --check --strict
+          tar -xzf "$minisign_archive" -C "$RUNNER_TEMP"
+          install "$RUNNER_TEMP/minisign-linux/$(uname -m)/minisign" "$HOME/.cargo/bin/minisign"
+          [[ "$(minisign -v 2>&1)" == "minisign 0.11" ]]
           cargo install cargo-deny --version 0.20.2 --locked
 
       - name: Run repository guards
