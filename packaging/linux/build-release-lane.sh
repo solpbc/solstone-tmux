@@ -106,6 +106,7 @@ export HOME="$work_root/home"
 export XDG_CONFIG_HOME="$work_root/config"
 export XDG_DATA_HOME="$work_root/data"
 export TMUX_TMPDIR="$work_root/tmux"
+export TERM=xterm-256color
 mkdir -m 0700 \
     "$HOME" \
     "$XDG_CONFIG_HOME" \
@@ -120,7 +121,7 @@ script -q -c "tmux attach-session -t candidate" /dev/null \
 client_pid="$!"
 printf '{"tmux_path":"%s"}\n' "$tmux_path" \
     >"$XDG_CONFIG_HOME/solstone-tmux/local-observer.json"
-printf '{"capture_interval":1,"segment_interval":2,"status_indicator":false}\n' \
+printf '{"capture_interval":5,"segment_interval":2,"status_indicator":false}\n' \
     >"$XDG_CONFIG_HOME/solstone-tmux/config.json"
 chmod 0600 "$XDG_CONFIG_HOME/solstone-tmux/"*.json
 "$source_executable" run >"$work_root/observer.stdout" 2>"$work_root/observer.stderr" &
