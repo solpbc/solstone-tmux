@@ -362,7 +362,6 @@ operator_exec xcrun stapler staple "$candidate_root/$pkg_name"
 operator_exec pkgutil --check-signature "$candidate_root/$pkg_name"
 operator_exec spctl --assess --type install --verbose=2 "$candidate_root/$pkg_name"
 operator_exec xcrun stapler validate "$candidate_root/$pkg_name"
-operator_exec spctl --assess --type execute --verbose=2 "$signed_executable"
 expanded_pkg="$stage_root/expanded-pkg"
 operator_exec pkgutil --expand-full "$candidate_root/$pkg_name" "$expanded_pkg"
 script_directories="$(

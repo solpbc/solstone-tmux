@@ -146,7 +146,6 @@ fn expected_command_names() -> Vec<&'static str> {
         "pkgutil",
         "spctl",
         "xcrun",
-        "spctl",
         "pkgutil",
         "find",
         "grep",
