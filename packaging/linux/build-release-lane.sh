@@ -108,9 +108,10 @@ export XDG_DATA_HOME="$work_root/data"
 export TMUX_TMPDIR="$work_root/tmux"
 mkdir -m 0700 \
     "$HOME" \
-    "$XDG_CONFIG_HOME/solstone-tmux" \
+    "$XDG_CONFIG_HOME" \
     "$XDG_DATA_HOME" \
     "$TMUX_TMPDIR"
+mkdir -m 0700 "$XDG_CONFIG_HOME/solstone-tmux"
 tmux_path="$(command -v tmux)"
 tmux -f /dev/null new-session -d -s candidate \
     "while :; do printf 'durable candidate observation\\n'; sleep 1; done"
