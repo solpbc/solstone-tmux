@@ -41,6 +41,7 @@ fn operator_flow_has_one_exact_ordered_command_path() {
     assert!(commands.contains("xcrun stapler staple"));
     assert!(commands.contains("pkgbuild --root"));
     assert!(commands.contains("--install-location /"));
+    assert_eq!(commands.matches("env TZ=UTC touch -t").count(), 2);
     assert!(commands.contains("/usr/local/bin/solstone-tmux install-service"));
     assert!(commands.contains("launchctl print gui/501/com.solstone.tmux"));
     assert!(commands.contains("/usr/local/bin/solstone-tmux uninstall-service"));
@@ -132,13 +133,13 @@ fn expected_command_names() -> Vec<&'static str> {
         "mkdir",
         "install",
         "chmod",
-        "touch",
+        "env",
         "tar",
         "gzip",
         "chmod",
         "mkdir",
         "install",
-        "touch",
+        "env",
         "pkgbuild",
         "productsign",
         "xcrun",

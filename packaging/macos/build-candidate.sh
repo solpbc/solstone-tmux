@@ -311,7 +311,7 @@ operator_exec install -m 0755 "$signed_executable" "$tar_stage/solstone-tmux"
     printf '%s\n' "Install with: install -m 0755 solstone-tmux /usr/local/bin/solstone-tmux"
 } >"$tar_stage/INSTALL.md"
 operator_exec chmod 0644 "$tar_stage/INSTALL.md"
-operator_exec touch -t "$normalized_timestamp" \
+operator_exec env TZ=UTC touch -t "$normalized_timestamp" \
     "$tar_stage/INSTALL.md" \
     "$tar_stage/solstone-tmux"
 tar_name="solstone-tmux-$product_version-aarch64-macos.tar.gz"
@@ -335,7 +335,7 @@ operator_exec mkdir -m 0755 \
     "$pkg_stage/usr/local" \
     "$pkg_stage/usr/local/bin"
 operator_exec install -m 0755 "$signed_executable" "$pkg_stage/usr/local/bin/solstone-tmux"
-operator_exec touch -t "$normalized_timestamp" \
+operator_exec env TZ=UTC touch -t "$normalized_timestamp" \
     "$pkg_stage/usr/local/bin/solstone-tmux"
 component_pkg="$scratch_root/solstone-tmux-component.pkg"
 operator_exec pkgbuild \

@@ -75,6 +75,33 @@ fn unauthenticated_candidates_are_rejected_without_executing_a_probe() {
 }
 
 #[test]
+fn aggregate_validation_accepts_compiler_split_version_template() {
+    let mut files = complete_fixture();
+    for lane in Lane::ALL {
+        let mut executable = match lane {
+            Lane::LinuxX86_64 => elf_fixture(62, "2.35"),
+            Lane::LinuxAarch64 => elf_fixture(183, "2.35"),
+            Lane::MacosAarch64 => macho_fixture(14, 0),
+        };
+        executable.truncate(executable.len() - version_line().len());
+        executable.extend_from_slice(format!("{PRODUCT} {PRODUCT_VERSION} (source ").as_bytes());
+        executable.extend_from_slice(b"\xc0\x01)\0");
+        executable.extend_from_slice(COMMIT.as_bytes());
+        replace_executable_and_tar(&mut files, lane, executable);
+    }
+
+    assert_eq!(
+        validate_complete_files_with_hooks_for_test(
+            &files,
+            EPOCH,
+            |_payload, _signature| Ok(()),
+            |_executable| Ok(version_line().into_bytes()),
+        ),
+        Ok(())
+    );
+}
+
+#[test]
 fn archive_mutations_have_specific_rejections() {
     let cases = [
         (

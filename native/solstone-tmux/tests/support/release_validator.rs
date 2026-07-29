@@ -352,38 +352,17 @@ fn validate_complete_files(
     }
 
     let host_lane = host_lane()?;
-    let mut source_commit = None;
-    for lane in Lane::ALL {
-        let tar = ARTIFACTS
-            .iter()
-            .find(|artifact| artifact.lane == lane && artifact.kind == ArtifactKind::TarGz)
-            .ok_or(ValidationError::CandidateSet)?;
-        let executable = inspect_tar(
-            files.get(&tar.name).ok_or(ValidationError::CandidateSet)?,
-            tar,
-            None,
-        )?
-        .binary;
-        let record = records.get(&lane).ok_or(ValidationError::Record)?;
-        if record.executable.sha256 != sha256_hex(&executable) {
-            return Err(ValidationError::ExecutableDigest);
-        }
-        let commit = parse_version_output(&embedded_version_output(&executable)?, &executable)?;
-        if source_commit
-            .as_ref()
-            .is_some_and(|existing| existing != &commit)
-        {
-            return Err(ValidationError::SourceCommit);
-        }
-        source_commit = Some(commit);
-    }
-    let source_commit = source_commit.ok_or(ValidationError::SourceCommit)?;
+    let source_commit = records
+        .values()
+        .map(|record| record.source_commit.as_str())
+        .next()
+        .ok_or(ValidationError::SourceCommit)?;
     for record in records.values() {
         if record.source_commit != source_commit {
             return Err(ValidationError::SourceCommit);
         }
     }
-    let epoch = source_epoch(&source_commit)?;
+    let epoch = source_epoch(source_commit)?;
 
     let mut validated_host_executable = None;
     for spec in ARTIFACTS.iter() {
@@ -396,12 +375,14 @@ fn validate_complete_files(
         let Some(executable) = packaged else {
             continue;
         };
-        let commit = parse_version_output(&embedded_version_output(&executable)?, &executable)?;
-        if source_commit != commit {
+        if !executable
+            .windows(source_commit.len())
+            .any(|window| window == source_commit.as_bytes())
+        {
             return Err(ValidationError::SourceCommit);
         }
         let record = records.get(&spec.lane).ok_or(ValidationError::Record)?;
-        if record.source_commit != commit {
+        if record.source_commit != source_commit {
             return Err(ValidationError::SourceCommit);
         }
         if record.executable.sha256 != sha256_hex(&executable) {
