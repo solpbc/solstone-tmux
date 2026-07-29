@@ -17,6 +17,7 @@ const TARGET: &str = "aarch64-apple-darwin";
 const APPLICATION_IDENTITY: &str = "Developer ID Application: Test Fixture";
 const INSTALLER_IDENTITY: &str = "Developer ID Installer: Test Fixture";
 const NOTARY_PROFILE: &str = "test-notary-profile";
+const NOTARY_KEYCHAIN: &str = "/fixture/sol-signing.keychain-db";
 
 #[test]
 fn operator_flow_has_one_exact_ordered_command_path() {
@@ -38,6 +39,15 @@ fn operator_flow_has_one_exact_ordered_command_path() {
     assert!(commands.contains("--options runtime --timestamp"));
     assert!(commands.contains("productsign --sign Developer\\ ID\\ Installer"));
     assert!(commands.contains("xcrun notarytool submit"));
+    assert!(commands.contains(
+        "xcrun notarytool history --keychain-profile test-notary-profile \
+         --keychain /fixture/sol-signing.keychain-db"
+    ));
+    assert!(commands.contains(
+        "--keychain-profile test-notary-profile \
+         --keychain /fixture/sol-signing.keychain-db --wait"
+    ));
+    assert_eq!(commands.matches("--keychain ").count(), 2);
     assert!(commands.contains("xcrun stapler staple"));
     assert!(commands.contains("pkgbuild --root"));
     assert!(commands.contains("--install-location /"));
@@ -264,6 +274,7 @@ impl OperatorFixture {
             .arg(&output_path)
             .env("SOLSTONE_TMUX_SCRATCH_HOST", "1")
             .env("SOLSTONE_TMUX_OPERATOR_DISPATCHER", &self.dispatcher)
+            .env("SOLSTONE_TMUX_NOTARY_KEYCHAIN", NOTARY_KEYCHAIN)
             .env("FAKE_OPERATOR_LOG", &log)
             .env("FAKE_OPERATOR_COUNT", &count)
             .env("FAKE_OPERATOR_FAIL_AT", fail_at.to_string())

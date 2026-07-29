@@ -26,6 +26,7 @@ notary_profile="$7"
 output_directory="$8"
 script_dir="${BASH_SOURCE[0]%/*}"
 repo_root="$(cd "$script_dir/../.." && pwd)"
+notary_keychain="${SOLSTONE_TMUX_NOTARY_KEYCHAIN:-$HOME/Library/Keychains/sol-signing.keychain-db}"
 
 if [[ "${SOLSTONE_TMUX_SCRATCH_HOST:-}" != "1" ]]; then
     echo "macOS candidate installation requires an explicitly disposable scratch host" >&2
@@ -45,6 +46,10 @@ if [[ "$release_tag" != "v$product_version" ]]; then
 fi
 if [[ -z "$application_identity" || -z "$installer_identity" || -z "$notary_profile" ]]; then
     echo "signing identities and notary profile are required" >&2
+    exit 1
+fi
+if [[ "$notary_keychain" != /* ]]; then
+    echo "notary keychain must be an absolute path" >&2
     exit 1
 fi
 if [[ "$output_directory" != /* ]]; then
@@ -156,7 +161,10 @@ if ! operator_exec grep -F "$installer_identity" <<<"$installer_identities" >/de
     echo "Developer ID Installer identity is unavailable" >&2
     exit 1
 fi
-operator_exec xcrun notarytool history --keychain-profile "$notary_profile" >/dev/null
+operator_exec xcrun notarytool history \
+    --keychain-profile "$notary_profile" \
+    --keychain "$notary_keychain" \
+    >/dev/null
 
 scratch_root="$(operator_exec mktemp -d "$output_parent/.solstone-tmux-macos.XXXXXX")"
 candidate_root="$scratch_root/candidate"
@@ -354,6 +362,7 @@ operator_exec productsign \
 operator_exec xcrun notarytool submit \
     "$candidate_root/$pkg_name" \
     --keychain-profile "$notary_profile" \
+    --keychain "$notary_keychain" \
     --wait
 operator_exec xcrun stapler staple "$candidate_root/$pkg_name"
 

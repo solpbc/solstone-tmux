@@ -54,7 +54,11 @@ Run `packaging/macos/build-candidate.sh` on a disposable Apple-silicon machine.
 Pass the configured macOS target, exact commit, version, tag, Developer ID
 Application identity, Developer ID Installer identity, notary profile, and a
 new absolute output directory. Set `SOLSTONE_TMUX_SCRATCH_HOST=1` only on that
-disposable machine.
+disposable machine. The notary profile is read from the dedicated signing
+keychain at `~/Library/Keychains/sol-signing.keychain-db`; override that
+absolute path with `SOLSTONE_TMUX_NOTARY_KEYCHAIN` when the operator machine
+uses a different dedicated keychain. Unlock the keychain in the operator
+session before starting the lane.
 
 The script refuses dirty or inconsistent source, runs guards and the locked
 gate, builds with the 14.0 deployment floor, signs and verifies the executable,
