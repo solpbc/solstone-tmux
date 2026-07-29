@@ -7,12 +7,16 @@ use std::fs;
 use std::os::unix::fs::symlink;
 use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use solstone_tmux_observer::journal::{
     ListingFileStatus, SegmentFile, SegmentItem, SegmentsEnvelope, inventory_files,
 };
 use solstone_tmux_observer::name::{DerivedName, derive_component};
-use solstone_tmux_observer::sync::{RetentionOutcome, SegmentCandidate, retain_custodied_segment};
+use solstone_tmux_observer::sync::{
+    RetentionOutcome, SegmentCandidate, delete_custodied_segment,
+    delete_custodied_segment_with_hook,
+};
 use support::TestDirectory;
 use time::{Date, Month};
 
@@ -30,7 +34,7 @@ fn negative_retention_returns_before_traversing() {
         let candidate = SegmentCandidate::new("20260701", STREAM, SEGMENT);
         let listing = listing_for(&outside, &candidate, ListingFileStatus::Present).await;
 
-        let outcome = retain_custodied_segment(
+        let outcome = delete_custodied_segment(
             &alias,
             &stream(),
             today(),
@@ -60,7 +64,7 @@ fn zero_retention_deletes_older_segments_but_skips_today() {
         let current_listing =
             listing_for(&current, &current_candidate, ListingFileStatus::Present).await;
         assert_eq!(
-            retain_custodied_segment(
+            delete_custodied_segment(
                 &captures,
                 &stream(),
                 today(),
@@ -73,7 +77,7 @@ fn zero_retention_deletes_older_segments_but_skips_today() {
             RetentionOutcome::Deleted
         );
         assert_eq!(
-            retain_custodied_segment(
+            delete_custodied_segment(
                 &captures,
                 &stream(),
                 today(),
@@ -105,7 +109,7 @@ fn positive_retention_honors_the_cutoff_boundary() {
             listing_for(&cutoff, &cutoff_candidate, ListingFileStatus::Processed).await;
 
         assert_eq!(
-            retain_custodied_segment(
+            delete_custodied_segment(
                 &captures,
                 &stream(),
                 today(),
@@ -118,7 +122,7 @@ fn positive_retention_honors_the_cutoff_boundary() {
             RetentionOutcome::Deleted
         );
         assert_eq!(
-            retain_custodied_segment(
+            delete_custodied_segment(
                 &captures,
                 &stream(),
                 today(),
@@ -144,7 +148,7 @@ fn custody_is_required_before_deletion() {
         let candidate = SegmentCandidate::new("20260701", STREAM, SEGMENT);
         let listing = listing_for(&segment, &candidate, ListingFileStatus::Missing).await;
 
-        let outcome = retain_custodied_segment(
+        let outcome = delete_custodied_segment(
             &captures,
             &stream(),
             today(),
@@ -179,7 +183,7 @@ fn traversal_candidate_cannot_escape_its_stream() {
             protocol_version: 2,
         };
 
-        let outcome = retain_custodied_segment(
+        let outcome = delete_custodied_segment(
             &captures,
             &stream(),
             today(),
@@ -224,7 +228,7 @@ fn symlink_and_special_file_retain_the_whole_segment() {
                 protocol_version: 2,
             };
             assert_eq!(
-                retain_custodied_segment(
+                delete_custodied_segment(
                     &captures,
                     &stream(),
                     today(),
@@ -270,7 +274,7 @@ fn reserved_and_unrelated_entries_are_never_touched() {
         let listing = listing_for(&finalized, &candidate, ListingFileStatus::Present).await;
 
         assert_eq!(
-            retain_custodied_segment(
+            delete_custodied_segment(
                 &captures,
                 &stream(),
                 today(),
@@ -287,6 +291,96 @@ fn reserved_and_unrelated_entries_are_never_touched() {
         assert!(metadata.is_file());
         assert!(other_stream.is_dir());
         assert!(non_date.is_dir());
+    });
+}
+
+#[test]
+fn replacement_between_inspection_and_unlink_is_retained() {
+    run(async {
+        let temporary = TestDirectory::new("retention-replacement");
+        let captures = temporary.path().join("captures");
+        let segment = create_segment(temporary.path(), "captures", "20260701", STREAM, SEGMENT);
+        let candidate = SegmentCandidate::new("20260701", STREAM, SEGMENT);
+        let listing = listing_for(&segment, &candidate, ListingFileStatus::Present).await;
+        let target = segment.join(FILE);
+        let hook_target = target.clone();
+        let hook = Arc::new(move |index| {
+            if index == 0 {
+                let incoming = hook_target.with_file_name(".incoming");
+                fs::write(&incoming, b"replacement\n").expect("write replacement");
+                fs::rename(incoming, &hook_target).expect("install replacement");
+            }
+        });
+
+        let outcome = delete_custodied_segment_with_hook(
+            &captures,
+            &stream(),
+            today(),
+            0,
+            &candidate,
+            (SEGMENT, &listing),
+            hook,
+        )
+        .await;
+
+        assert_eq!(outcome, RetentionOutcome::Retained);
+        assert!(segment.is_dir());
+        assert_eq!(
+            fs::read(&target).expect("read restored fixture"),
+            b"capture fixture\n"
+        );
+        assert_eq!(
+            fs::read(segment.join(".retention-conflict-0")).expect("read preserved replacement"),
+            b"replacement\n"
+        );
+    });
+}
+
+#[test]
+fn mid_deletion_failure_restores_every_removed_file() {
+    run(async {
+        let temporary = TestDirectory::new("retention-rollback");
+        let captures = temporary.path().join("captures");
+        let segment = create_segment(temporary.path(), "captures", "20260701", STREAM, SEGMENT);
+        let auxiliary = segment.join("tmux_aux_screen.jsonl");
+        fs::write(&auxiliary, b"auxiliary fixture\n").expect("write auxiliary fixture");
+        let candidate = SegmentCandidate::new("20260701", STREAM, SEGMENT);
+        let listing = listing_for(&segment, &candidate, ListingFileStatus::Processed).await;
+        let main = segment.join(FILE);
+        let hook_main = main.clone();
+        let hook = Arc::new(move |index| {
+            if index == 1 {
+                let incoming = hook_main.with_file_name(".incoming");
+                fs::write(&incoming, b"replacement\n").expect("write replacement");
+                fs::rename(incoming, &hook_main).expect("install replacement");
+            }
+        });
+
+        let outcome = delete_custodied_segment_with_hook(
+            &captures,
+            &stream(),
+            today(),
+            0,
+            &candidate,
+            (SEGMENT, &listing),
+            hook,
+        )
+        .await;
+
+        assert_eq!(outcome, RetentionOutcome::Retained);
+        assert!(segment.is_dir());
+        assert_eq!(
+            fs::read(auxiliary).expect("read restored auxiliary"),
+            b"auxiliary fixture\n"
+        );
+        assert_eq!(
+            fs::read(main).expect("read restored main"),
+            b"capture fixture\n"
+        );
+        assert_eq!(
+            fs::read(segment.join(".retention-conflict-1")).expect("read preserved replacement"),
+            b"replacement\n"
+        );
     });
 }
 

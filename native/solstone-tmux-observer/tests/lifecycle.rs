@@ -16,8 +16,8 @@ use solstone_tmux_observer::model::CaptureResult;
 use solstone_tmux_observer::name::{DerivedName, derive_component};
 use solstone_tmux_observer::observer::{
     CaptureProvider, LifecycleLock, ObserverConfig, ObserverExit, ObserverOperationError,
-    SegmentLifecycle, SegmentManager, ShutdownEvent, ShutdownIndicator, run_observer,
-    stream_directory, supervise_observer,
+    SegmentLifecycle, SegmentManager, ShutdownEvent, ShutdownIndicator, SupervisionControl,
+    run_observer, shutdown_barrier, stream_directory, supervise_observer,
 };
 use solstone_tmux_observer::segment::{SegmentClose, SegmentState};
 use solstone_tmux_observer::sync::{SyncActivity, SyncWake};
@@ -252,25 +252,36 @@ fn run_with_clock(
     clock: Arc<dyn Clock>,
 ) -> ObserverExit {
     runtime().block_on(async move {
+        let (observer_shutdown_barrier, supervisor_shutdown_barrier) = shutdown_barrier();
         let observer = run_observer(
             provider,
             segment,
             clock,
             shutdown,
+            observer_shutdown_barrier,
             ObserverConfig {
                 capture_interval: Duration::from_millis(10),
                 segment_interval: Duration::from_secs(300),
             },
         );
-        supervise_test_future(observer, indicator, instance_lock).await
+        supervise_test_future(
+            observer,
+            indicator,
+            instance_lock,
+            supervisor_shutdown_barrier,
+        )
+        .await
     })
 }
 
 fn supervise_test(observer: impl Future<Output = ObserverExit> + Send + 'static) -> ObserverExit {
+    let (observer_shutdown_barrier, supervisor_shutdown_barrier) = shutdown_barrier();
+    drop(observer_shutdown_barrier);
     runtime().block_on(supervise_test_future(
         observer,
         Box::new(RecordingIndicator::default()),
         Box::new(RecordingLock::default()),
+        supervisor_shutdown_barrier,
     ))
 }
 
@@ -278,6 +289,7 @@ async fn supervise_test_future(
     observer: impl Future<Output = ObserverExit> + Send + 'static,
     indicator: Box<dyn ShutdownIndicator>,
     instance_lock: Box<dyn LifecycleLock>,
+    shutdown_barrier: solstone_tmux_observer::observer::SupervisorShutdownBarrier,
 ) -> ObserverExit {
     let (_activity, activity_receiver) = tokio::sync::watch::channel(SyncActivity::Idle);
     let (sync_stop, mut sync_shutdown) = tokio::sync::watch::channel(false);
@@ -296,9 +308,12 @@ async fn supervise_test_future(
         sync,
         indicator,
         instance_lock,
-        activity_receiver,
-        sync_stop,
-        observer_stop,
+        SupervisionControl {
+            activity: activity_receiver,
+            sync_stop,
+            observer_stop,
+            shutdown_barrier,
+        },
     )
     .await
 }

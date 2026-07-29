@@ -23,7 +23,7 @@ use solstone_tmux_observer::model::{CaptureResult, PaneInfo, WindowInfo};
 use solstone_tmux_observer::name::derive_component;
 use solstone_tmux_observer::observer::{
     CaptureProvider, ObserverConfig, ObserverOperationError, SegmentManager, ShutdownEvent,
-    run_observer, stream_directory,
+    run_observer, shutdown_barrier, stream_directory,
 };
 use solstone_tmux_observer::paths::ensure_private_directory;
 use solstone_tmux_observer::private_link::{
@@ -75,7 +75,7 @@ fn bridge_registration_composes_on_the_production_runtime_shape() {
                 .await
                 .expect("start registration owner");
             owner
-                .register_once(&descriptor())
+                .ensure_registration(&descriptor())
                 .await
                 .expect("register observer");
             let persisted = load_observer(temporary.path(), &credential_instance_id)
@@ -153,7 +153,7 @@ fn bridge_registration_composes_on_the_production_runtime_shape() {
                 "bridge did not reuse its persistent carrier"
             );
 
-            owner.shutdown().await;
+            owner.shutdown().await.expect("shutdown registration owner");
             peer.shutdown().await;
         })
         .await
@@ -184,7 +184,7 @@ fn registration_rejects_unconfined_ingest_locations() {
                 "/app/observer/ingest#foreign",
             ] {
                 peer.enqueue_response(200, registration_response(ingest_url));
-                let result = owner.register_once(&descriptor()).await;
+                let result = owner.ensure_registration(&descriptor()).await;
                 assert!(
                     matches!(
                         result,
@@ -201,7 +201,7 @@ fn registration_rejects_unconfined_ingest_locations() {
 
             assert_eq!(peer.requests().len(), 4);
             assert_eq!(peer.accepted_carriers(), 1);
-            owner.shutdown().await;
+            owner.shutdown().await.expect("shutdown registration owner");
             peer.shutdown().await;
         })
         .await
@@ -228,8 +228,8 @@ fn slow_large_multipart_preserves_capture_on_the_production_runtime() {
             )
             .await
             .expect("start registration owner");
-            let observer = owner
-                .register_once(&descriptor())
+            let (observer, _) = owner
+                .ensure_registration(&descriptor())
                 .await
                 .expect("register observer");
 
@@ -249,8 +249,8 @@ fn slow_large_multipart_preserves_capture_on_the_production_runtime() {
             fs::write(&second_path, &second_bytes).expect("write second upload fixture");
             let first_on_disk = fs::read(&first_path).expect("read first upload fixture");
             let second_on_disk = fs::read(&second_path).expect("read second upload fixture");
-            assert_eq!(first_on_disk, first_bytes);
-            assert_eq!(second_on_disk, second_bytes);
+            assert_exact_bytes(&first_on_disk, &first_bytes, "first serialized fixture");
+            assert_exact_bytes(&second_on_disk, &second_bytes, "second serialized fixture");
             let total_file_bytes = first_on_disk.len() + second_on_disk.len();
             assert!(
                 total_file_bytes > INITIAL_WINDOW,
@@ -309,6 +309,8 @@ fn slow_large_multipart_preserves_capture_on_the_production_runtime() {
             let finalized = stream_dir.join("120000_005");
             let capture_polls = Arc::new(AtomicUsize::new(0));
             let (stop_observer, stopped_observer) = oneshot::channel();
+            let (observer_shutdown_barrier, supervisor_shutdown_barrier) = shutdown_barrier();
+            drop(supervisor_shutdown_barrier);
             let observer_task = tokio::spawn(run_observer(
                 Arc::new(CountingCapture {
                     polls: Arc::clone(&capture_polls),
@@ -326,6 +328,7 @@ fn slow_large_multipart_preserves_capture_on_the_production_runtime() {
                     let _ = stopped_observer.await;
                     ShutdownEvent::Injected
                 }),
+                observer_shutdown_barrier,
                 ObserverConfig {
                     capture_interval: Duration::from_millis(10),
                     segment_interval: Duration::from_secs(5),
@@ -397,7 +400,7 @@ fn slow_large_multipart_preserves_capture_on_the_production_runtime() {
             let observer_exit = observer_task.await.expect("join runtime observer");
             assert_eq!(observer_exit.exit_code, 0);
             assert_eq!(peer.accepted_carriers(), 1);
-            owner.shutdown().await;
+            owner.shutdown().await.expect("shutdown registration owner");
             peer.shutdown().await;
         })
         .await
@@ -665,7 +668,17 @@ fn assert_part(
     assert_eq!(part.name, name);
     assert_eq!(part.filename.as_deref(), filename);
     assert_eq!(part.content_type.as_deref(), content_type);
-    assert_eq!(part.body, body);
+    assert_exact_bytes(part.body, body, "multipart part");
+}
+
+fn assert_exact_bytes(actual: &[u8], expected: &[u8], context: &str) {
+    assert_eq!(actual.len(), expected.len(), "{context} length mismatch");
+    let actual_sha256 = sha256_hex(actual);
+    let expected_sha256 = sha256_hex(expected);
+    assert!(
+        actual == expected,
+        "{context} digest mismatch: actual={actual_sha256}, expected={expected_sha256}"
+    );
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {

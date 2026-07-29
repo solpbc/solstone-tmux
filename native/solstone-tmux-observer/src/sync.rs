@@ -2,8 +2,10 @@
 // Copyright (c) 2026 sol pbc
 
 use std::collections::{HashMap, HashSet};
+use std::fmt;
 use std::fs;
 use std::future::Future;
+use std::io::{Read, Seek, SeekFrom};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
@@ -14,7 +16,6 @@ use spl_transport::client::TokenPersistHook;
 use spl_transport::credential::Credential;
 use time::{Date, Month};
 use tokio::sync::{Notify, watch};
-use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
 use crate::clock::Clock;
@@ -31,7 +32,10 @@ use crate::private_link::{
     persist_observer,
 };
 use crate::segment::SegmentClose;
-use crate::storage::{open_regular_readonly, sync_directory};
+use crate::storage::{
+    atomic_write_bytes, open_directory_readonly, open_regular_readonly, open_regular_readonly_at,
+    sync_directory,
+};
 
 const RETRY_DELAYS: [Duration; 4] = [
     Duration::from_secs(5),
@@ -41,7 +45,7 @@ const RETRY_DELAYS: [Duration; 4] = [
 ];
 const PERIODIC_SYNC_INTERVAL: Duration = Duration::from_secs(60);
 pub const SEGMENTS_PER_PASS: usize = 8;
-pub const STATUS_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(60);
+const STATUS_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SyncActivity {
@@ -88,9 +92,83 @@ impl StatusBeacon {
     }
 }
 
+#[derive(Clone, Eq, PartialEq)]
 struct TokenUpdate {
     token: String,
     expires_at: i64,
+}
+
+struct TokenPersistence {
+    config_root: PathBuf,
+    credential: Arc<Mutex<Credential>>,
+    pending: Arc<Mutex<Option<TokenUpdate>>>,
+}
+
+impl TokenPersistence {
+    fn new(config_root: PathBuf, credential: Credential) -> (Self, TokenPersistHook) {
+        let pending = Arc::new(Mutex::new(None));
+        let hook_pending = Arc::clone(&pending);
+        let hook: TokenPersistHook = Arc::new(move |token, expires_at| {
+            let mut pending = match hook_pending.lock() {
+                Ok(pending) => pending,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            *pending = Some(TokenUpdate {
+                token: token.to_owned(),
+                expires_at,
+            });
+        });
+        (
+            Self {
+                config_root,
+                credential: Arc::new(Mutex::new(credential)),
+                pending,
+            },
+            hook,
+        )
+    }
+
+    async fn persist_pending(&self) -> Result<(), DiagnosticCode> {
+        let update = {
+            let pending = match self.pending.lock() {
+                Ok(pending) => pending,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            pending.clone()
+        };
+        let Some(update) = update else {
+            return Ok(());
+        };
+        let mut updated_credential = {
+            let credential = match self.credential.lock() {
+                Ok(credential) => credential,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            credential.clone()
+        };
+        updated_credential.device_token = Some(update.token.clone());
+        updated_credential.device_token_expires_at = Some(update.expires_at);
+        let config_root = self.config_root.clone();
+        let persisted = updated_credential.clone();
+        tokio::task::spawn_blocking(move || persist_credential(&config_root, &persisted))
+            .await
+            .map_err(|_| DiagnosticCode::PrivateStateIo)??;
+        {
+            let mut credential = match self.credential.lock() {
+                Ok(credential) => credential,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            *credential = updated_credential;
+        }
+        let mut pending = match self.pending.lock() {
+            Ok(pending) => pending,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if pending.as_ref() == Some(&update) {
+            *pending = None;
+        }
+        Ok(())
+    }
 }
 
 pub struct RegistrationOwner {
@@ -98,7 +176,7 @@ pub struct RegistrationOwner {
     journal: JournalClient,
     config_root: PathBuf,
     credential_instance_id: String,
-    token_persist_task: JoinHandle<()>,
+    token_persistence: TokenPersistence,
 }
 
 impl RegistrationOwner {
@@ -107,14 +185,8 @@ impl RegistrationOwner {
         config_root: PathBuf,
     ) -> Result<Self, DiagnosticCode> {
         let credential_instance_id = credential.instance_id.clone();
-        let persisted_credential = Arc::new(Mutex::new(credential.clone()));
-        let (token_sender, token_receiver) = watch::channel::<Option<TokenUpdate>>(None);
-        let hook: TokenPersistHook = Arc::new(move |token, expires_at| {
-            token_sender.send_replace(Some(TokenUpdate {
-                token: token.to_owned(),
-                expires_at,
-            }));
-        });
+        let (token_persistence, hook) =
+            TokenPersistence::new(config_root.clone(), credential.clone());
         let bridge = PrivateLinkBridge::start(credential, Some(hook)).await?;
         let journal = match JournalClient::bootstrap(&bridge).await {
             Ok(journal) => journal,
@@ -123,17 +195,12 @@ impl RegistrationOwner {
                 return Err(code);
             }
         };
-        let token_persist_task = tokio::spawn(persist_token_updates(
-            token_receiver,
-            persisted_credential,
-            config_root.clone(),
-        ));
         Ok(Self {
             bridge,
             journal,
             config_root,
             credential_instance_id,
-            token_persist_task,
+            token_persistence,
         })
     }
 
@@ -141,19 +208,11 @@ impl RegistrationOwner {
         &self.journal
     }
 
-    pub async fn register_once(
-        &self,
-        descriptor: &RegistrationDescriptor,
-    ) -> Result<ObserverState, JournalError> {
-        self.ensure_registration(descriptor)
-            .await
-            .map(|(observer, _)| observer)
-    }
-
     pub async fn ensure_registration(
         &self,
         descriptor: &RegistrationDescriptor,
     ) -> Result<(ObserverState, bool), JournalError> {
+        self.token_persistence.persist_pending().await?;
         let config_root = self.config_root.clone();
         let instance_id = self.credential_instance_id.clone();
         let existing =
@@ -179,9 +238,10 @@ impl RegistrationOwner {
         Ok((observer, true))
     }
 
-    pub async fn shutdown(self) {
+    pub async fn shutdown(self) -> Result<(), DiagnosticCode> {
+        let persist_result = self.token_persistence.persist_pending().await;
         self.bridge.shutdown().await;
-        let _ = self.token_persist_task.await;
+        persist_result
     }
 }
 
@@ -289,7 +349,7 @@ struct FileIdentity {
     size: u64,
 }
 
-pub async fn retain_custodied_segment(
+pub async fn delete_custodied_segment(
     captures_root: &Path,
     configured_stream: &DerivedName,
     today: Date,
@@ -298,6 +358,50 @@ pub async fn retain_custodied_segment(
     authoritative_key: &str,
     listing: &SegmentsEnvelope,
 ) -> RetentionOutcome {
+    delete_custodied_segment_with_hook_inner(
+        captures_root,
+        configured_stream,
+        today,
+        retention_days,
+        candidate,
+        (authoritative_key, listing),
+        None,
+    )
+    .await
+}
+
+#[doc(hidden)]
+pub async fn delete_custodied_segment_with_hook(
+    captures_root: &Path,
+    configured_stream: &DerivedName,
+    today: Date,
+    retention_days: i64,
+    candidate: &SegmentCandidate,
+    custody: (&str, &SegmentsEnvelope),
+    delete_hook: Arc<dyn Fn(usize) + Send + Sync>,
+) -> RetentionOutcome {
+    delete_custodied_segment_with_hook_inner(
+        captures_root,
+        configured_stream,
+        today,
+        retention_days,
+        candidate,
+        custody,
+        Some(delete_hook),
+    )
+    .await
+}
+
+async fn delete_custodied_segment_with_hook_inner(
+    captures_root: &Path,
+    configured_stream: &DerivedName,
+    today: Date,
+    retention_days: i64,
+    candidate: &SegmentCandidate,
+    custody: (&str, &SegmentsEnvelope),
+    delete_hook: Option<Arc<dyn Fn(usize) + Send + Sync>>,
+) -> RetentionOutcome {
+    let (authoritative_key, listing) = custody;
     if retention_days < 0 {
         return RetentionOutcome::Disabled;
     }
@@ -363,7 +467,13 @@ pub async fn retain_custodied_segment(
     let root = captures_root.to_owned();
     let target = candidate.clone();
     match tokio::task::spawn_blocking(move || {
-        delete_revalidated_segment(&root, &target, &second_paths, &second_identities)
+        delete_revalidated_segment(
+            &root,
+            &target,
+            &second_paths,
+            &second_identities,
+            delete_hook.as_deref(),
+        )
     })
     .await
     {
@@ -383,14 +493,25 @@ pub enum SyncFailureClass {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SyncOperationError {
-    RetainCandidate,
+    RetainCandidate(DiagnosticCode),
     EndPass(SyncFailureClass),
+    EndPassDiagnostic(SyncFailureClass, DiagnosticCode),
 }
 
-pub trait SyncJournal: Send {
-    fn observer_name(&self) -> Option<&str> {
-        None
+impl fmt::Display for SyncOperationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let diagnostic = match self {
+            Self::RetainCandidate(code) | Self::EndPassDiagnostic(_, code) => *code,
+            Self::EndPass(failure) => diagnostic_for_failure(*failure),
+        };
+        formatter.write_str(diagnostic.message())
     }
+}
+
+impl std::error::Error for SyncOperationError {}
+
+pub trait SyncJournal: Send {
+    fn observer_name(&self) -> Option<&str>;
 
     fn ensure_registered<'a>(
         &'a mut self,
@@ -409,10 +530,8 @@ pub trait SyncJournal: Send {
 
     fn status_event<'a>(
         &'a mut self,
-        _beacon: &'a StatusBeacon,
-    ) -> Pin<Box<dyn Future<Output = Result<(), SyncOperationError>> + Send + 'a>> {
-        Box::pin(async { Ok(()) })
-    }
+        beacon: &'a StatusBeacon,
+    ) -> Pin<Box<dyn Future<Output = Result<(), SyncOperationError>> + Send + 'a>>;
 }
 
 #[derive(Clone, Default)]
@@ -426,14 +545,20 @@ impl SyncWake {
             self.notify.notify_one();
         }
     }
+
+    pub async fn wait(&self) {
+        self.notify.notified().await;
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SyncPassSummary {
     pub attempted: usize,
     pub contacted: bool,
+    pub custodied: usize,
     pub more_work: bool,
     pub failure: Option<SyncFailureClass>,
+    pub diagnostic: Option<DiagnosticCode>,
 }
 
 impl SyncPassSummary {
@@ -441,8 +566,10 @@ impl SyncPassSummary {
         Self {
             attempted: 0,
             contacted: false,
+            custodied: 0,
             more_work: false,
             failure: None,
+            diagnostic: None,
         }
     }
 }
@@ -487,6 +614,7 @@ pub struct SyncScheduler {
     clock: Arc<dyn Clock>,
     wake: SyncWake,
     cursor: Option<SegmentCandidate>,
+    remaining_in_sweep: usize,
     backoff: Backoff,
     activity: Option<watch::Sender<SyncActivity>>,
     health: Option<HealthWriter>,
@@ -511,6 +639,7 @@ impl SyncScheduler {
             clock,
             wake,
             cursor: None,
+            remaining_in_sweep: 0,
             backoff: Backoff::new(),
             activity: None,
             health: None,
@@ -556,7 +685,7 @@ impl SyncScheduler {
                         tokio::select! {
                             biased;
                             () = &mut shutdown => return,
-                            () = self.wake.notify.notified() => {},
+                            () = self.wake.wait() => {},
                             _ = periodic.tick() => {
                                 self.write_health().await;
                             },
@@ -571,6 +700,7 @@ impl SyncScheduler {
                 let mut summary = self.run_pass(journal).await;
                 self.update_facts(&summary);
                 if summary.failure.is_none()
+                    && summary.diagnostic.is_none()
                     && self.status_event_due()
                     && journal.observer_name().is_some()
                 {
@@ -590,7 +720,7 @@ impl SyncScheduler {
                     self.last_status_event = Some(self.clock.monotonic_now());
                 }
                 self.write_health().await;
-                requested = summary.failure.is_some();
+                requested = summary.failure.is_some() || summary.more_work;
                 if requested {
                     tokio::task::yield_now().await;
                 }
@@ -600,7 +730,7 @@ impl SyncScheduler {
             tokio::select! {
                 biased;
                 () = &mut shutdown => return,
-                () = self.wake.notify.notified() => requested = true,
+                () = self.wake.wait() => requested = true,
                 _ = periodic.tick() => requested = true,
             }
         }
@@ -624,11 +754,21 @@ impl SyncScheduler {
             match tokio::task::spawn_blocking(move || scan_candidates(&captures_root, &stream))
                 .await
             {
-                Ok(Some(candidates)) => candidates,
-                _ => return summary,
+                Ok(Ok(candidates)) => candidates,
+                _ => {
+                    self.remaining_in_sweep = 0;
+                    return self.end_pass(
+                        summary,
+                        SyncOperationError::EndPassDiagnostic(
+                            SyncFailureClass::Contract,
+                            DiagnosticCode::LocalSegmentInvalid,
+                        ),
+                    );
+                }
             };
         self.facts.pending_segments = u64::try_from(candidates.len()).unwrap_or(u64::MAX);
         if candidates.is_empty() {
+            self.remaining_in_sweep = 0;
             let today = local_today(self.clock.as_ref());
             match journal.segments(&format_day(today)).await {
                 Ok(_) => {
@@ -641,13 +781,19 @@ impl SyncScheduler {
         }
 
         let ordered = candidates_after_cursor(candidates, self.cursor.as_ref());
-        let candidate_count = ordered.len();
+        if self.remaining_in_sweep == 0 {
+            self.remaining_in_sweep = ordered.len();
+        } else {
+            self.remaining_in_sweep = self.remaining_in_sweep.min(ordered.len());
+        }
+        let candidate_limit = SEGMENTS_PER_PASS.min(self.remaining_in_sweep);
         self.facts.sync_in_progress = true;
         self.write_health().await;
         let _activity = ActivityGuard::new(self.activity.as_ref());
-        for candidate in ordered.into_iter().take(SEGMENTS_PER_PASS) {
+        for candidate in ordered.into_iter().take(candidate_limit) {
             self.cursor = Some(candidate.clone());
             summary.attempted += 1;
+            self.remaining_in_sweep = self.remaining_in_sweep.saturating_sub(1);
             let root = self.captures_root.clone();
             let target = candidate.clone();
             let files =
@@ -655,17 +801,24 @@ impl SyncScheduler {
                     .await
                 {
                     Ok(Some(files)) => files,
-                    _ => continue,
+                    _ => {
+                        summary.diagnostic = Some(DiagnosticCode::LocalSegmentInvalid);
+                        continue;
+                    }
                 };
+            let custody_paths = files.clone();
             let upload = match journal.upload(&candidate, files).await {
                 Ok(upload) => {
                     summary.contacted = true;
                     self.backoff.successful_operation();
                     upload
                 }
-                Err(SyncOperationError::RetainCandidate) => continue,
+                Err(SyncOperationError::RetainCandidate(code)) => {
+                    summary.diagnostic = Some(code);
+                    continue;
+                }
                 Err(error) => {
-                    summary.more_work = summary.attempted < candidate_count;
+                    summary.more_work = self.remaining_in_sweep > 0;
                     return self.end_pass(summary, error);
                 }
             };
@@ -673,7 +826,7 @@ impl SyncScheduler {
                 continue;
             }
             let Some(authoritative_key) = upload.authoritative_key else {
-                summary.more_work = summary.attempted < candidate_count;
+                summary.more_work = self.remaining_in_sweep > 0;
                 return self.end_pass(
                     summary,
                     SyncOperationError::EndPass(SyncFailureClass::Contract),
@@ -686,11 +839,27 @@ impl SyncScheduler {
                     listing
                 }
                 Err(error) => {
-                    summary.more_work = summary.attempted < candidate_count;
+                    summary.more_work = self.remaining_in_sweep > 0;
                     return self.end_pass(summary, error);
                 }
             };
-            let _ = retain_custodied_segment(
+            let local_files = match inventory_files(custody_paths).await {
+                Ok(files) => files,
+                Err(_) => {
+                    summary.diagnostic = Some(DiagnosticCode::LocalSegmentInvalid);
+                    continue;
+                }
+            };
+            if !fresh_listing_proves_custody(
+                &listing,
+                candidate.segment(),
+                &authoritative_key,
+                &local_files,
+            ) {
+                continue;
+            }
+            summary.custodied += 1;
+            match delete_custodied_segment(
                 &self.captures_root,
                 &self.stream,
                 local_today(self.clock.as_ref()),
@@ -699,21 +868,31 @@ impl SyncScheduler {
                 &authoritative_key,
                 &listing,
             )
-            .await;
+            .await
+            {
+                RetentionOutcome::Deleted => {
+                    self.facts.pending_segments = self.facts.pending_segments.saturating_sub(1);
+                }
+                RetentionOutcome::Retained => {
+                    summary.diagnostic = Some(DiagnosticCode::LocalSegmentInvalid);
+                }
+                RetentionOutcome::Disabled | RetentionOutcome::Ineligible => {}
+            }
         }
-        summary.more_work = summary.attempted < candidate_count;
+        summary.more_work = self.remaining_in_sweep > 0;
         summary
     }
 
     fn update_facts(&mut self, summary: &SyncPassSummary) {
         let now = self.clock.wall_now().unix_timestamp();
-        if summary.contacted {
+        if summary.custodied > 0 {
+            self.facts.successful_sync(now);
+        } else if summary.contacted {
             self.facts.successful_contact(now);
-            if summary.attempted > 0 && summary.failure.is_none() {
-                self.facts.successful_sync(now);
-            }
         }
-        if let Some(failure) = summary.failure {
+        if let Some(code) = summary.diagnostic {
+            self.facts.failed(code);
+        } else if let Some(failure) = summary.failure {
             self.facts.failed(diagnostic_for_failure(failure));
         }
         self.facts.sync_in_progress = false;
@@ -754,8 +933,15 @@ impl SyncScheduler {
         error: SyncOperationError,
     ) -> SyncPassSummary {
         let failure = match error {
-            SyncOperationError::RetainCandidate => SyncFailureClass::Contract,
+            SyncOperationError::RetainCandidate(code) => {
+                summary.diagnostic = Some(code);
+                SyncFailureClass::Contract
+            }
             SyncOperationError::EndPass(failure) => failure,
+            SyncOperationError::EndPassDiagnostic(failure, code) => {
+                summary.diagnostic = Some(code);
+                failure
+            }
         };
         self.backoff.failed_operation();
         summary.failure = Some(failure);
@@ -954,8 +1140,12 @@ impl SyncTask {
         scheduler
             .run(&mut journal, wait_for_shutdown(&mut shutdown))
             .await;
-        if let Some(owner) = journal.owner {
-            owner.shutdown().await;
+        if let Some(owner) = journal.owner
+            && let Err(code) = owner.shutdown().await
+        {
+            scheduler.facts.failed(code);
+            scheduler.write_health().await;
+            return Err(code);
         }
         Ok(())
     }
@@ -988,73 +1178,60 @@ async fn refresh_waiting_health(
     }
 }
 
-async fn persist_token_updates(
-    mut receiver: watch::Receiver<Option<TokenUpdate>>,
-    credential: Arc<Mutex<Credential>>,
-    config_root: PathBuf,
-) {
-    while receiver.changed().await.is_ok() {
-        let Some(update) = receiver
-            .borrow_and_update()
-            .as_ref()
-            .map(|update| TokenUpdate {
-                token: update.token.clone(),
-                expires_at: update.expires_at,
-            })
-        else {
-            continue;
-        };
-        let credential = credential.clone();
-        let config_root = config_root.clone();
-        let _ = tokio::task::spawn_blocking(move || {
-            let mut value = match credential.lock() {
-                Ok(value) => value,
-                Err(poisoned) => poisoned.into_inner(),
-            };
-            value.device_token = Some(update.token);
-            value.device_token_expires_at = Some(update.expires_at);
-            persist_credential(&config_root, &value)
-        })
-        .await;
-    }
-}
-
 fn map_diagnostic(code: DiagnosticCode) -> SyncOperationError {
     match code {
-        DiagnosticCode::JournalTimeout => SyncOperationError::EndPass(SyncFailureClass::Timeout),
+        DiagnosticCode::JournalTimeout => SyncOperationError::EndPassDiagnostic(
+            SyncFailureClass::Timeout,
+            DiagnosticCode::JournalTimeout,
+        ),
         DiagnosticCode::JournalContractInvalid
         | DiagnosticCode::PrivateStateInvalid
-        | DiagnosticCode::PrivateStateIo => SyncOperationError::EndPass(SyncFailureClass::Contract),
-        _ => SyncOperationError::EndPass(SyncFailureClass::Direct),
+        | DiagnosticCode::PrivateStateIo => {
+            SyncOperationError::EndPassDiagnostic(SyncFailureClass::Contract, code)
+        }
+        _ => SyncOperationError::EndPassDiagnostic(SyncFailureClass::Direct, code),
     }
 }
 
 fn map_journal_error(error: JournalError) -> SyncOperationError {
-    match error.diagnostic() {
+    let diagnostic = error.diagnostic();
+    match diagnostic {
         DiagnosticCode::RequestTooLarge | DiagnosticCode::LocalSegmentInvalid => {
-            SyncOperationError::RetainCandidate
+            SyncOperationError::RetainCandidate(diagnostic)
         }
-        DiagnosticCode::JournalTimeout => SyncOperationError::EndPass(SyncFailureClass::Timeout),
+        DiagnosticCode::JournalTimeout => SyncOperationError::EndPassDiagnostic(
+            SyncFailureClass::Timeout,
+            DiagnosticCode::JournalTimeout,
+        ),
         DiagnosticCode::JournalRejected => match error.reason_code() {
             Some(
                 JournalReasonCode::AuthKeyInvalid
                 | JournalReasonCode::AuthRequired
                 | JournalReasonCode::PlRevoked,
-            ) => SyncOperationError::EndPass(SyncFailureClass::Auth),
+            ) => SyncOperationError::EndPassDiagnostic(
+                SyncFailureClass::Auth,
+                DiagnosticCode::JournalRejected,
+            ),
             Some(
                 JournalReasonCode::IngestContractInvalid
                 | JournalReasonCode::IngestNoFiles
                 | JournalReasonCode::IngestSidecarConflict,
-            ) => SyncOperationError::RetainCandidate,
-            Some(JournalReasonCode::IngestStorageFailed) => {
-                SyncOperationError::EndPass(SyncFailureClass::Direct)
-            }
-            _ => SyncOperationError::EndPass(SyncFailureClass::Contract),
+            ) => SyncOperationError::RetainCandidate(DiagnosticCode::LocalSegmentInvalid),
+            Some(JournalReasonCode::IngestStorageFailed) => SyncOperationError::EndPassDiagnostic(
+                SyncFailureClass::Direct,
+                DiagnosticCode::JournalRejected,
+            ),
+            _ => SyncOperationError::EndPassDiagnostic(
+                SyncFailureClass::Contract,
+                DiagnosticCode::JournalRejected,
+            ),
         },
         DiagnosticCode::JournalContractInvalid
         | DiagnosticCode::PrivateStateInvalid
-        | DiagnosticCode::PrivateStateIo => SyncOperationError::EndPass(SyncFailureClass::Contract),
-        _ => SyncOperationError::EndPass(SyncFailureClass::Direct),
+        | DiagnosticCode::PrivateStateIo => {
+            SyncOperationError::EndPassDiagnostic(SyncFailureClass::Contract, diagnostic)
+        }
+        _ => SyncOperationError::EndPassDiagnostic(SyncFailureClass::Direct, diagnostic),
     }
 }
 
@@ -1067,44 +1244,50 @@ fn diagnostic_for_failure(failure: SyncFailureClass) -> DiagnosticCode {
     }
 }
 
-fn scan_candidates(captures_root: &Path, stream: &DerivedName) -> Option<Vec<SegmentCandidate>> {
+fn scan_candidates(
+    captures_root: &Path,
+    stream: &DerivedName,
+) -> Result<Vec<SegmentCandidate>, ()> {
     match fs::symlink_metadata(captures_root) {
         Ok(metadata) if is_plain_directory(&metadata) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Some(Vec::new()),
-        _ => return None,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        _ => return Err(()),
     }
     let mut candidates = Vec::new();
-    for entry in fs::read_dir(captures_root).ok()? {
-        let entry = entry.ok()?;
-        let day = entry.file_name().into_string().ok()?;
-        if parse_day(&day).is_none() || !plain_directory_entry(&entry) {
+    for entry in fs::read_dir(captures_root).map_err(|_| ())? {
+        let entry = entry.map_err(|_| ())?;
+        let day = entry.file_name().into_string().map_err(|_| ())?;
+        if parse_day(&day).is_none() {
             continue;
         }
-        let derived_day = derive_component(&day).ok()?;
-        let day_path = derived_day.join_checked(captures_root).ok()?;
+        if !plain_directory_entry(&entry) {
+            return Err(());
+        }
+        let derived_day = derive_component(&day).map_err(|_| ())?;
+        let day_path = derived_day.join_checked(captures_root).map_err(|_| ())?;
         if day_path != entry.path() {
-            return None;
+            return Err(());
         }
-        let stream_path = stream.join_checked(&day_path).ok()?;
-        let stream_metadata = match fs::symlink_metadata(&stream_path) {
-            Ok(metadata) if is_plain_directory(&metadata) => metadata,
+        let stream_path = stream.join_checked(&day_path).map_err(|_| ())?;
+        match fs::symlink_metadata(&stream_path) {
+            Ok(metadata) if is_plain_directory(&metadata) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            _ => continue,
-        };
-        if !is_plain_directory(&stream_metadata) {
-            continue;
+            _ => return Err(()),
         }
-        for segment_entry in fs::read_dir(&stream_path).ok()? {
-            let segment_entry = segment_entry.ok()?;
-            let segment = segment_entry.file_name().into_string().ok()?;
-            if !valid_segment_name(&segment) || !plain_directory_entry(&segment_entry) {
+        for segment_entry in fs::read_dir(&stream_path).map_err(|_| ())? {
+            let segment_entry = segment_entry.map_err(|_| ())?;
+            let segment = segment_entry.file_name().into_string().map_err(|_| ())?;
+            if !valid_segment_name(&segment) {
                 continue;
+            }
+            if !plain_directory_entry(&segment_entry) {
+                return Err(());
             }
             candidates.push(SegmentCandidate::new(day.clone(), stream.as_str(), segment));
         }
     }
     candidates.sort_by(|left, right| right.cmp(left));
-    Some(candidates)
+    Ok(candidates)
 }
 
 fn candidates_after_cursor(
@@ -1193,6 +1376,7 @@ fn delete_revalidated_segment(
     candidate: &SegmentCandidate,
     expected_paths: &[PathBuf],
     expected_identities: &[FileIdentity],
+    delete_hook: Option<&(dyn Fn(usize) + Send + Sync)>,
 ) -> bool {
     let Some(paths) = resolve_segment_files(captures_root, candidate) else {
         return false;
@@ -1206,26 +1390,143 @@ fn delete_revalidated_segment(
     let Some(stream_path) = segment_path.parent() else {
         return false;
     };
+    let Ok(segment_directory) = open_directory_readonly(segment_path) else {
+        return false;
+    };
+    let Ok(stream_directory) = open_directory_readonly(stream_path) else {
+        return false;
+    };
+    let mut retained_files = Vec::with_capacity(paths.len());
     for (path, expected) in paths.iter().zip(expected_identities) {
-        let Ok(file) = open_regular_readonly(path) else {
+        let Ok(file) = open_regular_readonly_at(&segment_directory, &expected.name, path) else {
             return false;
         };
         let Ok(metadata) = file.metadata() else {
             return false;
         };
-        if metadata.dev() != expected.device
-            || metadata.ino() != expected.inode
-            || metadata.len() != expected.size
-            || fs::remove_file(path).is_err()
+        if !metadata_matches(&metadata, expected) {
+            return false;
+        }
+        retained_files.push(file);
+    }
+    for (index, (path, expected)) in paths.iter().zip(expected_identities).enumerate() {
+        if let Some(hook) = delete_hook {
+            hook(index);
+        }
+        let current = open_regular_readonly_at(&segment_directory, &expected.name, path);
+        let current_matches = current
+            .as_ref()
+            .ok()
+            .and_then(|file| file.metadata().ok())
+            .is_some_and(|metadata| metadata_matches(&metadata, expected));
+        if !current_matches
+            || rustix::fs::unlinkat(
+                &segment_directory,
+                expected.name.as_str(),
+                rustix::fs::AtFlags::empty(),
+            )
+            .is_err()
         {
+            let _ = restore_expected_files(
+                &paths,
+                expected_identities,
+                segment_path,
+                &segment_directory,
+                &mut retained_files,
+            );
             return false;
         }
     }
-    if fs::remove_dir(segment_path).is_err() {
+    if rustix::fs::unlinkat(
+        &stream_directory,
+        candidate.segment(),
+        rustix::fs::AtFlags::REMOVEDIR,
+    )
+    .is_err()
+    {
+        let _ = restore_expected_files(
+            &paths,
+            expected_identities,
+            segment_path,
+            &segment_directory,
+            &mut retained_files,
+        );
         return false;
     }
     let _ = sync_directory(stream_path);
     true
+}
+
+fn restore_expected_files(
+    paths: &[PathBuf],
+    expected_identities: &[FileIdentity],
+    segment_path: &Path,
+    segment_directory: &fs::File,
+    retained_files: &mut [fs::File],
+) -> bool {
+    let mut restored = true;
+    for (index, ((path, expected), file)) in paths
+        .iter()
+        .zip(expected_identities)
+        .zip(retained_files)
+        .enumerate()
+    {
+        let current_matches = open_regular_readonly_at(segment_directory, &expected.name, path)
+            .ok()
+            .and_then(|current| current.metadata().ok())
+            .is_some_and(|metadata| metadata_matches(&metadata, expected));
+        if current_matches {
+            continue;
+        }
+        match rustix::fs::statat(
+            segment_directory,
+            expected.name.as_str(),
+            rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+        ) {
+            Ok(_) => {
+                let preserved_name = format!(".retention-conflict-{index}");
+                if rustix::fs::statat(
+                    segment_directory,
+                    preserved_name.as_str(),
+                    rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+                )
+                .is_ok()
+                    || rustix::fs::renameat(
+                        segment_directory,
+                        expected.name.as_str(),
+                        segment_directory,
+                        preserved_name.as_str(),
+                    )
+                    .is_err()
+                {
+                    restored = false;
+                    continue;
+                }
+            }
+            Err(rustix::io::Errno::NOENT) => {}
+            Err(_) => {
+                restored = false;
+                continue;
+            }
+        }
+        if file.seek(SeekFrom::Start(0)).is_err() {
+            restored = false;
+            continue;
+        }
+        let mut bytes = Vec::new();
+        if file.read_to_end(&mut bytes).is_err()
+            || atomic_write_bytes(path, segment_path, &bytes).is_err()
+        {
+            restored = false;
+        }
+    }
+    restored
+}
+
+fn metadata_matches(metadata: &fs::Metadata, expected: &FileIdentity) -> bool {
+    metadata.dev() == expected.device
+        && metadata.ino() == expected.inode
+        && metadata.len() == expected.size
 }
 
 fn retention_eligible(day: &str, today: Date, retention_days: i64) -> bool {
@@ -1344,4 +1645,83 @@ fn valid_sha256(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use spl_transport::credential::{Credential, EndpointAddr};
+
+    use super::{SyncFailureClass, SyncOperationError, TokenPersistence, map_diagnostic};
+    use crate::health::DiagnosticCode;
+    use crate::private_link::{CREDENTIALS_FILENAME, load_credential};
+
+    #[test]
+    fn failed_token_persistence_is_reported_and_retried() {
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("build test runtime")
+            .block_on(async {
+                let suffix = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos();
+                let root = std::env::temp_dir().join(format!(
+                    "solstone-token-persistence-{}-{suffix}",
+                    std::process::id()
+                ));
+                fs::create_dir(&root).expect("create token test root");
+                fs::create_dir(root.join(CREDENTIALS_FILENAME))
+                    .expect("create invalid credential target");
+                let (persistence, hook) = TokenPersistence::new(root.clone(), credential());
+                hook("refreshed-token", 1_900_000_000);
+
+                let code = persistence
+                    .persist_pending()
+                    .await
+                    .expect_err("invalid credential target was accepted");
+                assert!(matches!(
+                    map_diagnostic(code),
+                    SyncOperationError::EndPassDiagnostic(
+                        SyncFailureClass::Contract,
+                        DiagnosticCode::PrivateStateInvalid
+                    )
+                ));
+
+                fs::remove_dir(root.join(CREDENTIALS_FILENAME))
+                    .expect("remove invalid credential target");
+                persistence
+                    .persist_pending()
+                    .await
+                    .expect("retry pending token persistence");
+                let loaded = load_credential(&root)
+                    .expect("load persisted credential")
+                    .expect("persisted credential exists");
+                assert!(loaded.device_token.is_some());
+                assert!(loaded.device_token_expires_at.is_some());
+                fs::remove_dir_all(root).expect("remove token test root");
+            });
+    }
+
+    fn credential() -> Credential {
+        Credential {
+            client_key_pem: "test-key".to_owned(),
+            client_cert_pem: "test-cert".to_owned(),
+            ca_chain_pem: vec!["test-ca".to_owned()],
+            ca_fp_prefix: vec![1, 2, 3, 4],
+            instance_id: "test-instance".to_owned(),
+            home_label: "test-home".to_owned(),
+            endpoints: vec![EndpointAddr {
+                host: "127.0.0.1".to_owned(),
+                port: 7657,
+            }],
+            home_attestation: None,
+            local_endpoints: None,
+            relay_origin: None,
+            device_token: None,
+            device_token_expires_at: None,
+        }
+    }
 }

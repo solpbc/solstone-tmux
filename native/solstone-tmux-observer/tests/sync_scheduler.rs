@@ -12,6 +12,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use solstone_tmux_observer::clock::{Clock, TestClock};
+use solstone_tmux_observer::health::{DiagnosticCode, HEALTH_FILENAME, HealthWriter};
+use solstone_tmux_observer::instance_lock::InstanceLock;
 use solstone_tmux_observer::journal::{
     ListingFileStatus, SegmentFile, SegmentItem, SegmentsEnvelope, UploadResult, UploadStatus,
     inventory_files,
@@ -20,8 +22,9 @@ use solstone_tmux_observer::model::CaptureResult;
 use solstone_tmux_observer::name::{DerivedName, derive_component};
 use solstone_tmux_observer::observer::{
     CaptureProvider, ObserverConfig, ObserverOperationError, SegmentLifecycle, ShutdownEvent,
-    run_observer,
+    run_observer, shutdown_barrier,
 };
+use solstone_tmux_observer::paths::ensure_private_directory;
 use solstone_tmux_observer::segment::SegmentClose;
 use solstone_tmux_observer::sync::{
     SEGMENTS_PER_PASS, SegmentCandidate, StatusBeacon, SyncActivity, SyncFailureClass, SyncJournal,
@@ -100,6 +103,8 @@ fn one_backoff_owner_advances_holds_resets_and_never_stops_capture() {
         let capture_polls = Arc::new(AtomicUsize::new(0));
         let rotations = Arc::new(AtomicUsize::new(0));
         let (observer_stop, observer_stopped) = oneshot::channel();
+        let (observer_shutdown_barrier, supervisor_shutdown_barrier) = shutdown_barrier();
+        drop(supervisor_shutdown_barrier);
         let observer = tokio::spawn(run_observer(
             Arc::new(CountingCapture(Arc::clone(&capture_polls))),
             Box::new(RotatingSegment::new(Arc::clone(&rotations))),
@@ -108,6 +113,7 @@ fn one_backoff_owner_advances_holds_resets_and_never_stops_capture() {
                 let _ = observer_stopped.await;
                 ShutdownEvent::Injected
             }),
+            observer_shutdown_barrier,
             ObserverConfig {
                 capture_interval: Duration::from_secs(5),
                 segment_interval: Duration::from_secs(5),
@@ -184,6 +190,191 @@ fn one_pass_attempts_at_most_eight_candidates_sequentially() {
             SEGMENTS_PER_PASS,
             "a pass exceeded its candidate bound"
         );
+    });
+}
+
+#[test]
+fn scheduler_immediately_drains_the_remainder_of_a_bounded_sweep() {
+    run(async {
+        let temporary = TestDirectory::new("sync-bounded-drain");
+        for index in 0..(SEGMENTS_PER_PASS + 1) {
+            create_segment(
+                temporary.path(),
+                &format!("12{index:02}00_300"),
+                b"fixture\n",
+            );
+        }
+        let (journal, mut calls) = FakeJournal::new();
+        let (stop, stopped) = oneshot::channel();
+        let mut scheduler = scheduler(&temporary, clock(), SyncWake::default());
+        let task = tokio::spawn(async move {
+            let mut journal = journal;
+            scheduler
+                .run(&mut journal, async move {
+                    let _ = stopped.await;
+                })
+                .await;
+        });
+
+        let mut uploads = Vec::new();
+        while uploads.len() < SEGMENTS_PER_PASS + 1 {
+            uploads.push(expect_upload(&mut calls).await);
+        }
+        for _ in 0..SCHEDULER_TURNS {
+            tokio::task::yield_now().await;
+        }
+        uploads.extend(drain_uploads(&mut calls));
+        assert_eq!(uploads.len(), SEGMENTS_PER_PASS + 1);
+
+        let _ = stop.send(());
+        task.await.expect("join scheduler");
+    });
+}
+
+#[test]
+fn retained_outcomes_keep_their_diagnostic_and_never_claim_custody() {
+    run(async {
+        for code in [
+            DiagnosticCode::RequestTooLarge,
+            DiagnosticCode::LocalSegmentInvalid,
+        ] {
+            let temporary = TestDirectory::new("sync-retained-diagnostic");
+            create_segment(temporary.path(), "120000_300", b"fixture\n");
+            let mut scripted = HashMap::new();
+            scripted.insert(
+                "120000_300".to_owned(),
+                VecDeque::from([Err(SyncOperationError::RetainCandidate(code))]),
+            );
+            let (mut journal, _calls) = FakeJournal::with_upload_outcomes(scripted);
+            let mut scheduler = scheduler(&temporary, clock(), SyncWake::default());
+
+            let summary = scheduler.run_pass(&mut journal).await;
+
+            assert_eq!(summary.diagnostic, Some(code));
+            assert_eq!(summary.custodied, 0);
+        }
+    });
+}
+
+#[test]
+fn conflict_and_failed_contacts_do_not_claim_successful_custody() {
+    run(async {
+        for status in [UploadStatus::Conflict, UploadStatus::Failed] {
+            let temporary = TestDirectory::new("sync-retained-upload-status");
+            create_segment(temporary.path(), "120000_300", b"fixture\n");
+            let mut scripted = HashMap::new();
+            scripted.insert(
+                "120000_300".to_owned(),
+                VecDeque::from([Ok(UploadResult {
+                    status,
+                    authoritative_key: None,
+                })]),
+            );
+            let (mut journal, _calls) = FakeJournal::with_upload_outcomes(scripted);
+            let mut scheduler = scheduler(&temporary, clock(), SyncWake::default());
+
+            let summary = scheduler.run_pass(&mut journal).await;
+
+            assert!(summary.contacted);
+            assert_eq!(summary.custodied, 0);
+        }
+    });
+}
+
+#[test]
+fn health_distinguishes_contact_from_custody_and_decrements_deleted_work() {
+    run(async {
+        let successful = TestDirectory::new("sync-health-custody");
+        ensure_private_directory(successful.path()).expect("prepare data root");
+        create_segment(successful.path(), "120000_300", b"fixture\n");
+        let lock = InstanceLock::acquire(successful.path()).expect("instance lock");
+        let health = HealthWriter::new(successful.path().to_path_buf(), &lock);
+        let (activity, _activity_receiver) = tokio::sync::watch::channel(SyncActivity::Idle);
+        let (journal, mut calls) = FakeJournal::new();
+        let (stop, stopped) = oneshot::channel();
+        let mut scheduler = SyncScheduler::new(
+            successful.path().join("captures"),
+            stream(),
+            0,
+            clock(),
+            SyncWake::default(),
+        )
+        .with_observability(activity, health);
+        let task = tokio::spawn(async move {
+            let mut journal = journal;
+            scheduler
+                .run(&mut journal, async move {
+                    let _ = stopped.await;
+                })
+                .await;
+        });
+        let _ = expect_upload(&mut calls).await;
+        let snapshot = wait_for_idle_snapshot(successful.path()).await;
+        assert_eq!(snapshot["pending_segments"], 0);
+        assert!(!snapshot["last_successful_contact_unix_seconds"].is_null());
+        assert!(!snapshot["last_successful_sync_unix_seconds"].is_null());
+        let _ = stop.send(());
+        task.await.expect("join successful scheduler");
+
+        let retained = TestDirectory::new("sync-health-contact");
+        ensure_private_directory(retained.path()).expect("prepare data root");
+        create_segment(retained.path(), "120000_300", b"fixture\n");
+        let lock = InstanceLock::acquire(retained.path()).expect("instance lock");
+        let health = HealthWriter::new(retained.path().to_path_buf(), &lock);
+        let (activity, _activity_receiver) = tokio::sync::watch::channel(SyncActivity::Idle);
+        let mut scripted = HashMap::new();
+        scripted.insert(
+            "120000_300".to_owned(),
+            VecDeque::from([Ok(UploadResult {
+                status: UploadStatus::Conflict,
+                authoritative_key: None,
+            })]),
+        );
+        let (journal, mut calls) = FakeJournal::with_upload_outcomes(scripted);
+        let (stop, stopped) = oneshot::channel();
+        let mut scheduler = SyncScheduler::new(
+            retained.path().join("captures"),
+            stream(),
+            0,
+            clock(),
+            SyncWake::default(),
+        )
+        .with_observability(activity, health);
+        let task = tokio::spawn(async move {
+            let mut journal = journal;
+            scheduler
+                .run(&mut journal, async move {
+                    let _ = stopped.await;
+                })
+                .await;
+        });
+        let _ = expect_upload(&mut calls).await;
+        let snapshot = wait_for_idle_snapshot(retained.path()).await;
+        assert_eq!(snapshot["pending_segments"], 1);
+        assert!(!snapshot["last_successful_contact_unix_seconds"].is_null());
+        assert!(snapshot["last_successful_sync_unix_seconds"].is_null());
+        let _ = stop.send(());
+        task.await.expect("join retained scheduler");
+    });
+}
+
+#[test]
+fn an_unscannable_capture_root_is_not_an_empty_success() {
+    run(async {
+        let temporary = TestDirectory::new("sync-scan-failure");
+        let captures = temporary.path().join("captures");
+        std::os::unix::fs::symlink(temporary.path(), &captures).expect("create captures alias");
+        let (mut journal, _calls) = FakeJournal::new();
+        let mut scheduler = scheduler(&temporary, clock(), SyncWake::default());
+
+        let summary = scheduler.run_pass(&mut journal).await;
+
+        assert_eq!(summary.failure, Some(SyncFailureClass::Contract));
+        assert_eq!(
+            summary.diagnostic,
+            Some(DiagnosticCode::LocalSegmentInvalid)
+        );
+        assert!(!summary.contacted);
     });
 }
 
@@ -328,7 +519,11 @@ impl SyncJournal for HeartbeatJournal {
         _candidate: &'a SegmentCandidate,
         _files: Vec<PathBuf>,
     ) -> Pin<Box<dyn Future<Output = Result<UploadResult, SyncOperationError>> + Send + 'a>> {
-        Box::pin(async { Err(SyncOperationError::RetainCandidate) })
+        Box::pin(async {
+            Err(SyncOperationError::RetainCandidate(
+                DiagnosticCode::LocalSegmentInvalid,
+            ))
+        })
     }
 
     fn segments<'a>(
@@ -356,6 +551,10 @@ struct GatedJournal {
 }
 
 impl SyncJournal for GatedJournal {
+    fn observer_name(&self) -> Option<&str> {
+        None
+    }
+
     fn ensure_registered<'a>(
         &'a mut self,
     ) -> Pin<Box<dyn Future<Output = Result<bool, SyncOperationError>> + Send + 'a>> {
@@ -384,6 +583,13 @@ impl SyncJournal for GatedJournal {
     ) -> Pin<Box<dyn Future<Output = Result<SegmentsEnvelope, SyncOperationError>> + Send + 'a>>
     {
         Box::pin(async { Ok(empty_listing()) })
+    }
+
+    fn status_event<'a>(
+        &'a mut self,
+        _beacon: &'a StatusBeacon,
+    ) -> Pin<Box<dyn Future<Output = Result<(), SyncOperationError>> + Send + 'a>> {
+        Box::pin(async { Ok(()) })
     }
 }
 
@@ -436,6 +642,10 @@ impl FakeJournal {
 }
 
 impl SyncJournal for FakeJournal {
+    fn observer_name(&self) -> Option<&str> {
+        None
+    }
+
     fn ensure_registered<'a>(
         &'a mut self,
     ) -> Pin<Box<dyn Future<Output = Result<bool, SyncOperationError>> + Send + 'a>> {
@@ -461,9 +671,9 @@ impl SyncJournal for FakeJournal {
             {
                 return outcome;
             }
-            let inventory = inventory_files(files)
-                .await
-                .map_err(|_| SyncOperationError::RetainCandidate)?;
+            let inventory = inventory_files(files).await.map_err(|_| {
+                SyncOperationError::RetainCandidate(DiagnosticCode::LocalSegmentInvalid)
+            })?;
             self.uploaded
                 .entry(candidate.day().to_owned())
                 .or_default()
@@ -512,6 +722,13 @@ impl SyncJournal for FakeJournal {
                 protocol_version: 2,
             })
         })
+    }
+
+    fn status_event<'a>(
+        &'a mut self,
+        _beacon: &'a StatusBeacon,
+    ) -> Pin<Box<dyn Future<Output = Result<(), SyncOperationError>> + Send + 'a>> {
+        Box::pin(async { Ok(()) })
     }
 }
 
@@ -660,6 +877,19 @@ async fn advance_both(clock: &TestClock, duration: Duration) {
     for _ in 0..SCHEDULER_TURNS {
         tokio::task::yield_now().await;
     }
+}
+
+async fn wait_for_idle_snapshot(root: &Path) -> serde_json::Value {
+    for _ in 0..SCHEDULER_TURNS {
+        if let Ok(bytes) = std::fs::read(root.join(HEALTH_FILENAME))
+            && let Ok(snapshot) = serde_json::from_slice::<serde_json::Value>(&bytes)
+            && snapshot["sync_in_progress"] == false
+        {
+            return snapshot;
+        }
+        tokio::task::yield_now().await;
+    }
+    panic!("scheduler did not publish its idle health snapshot");
 }
 
 fn paused(future: impl Future<Output = ()>) {

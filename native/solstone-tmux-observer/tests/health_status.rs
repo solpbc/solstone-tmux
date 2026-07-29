@@ -4,19 +4,30 @@
 mod support;
 
 use std::fs;
-use std::process::Command;
+use std::io::Write;
+use std::os::unix::fs::symlink;
+use std::process::{Command, Stdio};
 
-use serde_json::Value;
+use serde_json::{Value, json};
 use solstone_tmux_observer::health::{
     DiagnosticCode, HEALTH_FILENAME, HealthState, HealthWriter, StatusHealth, SyncFacts,
     read_status_health,
 };
 use solstone_tmux_observer::instance_lock::{InstanceLock, LOCK_FILENAME};
+use solstone_tmux_observer::journal::RegistrationDescriptor;
 use solstone_tmux_observer::paths::ensure_private_directory;
-use solstone_tmux_observer::sync::StatusBeacon;
+use solstone_tmux_observer::sync::{
+    RegistrationOwner, StatusBeacon, SyncFailureClass, SyncOperationError,
+};
+use support::private_link_peer::PrivateLinkPeer;
 use support::{IsolatedRoots, TestDirectory};
 
 const NOW: i64 = 1_800_000_000;
+const PAIR_LINK_SENTINEL: &str = "SENTINEL_PAIR_LINK";
+const OBSERVER_KEY_SENTINEL: &str = "SENTINEL_OBSERVER_KEY_SENTINEL_BEARER_TOKEN";
+const RELAY_TOKEN_SENTINEL: &str = "SENTINEL_RELAY_TOKEN";
+const RESPONSE_BODY_SENTINEL: &str = "SENTINEL_RESPONSE_BODY";
+const CAPTURE_PATH_SENTINEL: &str = "SENTINEL_CAPTURE_PATH";
 
 #[test]
 fn configured_without_contact_is_offline_and_empty_contact_is_connected() {
@@ -38,11 +49,16 @@ fn configured_without_contact_is_offline_and_empty_contact_is_connected() {
         );
 
         facts.successful_contact(NOW);
+        assert_eq!(facts.last_successful_contact_unix_seconds, Some(NOW));
+        assert_eq!(facts.last_successful_sync_unix_seconds, None);
         writer.write(&facts, NOW).await.expect("connected snapshot");
         assert_eq!(
             read_status_health(&data_root, NOW),
             StatusHealth::Live(HealthState::Connected)
         );
+
+        facts.successful_sync(NOW + 1);
+        assert_eq!(facts.last_successful_sync_unix_seconds, Some(NOW + 1));
     });
 }
 
@@ -72,44 +88,156 @@ fn stale_and_prior_run_snapshots_never_read_connected() {
 }
 
 #[test]
-fn snapshot_and_closed_errors_have_no_secret_or_owner_content_fields() {
+fn retry_work_with_an_existing_error_is_a_valid_syncing_snapshot() {
     runtime().block_on(async {
-        let temporary = TestDirectory::new("health-redaction");
+        let temporary = TestDirectory::new("health-retry-work");
         let data_root = temporary.path().join("data");
         ensure_private_directory(&data_root).expect("data root");
         let lock = InstanceLock::acquire(&data_root).expect("instance lock");
         let writer = HealthWriter::new(data_root.clone(), &lock);
-        let sentinels = [
-            "SENTINEL_PAIR_LINK",
-            "SENTINEL_OBSERVER_KEY",
-            "SENTINEL_RELAY_TOKEN",
-            "SENTINEL_RESPONSE_BODY",
-            "SENTINEL_CAPTURE_PATH",
-            "SENTINEL_TERMINAL_CONTENT",
-        ];
-        let failure_codes = [
-            DiagnosticCode::JournalUnavailable,
-            DiagnosticCode::BridgeUnavailable,
-            DiagnosticCode::JournalRejected,
-            DiagnosticCode::JournalTimeout,
-            DiagnosticCode::JournalContractInvalid,
-            DiagnosticCode::SyncTaskExited,
-            DiagnosticCode::SyncTaskPanicked,
-            DiagnosticCode::SyncTaskCancelled,
-            DiagnosticCode::IndicatorUpdateFailed,
-        ];
-        let mut rendered_errors = String::new();
-        for code in failure_codes {
-            let mut facts = SyncFacts {
-                paired: true,
-                ..SyncFacts::default()
-            };
-            facts.failed(code);
-            writer.write(&facts, NOW).await.expect("health snapshot");
-            rendered_errors.push_str(code.message());
-        }
-        let snapshot = fs::read(data_root.join(HEALTH_FILENAME)).expect("snapshot bytes");
-        let snapshot: Value = serde_json::from_slice(&snapshot).expect("snapshot JSON");
+        let mut facts = SyncFacts {
+            paired: true,
+            sync_in_progress: true,
+            ..SyncFacts::default()
+        };
+        facts.failed(DiagnosticCode::PrivateStateIo);
+
+        writer.write(&facts, NOW).await.expect("syncing snapshot");
+
+        assert_eq!(
+            read_status_health(&data_root, NOW),
+            StatusHealth::Live(HealthState::Syncing)
+        );
+    });
+}
+
+#[test]
+fn status_rejects_a_symlinked_data_root() {
+    runtime().block_on(async {
+        let temporary = TestDirectory::new("health-symlink-root");
+        let data_root = temporary.path().join("real-data");
+        let alias = temporary.path().join("alias-data");
+        ensure_private_directory(&data_root).expect("data root");
+        let lock = InstanceLock::acquire(&data_root).expect("instance lock");
+        let writer = HealthWriter::new(data_root.clone(), &lock);
+        let mut facts = SyncFacts {
+            paired: true,
+            ..SyncFacts::default()
+        };
+        facts.successful_contact(NOW);
+        writer.write(&facts, NOW).await.expect("health snapshot");
+        symlink(&data_root, &alias).expect("data root alias");
+
+        assert_eq!(read_status_health(&alias, NOW), StatusHealth::Unknown);
+        assert_eq!(
+            read_status_health(&data_root, NOW),
+            StatusHealth::Live(HealthState::Connected)
+        );
+    });
+}
+
+#[test]
+fn production_failure_paths_redact_secrets_and_owner_content() {
+    let setup_temporary = TestDirectory::new("health-redaction-setup");
+    let setup_roots = IsolatedRoots::new(setup_temporary.path());
+    let mut command = Command::new(env!("CARGO_BIN_EXE_solstone-tmux-observer"));
+    command
+        .arg("setup")
+        .env_clear()
+        .envs(setup_roots.entries().iter().cloned())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut setup = command.spawn().expect("spawn failing setup");
+    setup
+        .stdin
+        .take()
+        .expect("setup stdin")
+        .write_all(format!("{PAIR_LINK_SENTINEL}\n").as_bytes())
+        .expect("write failing pair link");
+    let setup_output = setup.wait_with_output().expect("wait for failing setup");
+    assert_eq!(setup_output.status.code(), Some(1));
+    let setup_stderr = String::from_utf8(setup_output.stderr).expect("setup stderr");
+
+    runtime().block_on(async {
+        let temporary = TestDirectory::new("health-redaction-network");
+        let config_root = temporary.path().join("config");
+        let data_root = temporary.path().join("data");
+        ensure_private_directory(&config_root).expect("config root");
+        ensure_private_directory(&data_root).expect("data root");
+        let lock = InstanceLock::acquire(&data_root).expect("instance lock");
+        let writer = HealthWriter::new(data_root.clone(), &lock);
+
+        let peer = PrivateLinkPeer::start().await;
+        let mut credential = peer.credential();
+        credential.device_token = Some(RELAY_TOKEN_SENTINEL.to_owned());
+        credential.device_token_expires_at = Some(NOW + 300);
+        peer.enqueue_response(
+            200,
+            serde_json::to_vec(&json!({
+                "key": OBSERVER_KEY_SENTINEL,
+                "prefix": "redaction",
+                "name": "redaction",
+                "ingest_url": "/app/observer/ingest",
+                "protocol_version": 2,
+            }))
+            .expect("registration response"),
+        );
+        let owner = RegistrationOwner::start(credential, config_root)
+            .await
+            .expect("start redaction registration owner");
+        owner
+            .ensure_registration(&RegistrationDescriptor {
+                platform: "linux".to_owned(),
+                hostname: "redaction".to_owned(),
+            })
+            .await
+            .expect("register redaction observer");
+
+        peer.enqueue_response(200, RESPONSE_BODY_SENTINEL.as_bytes());
+        let response_error = match owner.journal().ingest_segments("20260728").await {
+            Err(error) => error,
+            Ok(_) => panic!("malformed response was accepted"),
+        };
+        let requests = peer.requests();
+        let authenticated = requests.last().expect("authenticated request");
+        assert!(
+            authenticated
+                .header("x-solstone-observer")
+                .is_some_and(|value| value == OBSERVER_KEY_SENTINEL),
+            "observer authentication was not exercised"
+        );
+        assert!(
+            authenticated
+                .header("authorization")
+                .is_some_and(|value| value == format!("Bearer {OBSERVER_KEY_SENTINEL}")),
+            "bearer authentication was not exercised"
+        );
+
+        let capture_path = temporary.path().join(CAPTURE_PATH_SENTINEL);
+        let path_error = match owner
+            .journal()
+            .ingest_upload(
+                "/app/observer/ingest",
+                "20260728",
+                "120000_300",
+                vec![capture_path],
+            )
+            .await
+        {
+            Err(error) => error,
+            Ok(_) => panic!("invalid local segment was accepted"),
+        };
+
+        let mut facts = SyncFacts {
+            paired: true,
+            ..SyncFacts::default()
+        };
+        facts.failed(response_error.diagnostic());
+        facts.failed(path_error.diagnostic());
+        writer.write(&facts, NOW).await.expect("health snapshot");
+        let snapshot_bytes = fs::read(data_root.join(HEALTH_FILENAME)).expect("snapshot bytes");
+        let snapshot: Value = serde_json::from_slice(&snapshot_bytes).expect("snapshot JSON");
         let keys = snapshot
             .as_object()
             .expect("snapshot object")
@@ -134,11 +262,66 @@ fn snapshot_and_closed_errors_have_no_secret_or_owner_content_fields() {
             ]
             .len()
         );
-        let snapshot_text = snapshot.to_string();
-        for sentinel in sentinels {
-            assert!(!snapshot_text.contains(sentinel));
-            assert!(!rendered_errors.contains(sentinel));
+        let sync_failure = SyncOperationError::EndPassDiagnostic(
+            SyncFailureClass::Contract,
+            response_error.diagnostic(),
+        );
+        let process_failure = format!("{response_error}; {path_error}; {sync_failure}");
+        for sentinel in [
+            PAIR_LINK_SENTINEL,
+            "SENTINEL_OBSERVER_KEY",
+            "SENTINEL_BEARER_TOKEN",
+            RELAY_TOKEN_SENTINEL,
+            RESPONSE_BODY_SENTINEL,
+            CAPTURE_PATH_SENTINEL,
+        ] {
+            assert!(
+                !setup_stderr.contains(sentinel),
+                "setup stderr disclosed a sensitive sentinel"
+            );
+            assert!(
+                !process_failure.contains(sentinel),
+                "process failure text disclosed a sensitive sentinel"
+            );
+            assert!(
+                !snapshot_bytes
+                    .windows(sentinel.len())
+                    .any(|window| window == sentinel.as_bytes()),
+                "health snapshot disclosed a sensitive sentinel"
+            );
         }
+        owner.shutdown().await.expect("shutdown registration owner");
+        peer.shutdown().await;
+    });
+}
+
+#[test]
+fn health_write_failures_use_the_health_diagnostic_and_setup_guidance_is_actionable() {
+    runtime().block_on(async {
+        let temporary = TestDirectory::new("health-write-failure");
+        let data_root = temporary.path().join("data");
+        ensure_private_directory(&data_root).expect("data root");
+        let lock = InstanceLock::acquire(&data_root).expect("instance lock");
+        let writer = HealthWriter::new(data_root.clone(), &lock);
+        fs::create_dir(data_root.join(HEALTH_FILENAME)).expect("invalid health target");
+
+        assert_eq!(
+            writer
+                .write(&SyncFacts::default(), NOW)
+                .await
+                .expect_err("invalid health target was accepted"),
+            DiagnosticCode::HealthSnapshotIo
+        );
+        assert!(
+            DiagnosticCode::SetupUnavailable
+                .message()
+                .contains("stop the observer")
+        );
+        assert!(
+            DiagnosticCode::PairingFailed
+                .message()
+                .contains("verify the link")
+        );
     });
 }
 
@@ -202,6 +385,7 @@ fn status_beacon_has_only_the_eight_closed_diagnostic_fields() {
 
 fn runtime() -> tokio::runtime::Runtime {
     tokio::runtime::Builder::new_current_thread()
+        .enable_io()
         .enable_time()
         .build()
         .expect("test runtime")

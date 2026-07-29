@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use reqwest::header::{CONTENT_LENGTH, CONTENT_TYPE, TRANSFER_ENCODING};
 use serde_json::{Map, Value, json};
+use sha2::{Digest, Sha256};
 use solstone_tmux_observer::health::DiagnosticCode;
 use solstone_tmux_observer::journal::{
     JournalReasonCode, JournalStatusClass, ListingFileStatus, RegistrationDescriptor, UploadStatus,
@@ -175,8 +176,8 @@ fn journal_operations_use_authority_fixtures_and_exact_streaming_multipart() {
             let owner = RegistrationOwner::start(peer.credential(), temporary.path().to_path_buf())
                 .await
                 .expect("start registration owner");
-            let observer = owner
-                .register_once(&RegistrationDescriptor {
+            let (observer, _) = owner
+                .ensure_registration(&RegistrationDescriptor {
                     platform: "linux".to_owned(),
                     hostname: "archon".to_owned(),
                 })
@@ -247,7 +248,7 @@ fn journal_operations_use_authority_fixtures_and_exact_streaming_multipart() {
             assert_event_request(&requests[3], &event);
             assert_eq!(peer.accepted_carriers(), 1);
 
-            owner.shutdown().await;
+            owner.shutdown().await.expect("shutdown registration owner");
             peer.shutdown().await;
         })
         .await
@@ -274,8 +275,8 @@ fn over_limit_multipart_fails_before_an_http_request() {
             let owner = RegistrationOwner::start(peer.credential(), temporary.path().to_path_buf())
                 .await
                 .expect("start registration owner");
-            let observer = owner
-                .register_once(&RegistrationDescriptor {
+            let (observer, _) = owner
+                .ensure_registration(&RegistrationDescriptor {
                     platform: "linux".to_owned(),
                     hostname: "archon".to_owned(),
                 })
@@ -299,7 +300,7 @@ fn over_limit_multipart_fails_before_an_http_request() {
                 "oversized upload reached the paired peer"
             );
 
-            owner.shutdown().await;
+            owner.shutdown().await.expect("shutdown registration owner");
             peer.shutdown().await;
         })
         .await
@@ -401,7 +402,7 @@ fn assert_exact_multipart(
     push_file_part(&mut expected, boundary, "screen.png", screen);
     push_file_part(&mut expected, boundary, "audio.flac", audio);
     expected.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
-    assert_eq!(request.body(), expected);
+    assert_exact_body(request.body(), &expected);
 }
 
 fn push_text_part(body: &mut Vec<u8>, boundary: &str, name: &str, value: &str) {
@@ -422,6 +423,20 @@ fn push_file_part(body: &mut Vec<u8>, boundary: &str, filename: &str, bytes: &[u
     );
     body.extend_from_slice(bytes);
     body.extend_from_slice(b"\r\n");
+}
+
+fn assert_exact_body(actual: &[u8], expected: &[u8]) {
+    assert_eq!(
+        actual.len(),
+        expected.len(),
+        "multipart body length mismatch"
+    );
+    let actual_sha256 = format!("{:x}", Sha256::digest(actual));
+    let expected_sha256 = format!("{:x}", Sha256::digest(expected));
+    assert!(
+        actual == expected,
+        "multipart body digest mismatch: actual={actual_sha256}, expected={expected_sha256}"
+    );
 }
 
 fn assert_event_request(request: &PeerRequest, fixture: &Value) {

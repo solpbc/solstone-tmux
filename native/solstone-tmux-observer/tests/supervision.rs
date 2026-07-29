@@ -14,8 +14,8 @@ use solstone_tmux_observer::model::CaptureResult;
 use solstone_tmux_observer::name::derive_component;
 use solstone_tmux_observer::observer::{
     CaptureProvider, LifecycleLock, ObserverConfig, ObserverExit, ObserverOperationError,
-    SegmentManager, ShutdownEvent, ShutdownIndicator, run_observer, stream_directory,
-    supervise_observer,
+    SegmentManager, ShutdownEvent, ShutdownIndicator, SupervisionControl, run_observer,
+    shutdown_barrier, stream_directory, supervise_observer,
 };
 use solstone_tmux_observer::paths::ensure_private_directory;
 use solstone_tmux_observer::segment::SegmentState;
@@ -69,15 +69,20 @@ fn authorized_shutdown_joins_sync_before_indicator_and_lock_cleanup() {
             failures: Vec::new(),
         }
     };
+    let (observer_barrier, supervisor_barrier) = shutdown_barrier();
+    drop(observer_barrier);
 
     let exit = runtime().block_on(supervise_observer(
         observer,
         sync,
         Box::new(indicator),
         Box::new(lock),
-        activity_receiver,
-        sync_stop,
-        observer_stop,
+        SupervisionControl {
+            activity: activity_receiver,
+            sync_stop,
+            observer_stop,
+            shutdown_barrier: supervisor_barrier,
+        },
     ));
 
     assert_eq!(exit.exit_code, 0);
@@ -109,18 +114,22 @@ fn shutdown_keeps_the_final_segment_for_a_later_scan() {
         .append_capture(&golden_capture("main"), 0.25, Duration::from_secs(1))
         .expect("append capture");
     clock.set_monotonic(Duration::from_secs(5));
+    let finalized = stream_dir.join("120000_005");
+    let wake = SyncWake::default();
     let manager = SegmentManager::new(
         segment,
         data_root.clone(),
         stream,
         clock.local_offset(),
-        SyncWake::default(),
+        wake.clone(),
     );
+    let (observer_barrier, supervisor_barrier) = shutdown_barrier();
     let observer = run_observer(
         Arc::new(NoCaptures),
         Box::new(manager),
         Arc::new(clock) as Arc<dyn Clock>,
         Box::pin(async { ShutdownEvent::Injected }),
+        observer_barrier,
         ObserverConfig {
             capture_interval: Duration::from_secs(5),
             segment_interval: Duration::from_secs(300),
@@ -130,9 +139,25 @@ fn shutdown_keeps_the_final_segment_for_a_later_scan() {
     let (sync_stop, mut sync_shutdown) = tokio::sync::watch::channel(false);
     let (observer_stop, _observer_shutdown) =
         tokio::sync::watch::channel::<Option<ShutdownEvent>>(None);
+    let sync_target = finalized.clone();
     let sync = async move {
-        wait_for_stop(&mut sync_shutdown).await;
-        Ok(())
+        loop {
+            tokio::select! {
+                () = wake.wait() => {
+                    let file = sync_target.join("tmux_main_screen.jsonl");
+                    if file.is_file() {
+                        std::fs::remove_file(file).expect("remove notified fixture file");
+                        std::fs::remove_dir(&sync_target)
+                            .expect("remove notified fixture segment");
+                    }
+                }
+                changed = sync_shutdown.changed() => {
+                    if changed.is_err() || *sync_shutdown.borrow_and_update() {
+                        break Ok(());
+                    }
+                }
+            }
+        }
     };
 
     let exit = runtime().block_on(supervise_observer(
@@ -140,13 +165,15 @@ fn shutdown_keeps_the_final_segment_for_a_later_scan() {
         sync,
         Box::new(NoopIndicator),
         Box::new(lock),
-        activity_receiver,
-        sync_stop,
-        observer_stop,
+        SupervisionControl {
+            activity: activity_receiver,
+            sync_stop,
+            observer_stop,
+            shutdown_barrier: supervisor_barrier,
+        },
     ));
 
     assert_eq!(exit.exit_code, 0);
-    let finalized = stream_dir.join("120000_005");
     assert!(finalized.is_dir());
     assert!(finalized.join("tmux_main_screen.jsonl").is_file());
     let reacquired =
@@ -181,14 +208,19 @@ async fn supervise_fixture(
             }
         }
     };
+    let (observer_barrier, supervisor_barrier) = shutdown_barrier();
+    drop(observer_barrier);
     supervise_observer(
         observer,
         sync,
         Box::new(NoopIndicator),
         Box::new(RecordingLock::default()),
-        activity_receiver,
-        sync_stop,
-        observer_stop,
+        SupervisionControl {
+            activity: activity_receiver,
+            sync_stop,
+            observer_stop,
+            shutdown_barrier: supervisor_barrier,
+        },
     )
     .await
 }

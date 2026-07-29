@@ -7,6 +7,8 @@ use std::fs;
 use std::io::Write;
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::process::{Command, Stdio};
+use std::thread;
+use std::time::Duration;
 
 use solstone_tmux_observer::cli::{CliCommand, parse_args};
 use solstone_tmux_observer::health::DiagnosticCode;
@@ -134,6 +136,54 @@ fn invalid_setup_input_creates_only_config_root_and_redacts_input() {
     assert!(roots.config_root().is_dir());
     assert!(!roots.config_root().join(CREDENTIALS_FILENAME).exists());
     assert!(!roots.config_root().join(OBSERVER_FILENAME).exists());
+}
+
+#[test]
+fn setup_serializes_on_the_config_root_before_reading_input() {
+    let temporary = TestDirectory::new("setup-config-lock");
+    let roots = IsolatedRoots::new(temporary.path());
+    let mut first = Command::new(env!("CARGO_BIN_EXE_solstone-tmux-observer"))
+        .arg("setup")
+        .env_clear()
+        .envs(roots.entries().iter().cloned())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn first setup");
+    for _ in 0..1_000 {
+        if fs::read_dir(roots.config_root())
+            .ok()
+            .is_some_and(|mut entries| entries.next().is_some())
+        {
+            break;
+        }
+        thread::sleep(Duration::from_millis(1));
+    }
+    assert!(
+        fs::read_dir(roots.config_root())
+            .expect("read config root")
+            .next()
+            .is_some(),
+        "first setup did not acquire its config lock"
+    );
+
+    let second = Command::new(env!("CARGO_BIN_EXE_solstone-tmux-observer"))
+        .arg("setup")
+        .env_clear()
+        .envs(roots.entries().iter().cloned())
+        .output()
+        .expect("run second setup");
+    assert_eq!(second.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&second.stderr).contains("setup is unavailable"),
+        "concurrent setup was not refused"
+    );
+
+    drop(first.stdin.take());
+    let first = first.wait_with_output().expect("finish first setup");
+    assert_eq!(first.status.code(), Some(1));
+    assert!(!roots.data_root().exists());
 }
 
 fn credential(instance_id: &str) -> Credential {

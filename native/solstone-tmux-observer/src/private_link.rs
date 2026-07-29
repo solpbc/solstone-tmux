@@ -25,10 +25,11 @@ use crate::instance_lock::InstanceLock;
 use crate::paths::{
     Environment, PlatformKind, ensure_private_directory, resolve_config_root, resolve_data_root,
 };
-use crate::storage::{StorageError, atomic_write_bytes};
+use crate::storage::{StorageError, atomic_write_bytes, open_regular_readonly};
 
 pub const CREDENTIALS_FILENAME: &str = "credentials.json";
 pub const OBSERVER_FILENAME: &str = "observer.json";
+const PRIVATE_STATE_LOCK_FILENAME: &str = ".solstone-tmux-observer.private-state.lock";
 const MAX_PAIR_LINK_BYTES: u64 = 4096;
 pub const MAX_REQUEST_BODY_BYTES: usize = 16 * 1024 * 1024;
 const CAPABILITY_COOKIE_NAME: &str = "solstone_tmux_cap";
@@ -230,10 +231,36 @@ where
     let config_root =
         resolve_config_root(platform, environment).map_err(|_| DiagnosticCode::SetupUnavailable)?;
     ensure_private_directory(&config_root).map_err(|_| DiagnosticCode::SetupUnavailable)?;
+    let _private_state_lock = acquire_private_state_lock(&config_root)?;
     let device_label = system_hostname().map_err(|_| DiagnosticCode::SetupUnavailable)?;
     let link = read_pair_link(input)?;
     let credential = pairer(link, device_label).await?;
     persist_credential(&config_root, &credential)
+}
+
+pub fn acquire_private_state_lock(config_root: &Path) -> Result<File, DiagnosticCode> {
+    let path = config_root.join(PRIVATE_STATE_LOCK_FILENAME);
+    let descriptor = rustix::fs::open(
+        &path,
+        rustix::fs::OFlags::RDWR
+            | rustix::fs::OFlags::CLOEXEC
+            | rustix::fs::OFlags::NOFOLLOW
+            | rustix::fs::OFlags::CREATE,
+        rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+    )
+    .map_err(|_| DiagnosticCode::SetupUnavailable)?;
+    let file = File::from(descriptor);
+    let metadata = file
+        .metadata()
+        .map_err(|_| DiagnosticCode::SetupUnavailable)?;
+    if !metadata.is_file() {
+        return Err(DiagnosticCode::SetupUnavailable);
+    }
+    file.set_permissions(fs::Permissions::from_mode(0o600))
+        .map_err(|_| DiagnosticCode::SetupUnavailable)?;
+    rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive)
+        .map_err(|_| DiagnosticCode::SetupUnavailable)?;
+    Ok(file)
 }
 
 pub fn load_credential(config_root: &Path) -> Result<Option<Credential>, DiagnosticCode> {
@@ -297,23 +324,21 @@ fn read_pair_link<R: Read>(input: R) -> Result<String, DiagnosticCode> {
 }
 
 fn read_private_file(path: &Path) -> Result<Option<Vec<u8>>, DiagnosticCode> {
-    let descriptor = match rustix::fs::open(
-        path,
-        rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::CLOEXEC | rustix::fs::OFlags::NOFOLLOW,
-        rustix::fs::Mode::empty(),
-    ) {
-        Ok(descriptor) => descriptor,
-        Err(rustix::io::Errno::NOENT) => return Ok(None),
-        Err(rustix::io::Errno::LOOP) => return Err(DiagnosticCode::PrivateStateInvalid),
+    let mut file = match open_regular_readonly(path) {
+        Ok(file) => file,
+        Err(StorageError::Io { source, .. }) if source.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(None);
+        }
+        Err(StorageError::InvalidTarget(_)) => {
+            return Err(DiagnosticCode::PrivateStateInvalid);
+        }
+        Err(StorageError::Io { source, .. })
+            if source.raw_os_error() == Some(rustix::io::Errno::LOOP.raw_os_error()) =>
+        {
+            return Err(DiagnosticCode::PrivateStateInvalid);
+        }
         Err(_) => return Err(DiagnosticCode::PrivateStateIo),
     };
-    let mut file = File::from(descriptor);
-    let metadata = file
-        .metadata()
-        .map_err(|_| DiagnosticCode::PrivateStateIo)?;
-    if !metadata.is_file() {
-        return Err(DiagnosticCode::PrivateStateInvalid);
-    }
     file.set_permissions(fs::Permissions::from_mode(0o600))
         .map_err(|_| DiagnosticCode::PrivateStateIo)?;
     let mut bytes = Vec::new();

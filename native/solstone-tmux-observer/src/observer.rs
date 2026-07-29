@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use time::{OffsetDateTime, UtcOffset};
-use tokio::sync::watch;
+use tokio::sync::{oneshot, watch};
 use tokio::task::{JoinError, JoinSet};
 
 use crate::clock::{Clock, local_date_and_time};
@@ -151,7 +151,6 @@ impl SegmentLifecycle for SegmentManager {
             .segment
             .finalize(monotonic_now)
             .map_err(operation_error)?;
-        self.sync_wake.segment_closed(&close);
         Ok(close)
     }
 }
@@ -221,11 +220,44 @@ pub trait LifecycleLock: Send {}
 
 impl LifecycleLock for InstanceLock {}
 
+pub struct ObserverShutdownBarrier {
+    request: Option<oneshot::Sender<()>>,
+    release: oneshot::Receiver<()>,
+}
+
+pub struct SupervisorShutdownBarrier {
+    request: oneshot::Receiver<()>,
+    release: Option<oneshot::Sender<()>>,
+}
+
+pub fn shutdown_barrier() -> (ObserverShutdownBarrier, SupervisorShutdownBarrier) {
+    let (request, requested) = oneshot::channel();
+    let (release, released) = oneshot::channel();
+    (
+        ObserverShutdownBarrier {
+            request: Some(request),
+            release: released,
+        },
+        SupervisorShutdownBarrier {
+            request: requested,
+            release: Some(release),
+        },
+    )
+}
+
+pub struct SupervisionControl {
+    pub activity: watch::Receiver<SyncActivity>,
+    pub sync_stop: watch::Sender<bool>,
+    pub observer_stop: watch::Sender<Option<ShutdownEvent>>,
+    pub shutdown_barrier: SupervisorShutdownBarrier,
+}
+
 pub async fn run_observer(
     provider: Arc<dyn CaptureProvider>,
     mut segment: Box<dyn SegmentLifecycle>,
     clock: Arc<dyn Clock>,
     mut shutdown: Pin<Box<dyn Future<Output = ShutdownEvent> + Send>>,
+    mut shutdown_barrier: ObserverShutdownBarrier,
     config: ObserverConfig,
 ) -> ObserverExit {
     let mut interval = tokio::time::interval(config.capture_interval);
@@ -301,6 +333,10 @@ pub async fn run_observer(
         }
     };
 
+    if let Some(request) = shutdown_barrier.request.take() {
+        let _ = request.send(());
+    }
+    let _ = shutdown_barrier.release.await;
     let monotonic_now = clock.monotonic_now();
     let blocking = tokio::task::spawn_blocking(move || {
         let result = segment.shutdown(monotonic_now);
@@ -326,108 +362,154 @@ pub async fn supervise_observer<O, S>(
     sync: S,
     mut indicator: Box<dyn ShutdownIndicator>,
     instance_lock: Box<dyn LifecycleLock>,
-    mut activity: watch::Receiver<SyncActivity>,
-    sync_stop: watch::Sender<bool>,
-    observer_stop: watch::Sender<Option<ShutdownEvent>>,
+    control: SupervisionControl,
 ) -> ObserverExit
 where
     O: Future<Output = ObserverExit> + Send + 'static,
     S: Future<Output = Result<(), DiagnosticCode>> + Send + 'static,
 {
+    let SupervisionControl {
+        mut activity,
+        sync_stop,
+        observer_stop,
+        mut shutdown_barrier,
+    } = control;
     let mut observer_task = tokio::spawn(observer);
     let mut sync_task = tokio::spawn(sync);
     let mut activity_open = true;
-    let (mut exit, sync_finished) = loop {
+    let mut shutdown_request_open = true;
+    let trigger = loop {
         tokio::select! {
             result = &mut observer_task => {
-                let exit = match result {
-                    Ok(exit) => exit,
-                    Err(error) => ObserverExit {
-                        exit_code: 1,
-                        shutdown_event: None,
-                        failures: vec![format!(
-                            "observer task failed: {}",
-                            join_error_message(error)
-                        )],
-                    },
-                };
-                break (exit, false);
+                break SupervisionTrigger::Observer(result);
             }
             result = &mut sync_task => {
-                let failure = match result {
-                    Ok(Ok(())) => DiagnosticCode::SyncTaskExited.message().to_owned(),
-                    Ok(Err(code)) => format!("sync task failed: {}", code.message()),
-                    Err(error) if error.is_panic() => {
-                        DiagnosticCode::SyncTaskPanicked.message().to_owned()
-                    }
-                    Err(_) => DiagnosticCode::SyncTaskCancelled.message().to_owned(),
-                };
-                break (ObserverExit {
-                    exit_code: 1,
-                    shutdown_event: None,
-                    failures: vec![failure],
-                }, true);
+                break SupervisionTrigger::Sync(result);
+            }
+            requested = &mut shutdown_barrier.request, if shutdown_request_open => {
+                if requested.is_ok() {
+                    break SupervisionTrigger::ObserverShutdown;
+                } else {
+                    shutdown_request_open = false;
+                }
             }
             changed = activity.changed(), if activity_open => {
                 if changed.is_err() {
                     activity_open = false;
                 } else if indicator.set_activity(*activity.borrow_and_update()).await.is_err() {
-                    sync_stop.send_replace(true);
-                    observer_stop.send_replace(Some(ShutdownEvent::Injected));
-                    let _ = sync_task.await;
-                    let observer_exit = observer_task.await.ok();
-                    let mut failures =
-                        vec![DiagnosticCode::IndicatorUpdateFailed.message().to_owned()];
-                    let shutdown_event = observer_exit.as_ref().and_then(|exit| exit.shutdown_event);
-                    if let Some(observer_exit) = observer_exit {
-                        failures.extend(observer_exit.failures);
-                    }
-                    return finish_supervision(
-                        ObserverExit {
-                            exit_code: 1,
-                            shutdown_event,
-                            failures,
-                        },
-                        indicator,
-                        instance_lock,
-                    ).await;
+                    break SupervisionTrigger::IndicatorFailed;
                 }
             }
         }
     };
 
-    if sync_finished {
-        observer_stop.send_replace(Some(ShutdownEvent::Injected));
-        match observer_task.await {
-            Ok(observer_exit) => {
-                exit.failures.extend(observer_exit.failures);
-                exit.shutdown_event = observer_exit.shutdown_event;
-            }
-            Err(error) => exit.failures.push(format!(
-                "observer task failed: {}",
-                join_error_message(error)
-            )),
+    let mut exit = match trigger {
+        SupervisionTrigger::Observer(result) => {
+            sync_stop.send_replace(true);
+            let sync_result = sync_task.await;
+            release_observer(&mut shutdown_barrier);
+            let mut exit = observer_join_result(result);
+            append_authorized_sync_failure(&mut exit, sync_result);
+            exit
         }
-    } else {
-        sync_stop.send_replace(true);
-        match sync_task.await {
-            Ok(Ok(())) => {}
-            Ok(Err(code)) => exit
-                .failures
-                .push(format!("sync task failed: {}", code.message())),
-            Err(error) if error.is_panic() => {
-                exit.failures
-                    .push(DiagnosticCode::SyncTaskPanicked.message().to_owned());
-            }
-            Err(_) => exit
-                .failures
-                .push(DiagnosticCode::SyncTaskCancelled.message().to_owned()),
+        SupervisionTrigger::ObserverShutdown => {
+            sync_stop.send_replace(true);
+            let sync_result = sync_task.await;
+            release_observer(&mut shutdown_barrier);
+            let mut exit = observer_join_result(observer_task.await);
+            append_authorized_sync_failure(&mut exit, sync_result);
+            exit
         }
-    }
+        SupervisionTrigger::Sync(result) => {
+            observer_stop.send_replace(Some(ShutdownEvent::Injected));
+            release_observer(&mut shutdown_barrier);
+            let mut exit = ObserverExit {
+                exit_code: 1,
+                shutdown_event: None,
+                failures: vec![unexpected_sync_failure(result)],
+            };
+            merge_observer_result(&mut exit, observer_task.await);
+            exit
+        }
+        SupervisionTrigger::IndicatorFailed => {
+            sync_stop.send_replace(true);
+            observer_stop.send_replace(Some(ShutdownEvent::Injected));
+            let sync_result = sync_task.await;
+            release_observer(&mut shutdown_barrier);
+            let mut exit = ObserverExit {
+                exit_code: 1,
+                shutdown_event: None,
+                failures: vec![DiagnosticCode::IndicatorUpdateFailed.message().to_owned()],
+            };
+            append_authorized_sync_failure(&mut exit, sync_result);
+            merge_observer_result(&mut exit, observer_task.await);
+            exit
+        }
+    };
     if !exit.failures.is_empty() {
         exit.exit_code = 1;
     }
     finish_supervision(exit, indicator, instance_lock).await
+}
+
+enum SupervisionTrigger {
+    Observer(Result<ObserverExit, JoinError>),
+    Sync(Result<Result<(), DiagnosticCode>, JoinError>),
+    ObserverShutdown,
+    IndicatorFailed,
+}
+
+fn release_observer(barrier: &mut SupervisorShutdownBarrier) {
+    if let Some(release) = barrier.release.take() {
+        let _ = release.send(());
+    }
+}
+
+fn observer_join_result(result: Result<ObserverExit, JoinError>) -> ObserverExit {
+    match result {
+        Ok(exit) => exit,
+        Err(error) => ObserverExit {
+            exit_code: 1,
+            shutdown_event: None,
+            failures: vec![format!(
+                "observer task failed: {}",
+                join_error_message(error)
+            )],
+        },
+    }
+}
+
+fn merge_observer_result(exit: &mut ObserverExit, result: Result<ObserverExit, JoinError>) {
+    let observer_exit = observer_join_result(result);
+    exit.failures.extend(observer_exit.failures);
+    exit.shutdown_event = observer_exit.shutdown_event;
+}
+
+fn append_authorized_sync_failure(
+    exit: &mut ObserverExit,
+    result: Result<Result<(), DiagnosticCode>, JoinError>,
+) {
+    match result {
+        Ok(Ok(())) => {}
+        Ok(Err(code)) => exit
+            .failures
+            .push(format!("sync task failed: {}", code.message())),
+        Err(error) if error.is_panic() => exit
+            .failures
+            .push(DiagnosticCode::SyncTaskPanicked.message().to_owned()),
+        Err(_) => exit
+            .failures
+            .push(DiagnosticCode::SyncTaskCancelled.message().to_owned()),
+    }
+}
+
+fn unexpected_sync_failure(result: Result<Result<(), DiagnosticCode>, JoinError>) -> String {
+    match result {
+        Ok(Ok(())) => DiagnosticCode::SyncTaskExited.message().to_owned(),
+        Ok(Err(code)) => format!("sync task failed: {}", code.message()),
+        Err(error) if error.is_panic() => DiagnosticCode::SyncTaskPanicked.message().to_owned(),
+        Err(_) => DiagnosticCode::SyncTaskCancelled.message().to_owned(),
+    }
 }
 
 async fn finish_supervision(

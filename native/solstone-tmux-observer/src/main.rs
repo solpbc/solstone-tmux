@@ -15,8 +15,8 @@ use solstone_tmux_observer::health::{
 use solstone_tmux_observer::indicator::{CommandIndicatorIo, IndicatorOwnership};
 use solstone_tmux_observer::instance_lock::InstanceLock;
 use solstone_tmux_observer::observer::{
-    ObserverConfig, SegmentManager, production_shutdown_future, run_observer, stream_directory,
-    supervise_observer,
+    ObserverConfig, SegmentManager, SupervisionControl, production_shutdown_future, run_observer,
+    shutdown_barrier, stream_directory, supervise_observer,
 };
 use solstone_tmux_observer::paths::{
     ProcessEnvironment, ensure_private_directory, resolve_config_root, resolve_data_root,
@@ -135,6 +135,8 @@ fn run_native(
     let config_root =
         resolve_config_root(platform, environment).map_err(|error| error.to_string())?;
     ensure_private_directory(&config_root).map_err(|error| error.to_string())?;
+    let _private_state_lock = private_link::acquire_private_state_lock(&config_root)
+        .map_err(|_| "private state is already in use".to_owned())?;
     let hostname = system_hostname().map_err(|error| error.to_string())?;
     let config = RuntimeConfig::load(&config_root, &hostname).map_err(|error| error.to_string())?;
     let local_observer = load_local_observer(&config_root).map_err(|error| error.to_string())?;
@@ -208,11 +210,13 @@ fn run_native(
             } => event,
         }
     });
+    let (observer_shutdown_barrier, supervisor_shutdown_barrier) = shutdown_barrier();
     let observer = run_observer(
         provider,
         Box::new(manager),
         Arc::clone(&clock),
         combined_shutdown,
+        observer_shutdown_barrier,
         ObserverConfig {
             capture_interval: config.capture_interval,
             segment_interval: config.segment_interval,
@@ -235,9 +239,12 @@ fn run_native(
         sync,
         Box::new(indicator),
         Box::new(instance_lock),
-        activity_receiver,
-        sync_stop,
-        observer_stop,
+        SupervisionControl {
+            activity: activity_receiver,
+            sync_stop,
+            observer_stop,
+            shutdown_barrier: supervisor_shutdown_barrier,
+        },
     ));
     for failure in &exit.failures {
         eprintln!("solstone-tmux-observer: {failure}");

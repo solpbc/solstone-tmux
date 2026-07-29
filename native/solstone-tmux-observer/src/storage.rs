@@ -9,6 +9,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use rustix::fd::AsFd;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -282,8 +283,25 @@ impl FileStorage {
 }
 
 pub fn open_regular_readonly(path: &Path) -> Result<File, StorageError> {
-    let descriptor = rustix::fs::open(
-        path,
+    open_regular_readonly_from(rustix::fs::CWD, path, path)
+}
+
+pub fn open_regular_readonly_at(
+    directory: &File,
+    name: &str,
+    path: &Path,
+) -> Result<File, StorageError> {
+    open_regular_readonly_from(directory, Path::new(name), path)
+}
+
+fn open_regular_readonly_from(
+    directory: impl AsFd,
+    target: &Path,
+    path: &Path,
+) -> Result<File, StorageError> {
+    let descriptor = rustix::fs::openat(
+        directory,
+        target,
         rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::CLOEXEC | rustix::fs::OFlags::NOFOLLOW,
         rustix::fs::Mode::empty(),
     )
@@ -292,13 +310,42 @@ pub fn open_regular_readonly(path: &Path) -> Result<File, StorageError> {
         path: path.to_owned(),
         source: source.into(),
     })?;
-    let file = File::from(descriptor);
+    validate_regular_file(File::from(descriptor), path)
+}
+
+fn validate_regular_file(file: File, path: &Path) -> Result<File, StorageError> {
     let metadata = file.metadata().map_err(|source| StorageError::Io {
         stage: "inspect regular file",
         path: path.to_owned(),
         source,
     })?;
     if !metadata.is_file() {
+        return Err(StorageError::InvalidTarget(path.to_owned()));
+    }
+    Ok(file)
+}
+
+pub fn open_directory_readonly(path: &Path) -> Result<File, StorageError> {
+    let descriptor = rustix::fs::open(
+        path,
+        rustix::fs::OFlags::RDONLY
+            | rustix::fs::OFlags::CLOEXEC
+            | rustix::fs::OFlags::NOFOLLOW
+            | rustix::fs::OFlags::DIRECTORY,
+        rustix::fs::Mode::empty(),
+    )
+    .map_err(|source| StorageError::Io {
+        stage: "open directory",
+        path: path.to_owned(),
+        source: source.into(),
+    })?;
+    let file = File::from(descriptor);
+    let metadata = file.metadata().map_err(|source| StorageError::Io {
+        stage: "inspect directory",
+        path: path.to_owned(),
+        source,
+    })?;
+    if !metadata.is_dir() {
         return Err(StorageError::InvalidTarget(path.to_owned()));
     }
     Ok(file)

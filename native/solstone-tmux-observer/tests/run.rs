@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 
 use solstone_tmux_observer::config::CONFIG_FILENAME;
 use solstone_tmux_observer::instance_lock::LOCK_FILENAME;
+use solstone_tmux_observer::private_link::acquire_private_state_lock;
 use solstone_tmux_observer::service::{LocalObserver, STATE_FILENAME};
 use support::{IsolatedRoots, TestDirectory};
 
@@ -77,6 +78,19 @@ fn setup_checks_existing_run_lock_before_pairing_or_config_creation() {
     assert!(stderr.contains("setup is unavailable"));
     assert!(!stderr.contains(pair_input));
     assert!(!fixture.config_root().exists());
+}
+
+#[test]
+fn production_run_refuses_private_state_locked_by_setup() {
+    let fixture = RunFixture::new("binary-run-private-state-lock");
+    fs::create_dir_all(fixture.config_root()).expect("config root");
+    let _setup = acquire_private_state_lock(&fixture.config_root()).expect("setup state lock");
+
+    let output = fixture.run_output();
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("private state is already in use"));
+    assert!(!fixture.data_root().join("captures").exists());
 }
 
 struct RunFixture {

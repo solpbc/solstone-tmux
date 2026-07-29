@@ -47,7 +47,7 @@ native/solstone-tmux-observer/     Transitional native local plane (not installe
         cli.rs                     Five-command argument parser, including setup
         clock.rs                   Wall/monotonic clock seam
         command.rs                 Bounded argv command seam
-        config.rs                  Read-only native runtime config + hostname defaults
+        config.rs                  Native runtime config, owner-only permissions, hostname defaults
         private_link.rs             Pairing, private state, SPL carrier, bridge lifecycle
         journal.rs                  Journal v2 client and streaming multipart
         sync.rs                     Bounded scheduler, custody, and retention

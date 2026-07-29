@@ -2,6 +2,7 @@
 // Copyright (c) 2026 sol pbc
 
 use std::fmt;
+use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
@@ -11,8 +12,8 @@ use crate::instance_lock::{ExistingLock, InstanceLock, RunIdentity, inspect_exis
 use crate::storage::{atomic_write_bytes, open_regular_readonly};
 
 pub const HEALTH_FILENAME: &str = "sync-health.json";
-pub const HEALTH_SCHEMA_VERSION: u32 = 1;
-pub const HEALTH_STALE_SECONDS: i64 = 180;
+const HEALTH_SCHEMA_VERSION: u32 = 1;
+const HEALTH_STALE_SECONDS: i64 = 180;
 const HEALTH_FUTURE_TOLERANCE_SECONDS: i64 = 60;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -23,6 +24,7 @@ pub enum DiagnosticCode {
     PairingFailed,
     PrivateStateInvalid,
     PrivateStateIo,
+    HealthSnapshotIo,
     BridgeUnavailable,
     JournalUnavailable,
     JournalTimeout,
@@ -45,6 +47,7 @@ impl DiagnosticCode {
             Self::PairingFailed => "pairing_failed",
             Self::PrivateStateInvalid => "private_state_invalid",
             Self::PrivateStateIo => "private_state_io",
+            Self::HealthSnapshotIo => "health_snapshot_io",
             Self::BridgeUnavailable => "bridge_unavailable",
             Self::JournalUnavailable => "journal_unavailable",
             Self::JournalTimeout => "journal_timeout",
@@ -63,10 +66,11 @@ impl DiagnosticCode {
     pub const fn message(self) -> &'static str {
         match self {
             Self::SetupInputInvalid => "setup input is invalid",
-            Self::SetupUnavailable => "setup is unavailable",
-            Self::PairingFailed => "private-link pairing failed",
+            Self::SetupUnavailable => "setup is unavailable; stop the observer and retry",
+            Self::PairingFailed => "private-link pairing failed; verify the link and retry setup",
             Self::PrivateStateInvalid => "private-link state is invalid",
             Self::PrivateStateIo => "private-link state could not be accessed",
+            Self::HealthSnapshotIo => "sync health snapshot could not be written",
             Self::BridgeUnavailable => "private-link bridge is unavailable",
             Self::JournalUnavailable => "paired journal is unavailable",
             Self::JournalTimeout => "paired journal request timed out",
@@ -148,21 +152,22 @@ impl SyncFacts {
     }
 
     pub fn state(&self) -> HealthState {
+        if self.paired && self.sync_in_progress {
+            return HealthState::Syncing;
+        }
         if matches!(
             self.last_error_code,
             Some(
                 DiagnosticCode::JournalContractInvalid
                     | DiagnosticCode::PrivateStateInvalid
                     | DiagnosticCode::PrivateStateIo
+                    | DiagnosticCode::HealthSnapshotIo
             )
         ) {
             return HealthState::UpdateNeeded;
         }
         if !self.paired {
             return HealthState::Unpaired;
-        }
-        if self.sync_in_progress {
-            return HealthState::Syncing;
         }
         match self.last_error_code {
             Some(DiagnosticCode::JournalRejected) => HealthState::Revoked,
@@ -222,14 +227,13 @@ impl HealthWriter {
             recent_error_count: facts.recent_error_count,
             last_error_code: facts.last_error_code,
         };
-        let bytes =
-            serde_json::to_vec(&snapshot).map_err(|_| DiagnosticCode::PrivateStateInvalid)?;
+        let bytes = serde_json::to_vec(&snapshot).map_err(|_| DiagnosticCode::HealthSnapshotIo)?;
         let parent = self.data_root.clone();
         let path = parent.join(HEALTH_FILENAME);
         tokio::task::spawn_blocking(move || atomic_write_bytes(&path, &parent, &bytes))
             .await
-            .map_err(|_| DiagnosticCode::PrivateStateIo)?
-            .map_err(|_| DiagnosticCode::PrivateStateIo)
+            .map_err(|_| DiagnosticCode::HealthSnapshotIo)?
+            .map_err(|_| DiagnosticCode::HealthSnapshotIo)
     }
 }
 
@@ -251,6 +255,10 @@ impl StatusHealth {
 }
 
 pub fn read_status_health(data_root: &Path, now_unix_seconds: i64) -> StatusHealth {
+    match fs::symlink_metadata(data_root) {
+        Ok(metadata) if !metadata.file_type().is_symlink() && metadata.is_dir() => {}
+        _ => return StatusHealth::Unknown,
+    }
     let snapshot = match read_snapshot(data_root) {
         Some(snapshot) => snapshot,
         None => return StatusHealth::Unknown,

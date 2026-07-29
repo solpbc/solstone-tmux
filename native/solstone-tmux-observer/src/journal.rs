@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 sol pbc
 
+use std::fmt;
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -137,6 +138,14 @@ impl From<DiagnosticCode> for JournalError {
         Self::local(diagnostic)
     }
 }
+
+impl fmt::Display for JournalError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.diagnostic.message())
+    }
+}
+
+impl std::error::Error for JournalError {}
 
 #[derive(Deserialize)]
 struct ErrorResponse {
