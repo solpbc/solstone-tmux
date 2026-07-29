@@ -317,10 +317,13 @@ for target in "${targets[@]}"; do
     done
 done
 
+# These are the only permitted tracked content occurrences of the retired
+# identities. Keeping each token whole here makes the ban reviewable; the scan
+# below verifies this exact declaration before exempting it.
 legacy_identity_tokens=(
-    "solstone-tmux-"'observer'
-    "solstone_tmux_"'observer'
-    "com.solstone.tmux-"'observer'
+    'solstone-tmux-observer'
+    'solstone_tmux_observer'
+    'com.solstone.tmux-observer'
 )
 
 while IFS= read -r -d '' tracked_path; do
@@ -335,7 +338,23 @@ while IFS= read -r -d '' tracked_path; do
             failed=true
         fi
         tracked_file="$repo_root/$tracked_path"
-        if [[ -f "$tracked_file" ]] && identity_hits="$(rg -a -nF "$legacy_token" "$tracked_file")"; then
+        if [[ "$tracked_path" == "scripts/check-rust-guards.sh" ]]; then
+            expected_declaration="    '$legacy_token'"
+            declaration_count=0
+            while IFS= read -r guard_line || [[ -n "$guard_line" ]]; do
+                if [[ "$guard_line" == *"$legacy_token"* ]]; then
+                    ((declaration_count += 1))
+                    if [[ "$guard_line" != "$expected_declaration" ]]; then
+                        echo "$tracked_path: retired identity exemption is broader than its exact declaration" >&2
+                        failed=true
+                    fi
+                fi
+            done <"$tracked_file"
+            if ((declaration_count != 1)); then
+                echo "$tracked_path: expected one exact retired identity declaration" >&2
+                failed=true
+            fi
+        elif [[ -f "$tracked_file" ]] && identity_hits="$(rg -a -nF "$legacy_token" "$tracked_file")"; then
             printf '%s\n' "$identity_hits" >&2
             echo "$tracked_path: legacy native identity is forbidden in tracked contents" >&2
             failed=true
