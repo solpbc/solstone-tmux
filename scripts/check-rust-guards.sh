@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-native_root="$repo_root/native/solstone-tmux-observer"
+native_root="$repo_root/native/solstone-tmux"
 crate_roots=(
     "$native_root/src/lib.rs"
     "$native_root/src/main.rs"
@@ -142,6 +142,113 @@ for target in "${targets[@]}"; do
         failed=true
     fi
 done
+
+legacy_identity_tokens=(
+    "solstone-tmux-"'observer'
+    "solstone_tmux_"'observer'
+    "com.solstone.tmux-"'observer'
+)
+
+# These surfaces intentionally retain transitional history until P6. The final-tree
+# guard removes the AGENTS.md alias/Python carve-outs, and the design file is
+# deleted in commit 15.
+identity_carveout() {
+    case "$1" in
+        AGENTS.md | CLAUDE.md | docs/design/native-1.0.0-cutover.md | src/solstone_tmux/* | tests/*)
+            return 0
+            ;;
+    esac
+    return 1
+}
+
+while IFS= read -r -d '' tracked_path; do
+    case "$tracked_path" in
+        target/* | .venv/* | .git/*)
+            continue
+            ;;
+    esac
+    if identity_carveout "$tracked_path"; then
+        continue
+    fi
+    for legacy_token in "${legacy_identity_tokens[@]}"; do
+        if [[ "$tracked_path" == *"$legacy_token"* ]]; then
+            echo "$tracked_path: legacy native identity is forbidden in tracked paths" >&2
+            failed=true
+        fi
+        tracked_file="$repo_root/$tracked_path"
+        if [[ -f "$tracked_file" ]] && identity_hits="$(rg -a -nF "$legacy_token" "$tracked_file")"; then
+            printf '%s\n' "$identity_hits" >&2
+            echo "$tracked_path: legacy native identity is forbidden in tracked contents" >&2
+            failed=true
+        fi
+    done
+done < <(git -C "$repo_root" ls-files -z)
+
+mapfile -d '' native_manifests < <(
+    find "$repo_root/native" -mindepth 2 -maxdepth 2 -type f -name Cargo.toml -print0
+)
+if ((${#native_manifests[@]} != 1)) || [[ "${native_manifests[0]:-}" != "$native_root/Cargo.toml" ]]; then
+    echo "$repo_root/native: expected exactly one workspace crate at native/solstone-tmux" >&2
+    failed=true
+fi
+
+mapfile -t workspace_member_lines < <(sed -n '/^members = /p' "$repo_root/Cargo.toml")
+if ((${#workspace_member_lines[@]} != 1)) ||
+    [[ "${workspace_member_lines[0]}" != 'members = ["native/solstone-tmux"]' ]]; then
+    echo "$repo_root/Cargo.toml: expected exactly one solstone-tmux workspace member" >&2
+    failed=true
+fi
+
+package_name="$(
+    awk '
+        $0 == "[package]" { in_package = 1; next }
+        in_package && /^\[/ { exit }
+        in_package && /^name = "/ {
+            value = $0
+            sub(/^name = "/, "", value)
+            sub(/"$/, "", value)
+            print value
+            exit
+        }
+    ' "$native_root/Cargo.toml"
+)"
+mapfile -t declared_bins < <(
+    awk '
+        $0 == "[[bin]]" { in_bin = 1; next }
+        in_bin && /^\[/ { in_bin = 0 }
+        in_bin && /^name = "/ {
+            value = $0
+            sub(/^name = "/, "", value)
+            sub(/"$/, "", value)
+            print value
+        }
+    ' "$native_root/Cargo.toml"
+)
+if [[ "$package_name" != "solstone-tmux" ]]; then
+    echo "$native_root/Cargo.toml: package must be named solstone-tmux" >&2
+    failed=true
+fi
+if ((${#declared_bins[@]} != 1)) || [[ "${declared_bins[0]}" != "solstone-tmux" ]]; then
+    echo "$native_root/Cargo.toml: expected exactly one binary named solstone-tmux" >&2
+    failed=true
+fi
+
+systemd_identity_count="$(
+    awk '$0 == "pub const UNIT_NAME: &str = \"solstone-tmux.service\";" { count += 1 }
+        END { print count + 0 }' "$native_root/src/service/systemd.rs"
+)"
+launchd_identity_count="$(
+    awk '$0 == "pub const LABEL: &str = \"com.solstone.tmux\";" { count += 1 }
+        END { print count + 0 }' "$native_root/src/service/launchd.rs"
+)"
+if [[ "$systemd_identity_count" != "1" ]]; then
+    echo "$native_root/src/service/systemd.rs: expected exact solstone-tmux.service identity" >&2
+    failed=true
+fi
+if [[ "$launchd_identity_count" != "1" ]]; then
+    echo "$native_root/src/service/launchd.rs: expected exact com.solstone.tmux identity" >&2
+    failed=true
+fi
 
 if $failed; then
     exit 1

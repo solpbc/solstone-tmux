@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["native/solstone-tmux-observer"]
+members = ["native/solstone-tmux"]
 
 [workspace.package]
 edition = "2024"

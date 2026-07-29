@@ -1,0 +1,8 @@
+{
+  "authority_repository": "https://github.com/solpbc/solstone-journal",
+  "authority_commit": "c5cc2fbce0867e821916045b50716a6c0ed4e57e",
+  "bundle_version": "2.1.9",
+  "manifest_path": "manifest.json",
+  "manifest_sha256": "89329fcfbcb3a3eb0d73b7b29811bc2fbffeb00ecda8ad07ddf5a60e2a1c9dfd",
+  "vendored_root": "native/solstone-tmux/vendor/observer-client-contract"
+}

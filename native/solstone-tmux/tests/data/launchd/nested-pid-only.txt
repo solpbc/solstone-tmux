@@ -1,0 +1,45 @@
+gui/501/com.solstone.tmux = {
+	active count = 0
+	path = /Users/owner/Library/LaunchAgents/com.solstone.tmux.plist
+	type = LaunchAgent
+	state = not running
+
+	program = /Applications/Solstone/solstone-tmux
+	arguments = {
+		/Applications/Solstone/solstone-tmux
+		run
+		/tmp/pid-decoy-argument
+	}
+
+	environment = {
+		PATH => /opt/homebrew/bin:/usr/bin:/bin
+		pid => 777
+	}
+
+	default environment = {
+		PATH => /usr/bin:/bin:/usr/sbin:/sbin
+	}
+
+	domain = gui/501 [100028]
+	asid = 100028
+	minimum runtime = 10
+	exit timeout = 5
+	runs = 2
+	last exit code = 0
+
+	spawn statistics = {
+		pid = 777
+		microseconds = 41230
+	}
+
+	pid-local endpoints = {
+		"com.apple.cfprefsd.daemon" = {
+			pid = 777
+			port = 0x1234
+			active = 1
+			managed = 1
+		}
+	}
+
+	properties = keepalive | runatload | inferred program
+}
