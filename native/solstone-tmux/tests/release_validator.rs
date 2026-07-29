@@ -21,8 +21,9 @@ use package_model::{
 };
 use sha2::{Digest, Sha256};
 use validator::{
-    ValidationError, validate_complete_files_for_test, validate_complete_files_with_hooks_for_test,
-    validate_complete_set, validate_linux_lane, validate_minisign, validate_unsigned_set,
+    ValidationError, run_version_probe_for_test, validate_complete_files_for_test,
+    validate_complete_files_with_hooks_for_test, validate_complete_set, validate_linux_lane,
+    validate_minisign, validate_unsigned_set,
 };
 
 const EPOCH: u64 = 1_700_000_000;
@@ -99,6 +100,13 @@ fn aggregate_validation_accepts_compiler_split_version_template() {
         ),
         Ok(())
     );
+}
+
+#[test]
+fn native_version_probe_closes_the_staged_executable_before_running_it() {
+    let output = run_version_probe_for_test(b"#!/bin/sh\nprintf 'probe passed\\n'\n")
+        .expect("staged executable should run");
+    assert_eq!(output, b"probe passed\n");
 }
 
 #[test]

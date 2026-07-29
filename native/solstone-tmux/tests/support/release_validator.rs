@@ -960,6 +960,7 @@ fn run_version_probe(executable: &[u8]) -> Result<Vec<u8>, ValidationError> {
         file.sync_all().map_err(|_| ValidationError::Io)?;
         fs::set_permissions(&path, fs::Permissions::from_mode(0o700))
             .map_err(|_| ValidationError::Io)?;
+        drop(file);
         let output = Command::new(&path)
             .arg("--version")
             .output()
@@ -971,6 +972,10 @@ fn run_version_probe(executable: &[u8]) -> Result<Vec<u8>, ValidationError> {
     })();
     let _ = fs::remove_dir_all(directory);
     result
+}
+
+pub fn run_version_probe_for_test(executable: &[u8]) -> Result<Vec<u8>, ValidationError> {
+    run_version_probe(executable)
 }
 
 fn git_source_epoch(source_commit: &str) -> Result<u64, ValidationError> {
