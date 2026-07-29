@@ -432,7 +432,7 @@ case "$command_name" in
         echo "      minos 14.0"
         ;;
     sed)
-        /bin/sed "$@"
+        /usr/bin/sed "$@"
         ;;
     */solstone-tmux)
         case "${1:-}" in
