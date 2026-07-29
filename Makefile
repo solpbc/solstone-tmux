@@ -3,7 +3,7 @@
 
 SHELL := /bin/bash
 
-.PHONY: all build hopper-install test test-only format ci clean install-service uninstall-service service-status service-logs package-linux validate-release publish-release
+.PHONY: all build hopper-install test test-only format ci clean install-service uninstall-service service-status service-logs package-linux release-linux validate-release publish-release
 
 APP := solstone-tmux
 CARGO := cargo
@@ -118,6 +118,13 @@ package-linux:
 		"$(CURDIR)/target/$(RUST_TARGET)/release/$(APP)" \
 		"$(OUTPUT_DIRECTORY)" \
 		"$(PACKAGE_FORMATS)"
+
+release-linux:
+	@test -n "$(SOURCE_COMMIT)" || { echo "SOURCE_COMMIT is required" >&2; exit 1; }
+	@test -n "$(OUTPUT_DIRECTORY)" || { echo "OUTPUT_DIRECTORY is required" >&2; exit 1; }
+	packaging/linux/build-release-lane.sh \
+		"$(SOURCE_COMMIT)" \
+		"$(OUTPUT_DIRECTORY)"
 
 validate-release:
 	@test -n "$(CANDIDATE_DIRECTORY)" || { echo "CANDIDATE_DIRECTORY is required" >&2; exit 1; }

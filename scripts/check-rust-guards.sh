@@ -50,7 +50,6 @@ fi
 
 mapfile -t targets < <("$repo_root/scripts/rust-targets.sh")
 deny_file="$repo_root/deny.toml"
-native_candidate_workflow="$repo_root/.github/workflows/native-candidate.yml"
 in_graph=false
 in_graph_targets=false
 saw_graph=false
@@ -159,136 +158,14 @@ else
     done
 fi
 
-workflow_runners=()
-workflow_targets=()
-workflow_target_lines=()
-if [[ ! -f "$native_candidate_workflow" ]]; then
-    echo "$native_candidate_workflow: native candidate workflow is missing" >&2
+github_workflow_root="$repo_root/.github/workflows"
+mapfile -d '' github_workflows < <(
+    find "$github_workflow_root" -type f -print0 2>/dev/null || true
+)
+if ((${#github_workflows[@]} != 0)); then
+    printf '%s\n' "${github_workflows[@]}" >&2
+    echo "$github_workflow_root: GitHub workflows are forbidden; builds and gates run on native release machines" >&2
     failed=true
-else
-    while IFS='|' read -r runner target target_line; do
-        workflow_runners+=("$runner")
-        workflow_targets+=("$target")
-        workflow_target_lines+=("$target_line")
-    done < <(
-        awk '
-            /^          - runner: / {
-                runner = $0
-                sub(/^          - runner: /, "", runner)
-                next
-            }
-            /^            rust_target: / {
-                target = $0
-                sub(/^            rust_target: /, "", target)
-                if (runner != "") {
-                    print runner "|" target "|" NR
-                    runner = ""
-                }
-            }
-        ' "$native_candidate_workflow"
-    )
-
-    expected_workflow_runners=("ubuntu-22.04" "ubuntu-22.04-arm")
-    if ((${#workflow_runners[@]} != 2)); then
-        echo "$native_candidate_workflow: expected exactly two native Linux runner/target pairs" >&2
-        failed=true
-    elif ((${#targets[@]} < 2)); then
-        echo "$native_candidate_workflow: configured Rust target authority has fewer than two Linux targets" >&2
-        failed=true
-    else
-        for index in 0 1; do
-            if [[ "${workflow_runners[$index]}" != "${expected_workflow_runners[$index]}" ||
-                "${workflow_targets[$index]}" != "${targets[$index]}" ]]; then
-                echo "$native_candidate_workflow: Linux runner/target matrix is not the ordered rust-toolchain.toml replica" >&2
-                failed=true
-                break
-            fi
-        done
-    fi
-
-    permissions_count="$(rg -c '^permissions:$' "$native_candidate_workflow" || true)"
-    contents_read_count="$(rg -c '^  contents: read$' "$native_candidate_workflow" || true)"
-    if [[ "$permissions_count" != "1" || "$contents_read_count" != "1" ]]; then
-        echo "$native_candidate_workflow: workflow permissions must be exactly contents: read" >&2
-        failed=true
-    fi
-    if permission_writes="$(rg -n '^[[:space:]]*[A-Za-z0-9_-]+:[[:space:]]*write(-all)?[[:space:]]*$|^[[:space:]]*permissions:[[:space:]]*write-all[[:space:]]*$' "$native_candidate_workflow")"; then
-        printf '%s\n' "$permission_writes" >&2
-        echo "$native_candidate_workflow: workflow write permission is forbidden" >&2
-        failed=true
-    fi
-
-    uses_count=0
-    while IFS= read -r uses_line; do
-        ((uses_count += 1))
-        if [[ ! "$uses_line" =~ uses:[[:space:]]+[^[:space:]@]+@[0-9a-f]{40}[[:space:]]*$ ]]; then
-            echo "$native_candidate_workflow: every action must be pinned by a full commit SHA" >&2
-            failed=true
-        fi
-    done < <(rg '^[[:space:]]*uses:' "$native_candidate_workflow" || true)
-    if ((uses_count == 0)); then
-        echo "$native_candidate_workflow: expected at least one pinned action" >&2
-        failed=true
-    fi
-
-    expected_fedora_image='  FEDORA_IMAGE: "registry.fedoraproject.org/fedora@sha256:e78cd1a688cd079c23864f289a89a49a3f4ad66d817864e325e1d058310ee95c"'
-    fedora_count="$(awk -v expected="$expected_fedora_image" '$0 == expected { count += 1 } END { print count + 0 }' "$native_candidate_workflow")"
-    if [[ "$fedora_count" != "1" ]] ||
-        rg -qi 'FEDORA_IMAGE:.*(placeholder|replace|todo)' "$native_candidate_workflow"; then
-        echo "$native_candidate_workflow: Fedora image must use the resolved non-placeholder digest" >&2
-        failed=true
-    fi
-
-    if release_writes="$(rg -ni 'gh[[:space:]]+release|git[[:space:]]+(tag|push)|cargo[[:space:]]+publish|npm[[:space:]]+publish|twine[[:space:]]+upload|upload-release-asset|release-action' "$native_candidate_workflow")"; then
-        printf '%s\n' "$release_writes" >&2
-        echo "$native_candidate_workflow: candidate lanes may not tag, publish, or mutate releases" >&2
-        failed=true
-    fi
-    # The workflow must scan the literal minisign canary as candidate data; that
-    # one exact line is not signing access.
-    minisign_canary_line='            MINISIGN_SECRET_CANARY_DO_NOT_SHIP'
-    if [[ "$(rg -cFx "$minisign_canary_line" "$native_candidate_workflow" || true)" != "1" ]]; then
-        echo "$native_candidate_workflow: expected one exact minisign canary scan entry" >&2
-        failed=true
-    fi
-    # Candidate lanes may install the public minisign executable for publisher
-    # tests, but they may not receive release signing material.
-    signing_access="$(
-        rg -ni 'minisign[_ -]?secret|codesign|notarytool|signing[_ -]?key|secrets\.' \
-            "$native_candidate_workflow" |
-            while IFS=: read -r signing_line signing_text; do
-                [[ "$signing_text" == "$minisign_canary_line" ]] ||
-                    printf '%s:%s\n' "$signing_line" "$signing_text"
-            done
-    )"
-    if [[ -n "$signing_access" ]]; then
-        printf '%s\n' "$signing_access" >&2
-        echo "$native_candidate_workflow: candidate lanes may not access signing material" >&2
-        failed=true
-    fi
-    if rg -n '^[[:space:]]+(push|pull_request|schedule):' "$native_candidate_workflow" >/dev/null ||
-        [[ "$(rg -c '^  workflow_dispatch:$' "$native_candidate_workflow" || true)" != "1" ]]; then
-        echo "$native_candidate_workflow: native candidates must be manually dispatched only" >&2
-        failed=true
-    fi
-    package_version="$(
-        awk '
-            $0 == "[package]" { in_package = 1; next }
-            in_package && /^\[/ { exit }
-            in_package && /^version = "/ {
-                value = $0
-                sub(/^version = "/, "", value)
-                sub(/"$/, "", value)
-                print value
-                exit
-            }
-        ' "$native_root/Cargo.toml"
-    )"
-    if [[ -z "$package_version" ]] ||
-        rg -nF "$package_version" "$native_candidate_workflow" >/dev/null; then
-        echo "$native_candidate_workflow: package version must be derived from Cargo metadata" >&2
-        failed=true
-    fi
 fi
 
 drift_files=(
@@ -298,28 +175,14 @@ drift_files=(
 while IFS= read -r -d '' script; do
     drift_files+=("$script")
 done < <(find "$repo_root/scripts" -maxdepth 1 -type f -print0)
-while IFS= read -r -d '' workflow_file; do
-    drift_files+=("$workflow_file")
-done < <(find "$repo_root/.github" -type f -print0 2>/dev/null || true)
 
 for target in "${targets[@]}"; do
     for drift_file in "${drift_files[@]}"; do
         while IFS=: read -r drift_line_number drift_text; do
             [[ -n "$drift_line_number" ]] || continue
-            matrix_replica=false
-            if [[ "$drift_file" == "$native_candidate_workflow" ]]; then
-                for matrix_line in "${workflow_target_lines[@]}"; do
-                    if [[ "$drift_line_number" == "$matrix_line" ]]; then
-                        matrix_replica=true
-                        break
-                    fi
-                done
-            fi
-            if ! $matrix_replica; then
-                echo "$drift_file:$drift_line_number:$drift_text" >&2
-                echo "target drift: target literals belong only in rust-toolchain.toml or the verified workflow matrix" >&2
-                failed=true
-            fi
+            echo "$drift_file:$drift_line_number:$drift_text" >&2
+            echo "target drift: target literals belong only in rust-toolchain.toml" >&2
+            failed=true
         done < <(rg -nF "$target" "$drift_file" || true)
     done
 done

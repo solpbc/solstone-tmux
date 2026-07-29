@@ -4,6 +4,10 @@ Native releases are built from one exact clean commit in three independent
 candidate lanes, then validated and published once as a complete aggregate.
 No individual lane can publish.
 
+Builds and gates run locally on native release machines. GitHub Actions and
+other GitHub workflows are not part of the release rail; GitHub is used only
+for the final immutable release and downloads.
+
 ## Prerequisites
 
 - The source commit is clean, full lowercase 40-hex, and equals `HEAD`.
@@ -22,35 +26,27 @@ candidate lanes build only from a clean `HEAD` that already contains it.
 
 ## 1. Linux candidate lanes
 
-Manually dispatch `.github/workflows/native-candidate.yml` with
-`source_commit` set to the exact commit. Its ordered matrix uses native Linux
-runners for x86_64 and aarch64, runs the repository and locked Rust gates,
-builds one source-bound executable per lane, and constructs tar, deb, and RPM
-packages from those immutable bytes.
-
-Each lane validates architecture, the GLIBC floor, source binding, package
-model, target record, checksums, and smoke installation. The private workflow
-artifact contains that lane's three packages and target record.
-
-RPM structural proof does not happen in Rust. It uses the real `rpm` CLI inside
-the digest-pinned, same-architecture Fedora container to query payload,
-metadata, dependencies, and script absence; install the exact package; compare
-installed executable bytes; smoke it; and uninstall it. An operator machine
-without RPM tooling can verify digest and complete-set membership only and
-cannot claim real RPM-byte inspection. The mandatory Fedora proof is never
-downgraded.
-
-For a local Linux construction where all required tools are present:
+Run each lane on an internal native Linux build machine: one x86_64 and one
+aarch64. If an internal lane is unavailable, use a disposable same-architecture
+cloud instance. Start from the same exact clean commit on both machines and run:
 
 ```sh
-make package-linux \
-  RUST_TARGET=<configured-linux-target> \
+make release-linux \
   SOURCE_COMMIT=<exact-commit> \
   OUTPUT_DIRECTORY=/absolute/path/to/new-candidate
 ```
 
-`PACKAGE_FORMATS` defaults to `tar,deb,rpm`. The packager refuses the complete
-request before producing output if any required tool is unavailable.
+The local release entrypoint derives the lane from the native Rust host, fetches
+the complete locked dependency graph, runs `make ci`, builds the source-bound
+executable and all three package formats, validates architecture, GLIBC floor,
+source binding, package model, target record, and checksums, then proves normal
+foreground operation with real tmux in isolated roots. It produces three
+packages and one target record in the requested directory and performs no
+upload or remote mutation.
+
+On disposable target-matching environments, install and smoke the tar, deb, and
+RPM candidates with their real package tools. Structural parsing in Rust does
+not replace package-manager installation proof.
 
 ## 2. macOS candidate lane
 
@@ -73,8 +69,8 @@ it does not aggregate or publish.
 
 ## 3. Collect and validate
 
-Collect both private Linux lane candidates and the macOS candidate into one
-private directory. Before signing it contains exactly eight packages and three
+Collect both Linux lane candidates and the macOS candidate into one private
+directory. Before signing it contains exactly eight packages and three
 target records.
 
 For an already signed 13-file candidate, run:

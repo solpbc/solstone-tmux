@@ -60,14 +60,13 @@ native/solstone-tmux/
 packaging/
     keys/                          Pinned release verification key
     linux/build-candidate.sh       Deterministic tar, deb, and RPM construction
+    linux/build-release-lane.sh    Native Linux build, gate, and tmux proof
     macos/build-candidate.sh       Signed and notarized operator candidate flow
     publish-release.sh             Aggregate immutable publisher
 scripts/
     check-rust-guards.sh           Repository policy guard
     extract_changelog.sh           Exact release-note extraction
     rust-targets.sh                Target parser for rust-toolchain.toml
-.github/workflows/native-candidate.yml
-                                   Private Linux candidate lanes
 ```
 
 ## Build and test commands
@@ -87,8 +86,8 @@ make service-logs
 ```
 
 Every Cargo command that resolves dependencies uses `--locked`. The target list
-exists only in `rust-toolchain.toml`; scripts and workflows consume or verify
-that authority instead of defining a second list.
+exists only in `rust-toolchain.toml`; local build scripts consume that authority
+instead of defining a second list.
 
 `make ci` runs:
 
@@ -257,9 +256,10 @@ remove vendored material without an explicit authority import.
 
 ## Releasing
 
-Native releases use two private Linux candidate lanes, one macOS operator lane,
-and one aggregate publisher. Individual lanes cannot tag, release, sign the
-aggregate, or publish.
+Native releases use two native Linux build machines, one macOS operator machine,
+and one aggregate publisher. GitHub workflows are not part of the build or
+validation rail. Individual lanes cannot tag, release, sign the aggregate, or
+publish.
 
 See [RELEASING.md](RELEASING.md) for candidate construction, platform proof,
 aggregate validation, signing, and immutable publication. Release credentials

@@ -234,6 +234,7 @@ TMUX_TMPDIR="$scratch_tmux" \
 TMUX_TMPDIR="$scratch_tmux" operator_exec tmux kill-server
 
 operator_exec bash "$repo_root/scripts/check-rust-guards.sh"
+operator_exec cargo fetch --locked
 operator_exec cargo fmt --all --check
 operator_exec cargo clippy --locked --workspace --all-targets -- -D warnings
 operator_exec cargo test --locked --workspace
@@ -297,7 +298,6 @@ operator_exec codesign \
     --timestamp \
     "$signed_executable"
 operator_exec codesign --verify --strict --verbose=2 "$signed_executable"
-operator_exec spctl --assess --type execute --verbose=2 "$signed_executable"
 signed_digest_line="$(operator_exec shasum -a 256 "$signed_executable")"
 signed_hash="$(operator_exec sed 's/[[:space:]].*$//' <<<"$signed_digest_line")"
 if [[ "$unsigned_hash" == "$signed_hash" ]]; then
@@ -362,6 +362,7 @@ operator_exec xcrun stapler staple "$candidate_root/$pkg_name"
 operator_exec pkgutil --check-signature "$candidate_root/$pkg_name"
 operator_exec spctl --assess --type install --verbose=2 "$candidate_root/$pkg_name"
 operator_exec xcrun stapler validate "$candidate_root/$pkg_name"
+operator_exec spctl --assess --type execute --verbose=2 "$signed_executable"
 expanded_pkg="$stage_root/expanded-pkg"
 operator_exec pkgutil --expand-full "$candidate_root/$pkg_name" "$expanded_pkg"
 script_directories="$(
