@@ -361,6 +361,7 @@ case "$command_name" in
             exit 0
         fi
         if [[ "${1:-}" == "-c" && "${2:-}" == *"for ignored"* ]]; then
+            /bin/sleep 1
             exit 0
         fi
         ;;
