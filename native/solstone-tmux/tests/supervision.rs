@@ -5,7 +5,7 @@ mod support;
 
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
 use solstone_tmux::clock::{Clock, TestClock};
@@ -90,6 +90,71 @@ fn authorized_shutdown_joins_sync_before_indicator_and_lock_cleanup() {
         *log.lock().expect("log poisoned"),
         ["sync", "indicator", "lock"]
     );
+}
+
+#[test]
+fn activity_borrow_is_released_before_indicator_update_awaits() {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_time()
+        .build()
+        .expect("test runtime");
+    let (activity_sender, activity_receiver) = tokio::sync::watch::channel(SyncActivity::Idle);
+    activity_sender.send_replace(SyncActivity::Working);
+    let (indicator_entered_sender, indicator_entered_receiver) = mpsc::channel();
+    let (indicator_release_sender, indicator_release_receiver) = tokio::sync::oneshot::channel();
+    let (observer_finish_sender, observer_finish_receiver) = tokio::sync::oneshot::channel();
+    let sender_thread = std::thread::spawn(move || {
+        indicator_entered_receiver
+            .recv_timeout(Duration::from_secs(5))
+            .expect("indicator update started");
+        activity_sender.send_replace(SyncActivity::Idle);
+        let _ = indicator_release_sender.send(());
+        let _ = observer_finish_sender.send(());
+    });
+    let indicator = BlockingActivityIndicator {
+        entered: Some(indicator_entered_sender),
+        release: Some(indicator_release_receiver),
+    };
+    let (sync_stop, mut sync_shutdown) = tokio::sync::watch::channel(false);
+    let sync = async move {
+        wait_for_stop(&mut sync_shutdown).await;
+        Ok(())
+    };
+    let observer = async move {
+        let _ = observer_finish_receiver.await;
+        ObserverExit {
+            exit_code: 0,
+            shutdown_event: Some(ShutdownEvent::SigTerm),
+            failures: Vec::new(),
+        }
+    };
+    let (observer_stop, _observer_shutdown) =
+        tokio::sync::watch::channel::<Option<ShutdownEvent>>(None);
+    let (observer_barrier, supervisor_barrier) = shutdown_barrier();
+    drop(observer_barrier);
+
+    let result = runtime.block_on(async {
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            supervise_observer(
+                observer,
+                sync,
+                Box::new(indicator),
+                Box::new(RecordingLock::default()),
+                SupervisionControl {
+                    activity: activity_receiver,
+                    sync_stop,
+                    observer_stop,
+                    shutdown_barrier: supervisor_barrier,
+                },
+            ),
+        )
+        .await
+    });
+    sender_thread.join().expect("activity sender thread");
+
+    assert_eq!(result.expect("supervision must not deadlock").exit_code, 0);
 }
 
 #[test]
@@ -265,6 +330,38 @@ impl ShutdownIndicator for RecordingIndicator {
             self.0.lock().expect("log poisoned").push("indicator");
             Ok(())
         })
+    }
+}
+
+struct BlockingActivityIndicator {
+    entered: Option<mpsc::Sender<()>>,
+    release: Option<tokio::sync::oneshot::Receiver<()>>,
+}
+
+impl ShutdownIndicator for BlockingActivityIndicator {
+    fn set_activity<'a>(
+        &'a mut self,
+        activity: SyncActivity,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ObserverOperationError>> + Send + 'a>> {
+        Box::pin(async move {
+            if activity == SyncActivity::Working {
+                if let Some(entered) = self.entered.take() {
+                    entered
+                        .send(())
+                        .map_err(|_| ObserverOperationError("indicator probe failed".to_owned()))?;
+                }
+                if let Some(release) = self.release.take() {
+                    let _ = release.await;
+                }
+            }
+            Ok(())
+        })
+    }
+
+    fn restore<'a>(
+        &'a mut self,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ObserverOperationError>> + Send + 'a>> {
+        Box::pin(async { Ok(()) })
     }
 }
 

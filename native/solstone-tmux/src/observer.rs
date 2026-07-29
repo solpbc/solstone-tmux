@@ -406,8 +406,11 @@ where
             changed = activity.changed(), if activity_open => {
                 if changed.is_err() {
                     activity_open = false;
-                } else if indicator.set_activity(*activity.borrow_and_update()).await.is_err() {
-                    break SupervisionTrigger::IndicatorFailed;
+                } else {
+                    let current_activity = *activity.borrow_and_update();
+                    if indicator.set_activity(current_activity).await.is_err() {
+                        break SupervisionTrigger::IndicatorFailed;
+                    }
                 }
             }
         }
