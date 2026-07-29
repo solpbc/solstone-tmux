@@ -264,27 +264,12 @@ legacy_identity_tokens=(
     "com.solstone.tmux-"'observer'
 )
 
-# These surfaces intentionally retain transitional history until P6. The final-tree
-# guard removes the AGENTS.md alias/Python carve-outs, and the design file is
-# deleted in commit 15.
-identity_carveout() {
-    case "$1" in
-        AGENTS.md | CLAUDE.md | docs/design/native-1.0.0-cutover.md | src/solstone_tmux/* | tests/*)
-            return 0
-            ;;
-    esac
-    return 1
-}
-
 while IFS= read -r -d '' tracked_path; do
     case "$tracked_path" in
         target/* | .venv/* | .git/*)
             continue
             ;;
     esac
-    if identity_carveout "$tracked_path"; then
-        continue
-    fi
     for legacy_token in "${legacy_identity_tokens[@]}"; do
         if [[ "$tracked_path" == *"$legacy_token"* ]]; then
             echo "$tracked_path: legacy native identity is forbidden in tracked paths" >&2
@@ -364,6 +349,151 @@ if [[ "$launchd_identity_count" != "1" ]]; then
     echo "$native_root/src/service/launchd.rs: expected exact com.solstone.tmux identity" >&2
     failed=true
 fi
+
+# Retired language runtimes and packaging must not return as tracked product
+# surfaces. Missing paths are ignored here so the guard also validates a
+# pre-commit working tree whose deletions are not staged yet.
+while IFS= read -r -d '' tracked_path; do
+    tracked_file="$repo_root/$tracked_path"
+    [[ -e "$tracked_file" || -L "$tracked_file" ]] || continue
+    case "$tracked_path" in
+        *.py | pyproject.toml | setup.py | setup.cfg | requirements*.txt | \
+            Pipfile | Pipfile.lock | poetry.lock | tox.ini | pytest.ini | \
+            .python-version | uv.lock | MANIFEST.in)
+            echo "$tracked_path: retired Python source or packaging configuration is forbidden" >&2
+            failed=true
+            ;;
+        src/solstone_tmux | src/solstone_tmux/* | tests | tests/*)
+            echo "$tracked_path: legacy Python source tree is forbidden" >&2
+            failed=true
+            ;;
+    esac
+done < <(git -C "$repo_root" ls-files -z)
+
+if [[ -e "$repo_root/src/solstone_tmux" || -e "$repo_root/tests" ]]; then
+    echo "$repo_root: legacy Python source directories are forbidden" >&2
+    failed=true
+fi
+
+# This is a route ban, not a prose token ban. Operational build, test, install,
+# workflow, packaging, and release surfaces may not invoke retired tooling.
+route_files=("$repo_root/Makefile" "$repo_root/Cargo.toml")
+while IFS= read -r -d '' route_path; do
+    # This guard names the retired tools in order to enforce the route ban; it
+    # is not itself a build, test, install, packaging, workflow, or release route.
+    [[ "$route_path" == "scripts/check-rust-guards.sh" ]] && continue
+    route_file="$repo_root/$route_path"
+    [[ -f "$route_file" ]] && route_files+=("$route_file")
+done < <(
+    git -C "$repo_root" ls-files -z \
+        'scripts/*' '.github/workflows/*' 'packaging/*' \
+        'native/*/Cargo.toml'
+)
+for route_file in "${route_files[@]}"; do
+    if route_hits="$(
+        rg -n -i \
+            '(^|[^[:alnum:]_])(ruff|pytest|uv|pipx|twine|python([0-9.]*)?|venv)([^[:alnum:]_]|$)' \
+            "$route_file"
+    )"; then
+        printf '%s\n' "$route_hits" >&2
+        echo "$route_file: retired Python tooling route is forbidden" >&2
+        failed=true
+    fi
+done
+
+# The only uv/pipx prose allowance is the bounded one-time retirement block.
+# Each uninstall command appears once inside it and neither token may appear
+# elsewhere in INSTALL.md.
+install_file="$repo_root/INSTALL.md"
+retirement_start='<!-- legacy-python-retirement:start -->'
+retirement_end='<!-- legacy-python-retirement:end -->'
+if [[ "$(rg -cF "$retirement_start" "$install_file" || true)" != "1" ||
+    "$(rg -cF "$retirement_end" "$install_file" || true)" != "1" ]]; then
+    echo "$install_file: expected one bounded legacy retirement block" >&2
+    failed=true
+else
+    retirement_block="$(
+        awk -v start="$retirement_start" -v end="$retirement_end" '
+            $0 == start { inside = 1; next }
+            $0 == end { inside = 0; next }
+            inside { print }
+        ' "$install_file"
+    )"
+    retirement_outside="$(
+        awk -v start="$retirement_start" -v end="$retirement_end" '
+            $0 == start { inside = 1; next }
+            $0 == end { inside = 0; next }
+            !inside { print }
+        ' "$install_file"
+    )"
+    if [[ "$(rg -cF 'uv tool uninstall solstone-tmux' <<<"$retirement_block" || true)" != "1" ||
+        "$(rg -cF 'pipx uninstall solstone-tmux' <<<"$retirement_block" || true)" != "1" ||
+        "$(rg -io '(^|[^[:alnum:]_])(uv|pipx)([^[:alnum:]_]|$)' <<<"$retirement_block" | wc -l)" != "2" ]]; then
+        echo "$install_file: retirement block must contain only the two approved tool references" >&2
+        failed=true
+    fi
+    if rg -i '(^|[^[:alnum:]_])(uv|pipx)([^[:alnum:]_]|$)' \
+        <<<"$retirement_outside" >/dev/null; then
+        echo "$install_file: retired installer names are allowed only in the retirement block" >&2
+        failed=true
+    fi
+fi
+
+# Legacy migration fixtures retain the old endpoint as inert input so tests can
+# prove it is ignored. No executable, configuration, documentation, or other
+# tracked surface may depend on that endpoint.
+while IFS= read -r -d '' tracked_path; do
+    case "$tracked_path" in
+        native/solstone-tmux/tests/data/legacy/config.json | \
+            native/solstone-tmux/tests/data/legacy/config-empty-stream.json | \
+            scripts/check-rust-guards.sh)
+            continue
+            ;;
+    esac
+    tracked_file="$repo_root/$tracked_path"
+    [[ -f "$tracked_file" ]] || continue
+    if endpoint_hits="$(rg -a -nF 'localhost:5015' "$tracked_file")"; then
+        printf '%s\n' "$endpoint_hits" >&2
+        echo "$tracked_path: retired localhost endpoint dependency is forbidden" >&2
+        failed=true
+    fi
+done < <(git -C "$repo_root" ls-files -z)
+
+# SPL is supplied only by the two revision-pinned Git dependencies. No copied
+# core or transport tree may live in this repository.
+expected_spl_revision='742bc9dc789c5a75658844849a04d75033aeb6e3'
+expected_spl_source="https://github.com/solpbc/spl-rust"
+for spl_package in spl-core spl-transport; do
+    expected_dependency="$spl_package = { git = \"$expected_spl_source\", rev = \"$expected_spl_revision\" }"
+    if [[ "$(rg -cFx "$expected_dependency" "$native_root/Cargo.toml" || true)" != "1" ]]; then
+        echo "$native_root/Cargo.toml: $spl_package must use the exact pinned Git revision" >&2
+        failed=true
+    fi
+done
+expected_lock_source="source = \"git+$expected_spl_source?rev=$expected_spl_revision#$expected_spl_revision\""
+if [[ "$(rg -cFx "$expected_lock_source" "$repo_root/Cargo.lock" || true)" != "2" ]]; then
+    echo "$repo_root/Cargo.lock: SPL packages must resolve only from the exact pinned Git revision" >&2
+    failed=true
+fi
+while IFS= read -r -d '' tracked_path; do
+    if [[ "$tracked_path" =~ (^|/)(spl-core|spl-transport|spl_core|spl_transport)(/|$) ]]; then
+        echo "$tracked_path: copied in-tree SPL implementation is forbidden" >&2
+        failed=true
+    fi
+done < <(git -C "$repo_root" ls-files -z)
+
+# Exactly one declared binary plus the exact platform identities prove there is
+# no second service executable, unit, plist, or separate sync daemon.
+while IFS= read -r -d '' tracked_path; do
+    tracked_file="$repo_root/$tracked_path"
+    [[ -e "$tracked_file" || -L "$tracked_file" ]] || continue
+    case "$tracked_path" in
+        *.service | *.service.in | *.plist | native/solstone-tmux/src/bin/*)
+            echo "$tracked_path: standalone service artifact or second binary is forbidden" >&2
+            failed=true
+            ;;
+    esac
+done < <(git -C "$repo_root" ls-files -z)
 
 if $failed; then
     exit 1

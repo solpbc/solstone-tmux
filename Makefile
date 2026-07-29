@@ -1,94 +1,40 @@
 # solstone-tmux Makefile
-# Standalone tmux terminal observer for solstone
+# Native tmux observer for solstone
 
 SHELL := /bin/bash
 
-.PHONY: install test test-only format ci clean clean-install uninstall install-service service-restart service-status service-logs uninstall-service release release-test
+.PHONY: all build test test-only format ci clean install-service uninstall-service service-status service-logs package-linux validate-release publish-release
 
-# Service deployment
 APP := solstone-tmux
-PIPX_FLAGS :=
-UNIT := solstone-tmux.service
-
-# Default target
-all: install
-
-# Virtual environment directory
-VENV := .venv
-VENV_BIN := $(VENV)/bin
-PYTHON := $(VENV_BIN)/python
-
-# Require uv
-UV := $(shell command -v uv 2>/dev/null)
-ifndef UV
-$(error uv is not installed. Install it: curl -LsSf https://astral.sh/uv/install.sh | sh)
-endif
-
-# Venv tool shortcuts
-PYTEST := $(VENV_BIN)/pytest
-RUFF := $(VENV_BIN)/ruff
 CARGO := cargo
 CARGO_DENY_VERSION := cargo-deny 0.20.2
 RUST_TARGETS := scripts/rust-targets.sh
 RUST_GUARDS := scripts/check-rust-guards.sh
+RELEASE_BIN := target/release/$(APP)
+PACKAGE_FORMATS ?= tar,deb,rpm
 
-# Marker file to track installation
-.installed: pyproject.toml
-	@echo "Installing solstone-tmux with uv..."
-	$(UV) venv --quiet --allow-existing $(VENV)
-	$(UV) pip install --quiet -e ".[dev]" --python $(PYTHON)
-	@touch .installed
+all: build
 
-# Install package in editable mode with dev dependencies
-install: .installed
+build:
 	$(CARGO) build --locked --workspace
 
-# Run all tests
-test: .installed
-	@echo "Running Python tests..."
-	$(PYTEST) tests/ -q
-	@echo ""
-	@echo "Running Rust tests..."
+test:
 	$(CARGO) test --locked --workspace
 
-# Run a specific test file or pattern
-test-only: .installed
-	@if [ -z "$(TEST)" ]; then \
-		echo "Usage: make test-only TEST=<test_file_or_pattern>"; \
-		echo "Example: make test-only TEST=tests/test_capture.py"; \
-		echo "Example: make test-only TEST=\"-k test_function_name\""; \
+test-only:
+	@if [[ -z "$(TEST)" ]]; then \
+		echo "Usage: make test-only TEST=<filter>"; \
 		exit 1; \
 	fi
-	$(PYTEST) $(TEST)
+	$(CARGO) test --locked -p $(APP) $(TEST)
 
-# Auto-format and fix code, then report remaining issues
-format: .installed
-	@echo "Formatting with ruff..."
-	@$(RUFF) format .
-	@$(RUFF) check --fix .
-	@echo ""
-	@echo "Checking for remaining issues..."
-	@$(RUFF) check . || { echo ""; echo "Issues above need manual fixes."; exit 1; }
-	@echo ""
-	@echo "Formatting Rust with rustfmt..."
-	@$(CARGO) fmt --all
-	@echo ""
-	@echo "All clean!"
+format:
+	$(CARGO) fmt --all
 
-# Run CI checks (what CI would run)
-ci: .installed
+ci:
 	@echo "Running CI checks..."
 	@echo "=== Running repository guards (host execution) ==="
 	@bash $(RUST_GUARDS)
-	@echo ""
-	@echo "=== Checking Python formatting (host execution) ==="
-	@$(RUFF) format --check . || { echo "Run 'make format' to fix formatting"; exit 1; }
-	@echo ""
-	@echo "=== Running ruff (host execution) ==="
-	@$(RUFF) check . || { echo "Run 'make format' to auto-fix"; exit 1; }
-	@echo ""
-	@echo "=== Running Python tests (host execution) ==="
-	@$(PYTEST) tests/ -q
 	@echo ""
 	@echo "=== Checking Rust formatting (host tool; no dependency resolution) ==="
 	@$(CARGO) fmt --all --check
@@ -136,64 +82,52 @@ ci: .installed
 	@echo ""
 	@echo "All CI checks passed!"
 
-install-service: .installed
-	@set -e; \
-	command -v pipx >/dev/null 2>&1 || { echo "pipx not found. Install with: sudo dnf install pipx  (or apt install pipx)"; exit 1; }; \
-	mode="$$($(PYTHON) -m solstone_tmux.install_guard install)"; \
-	echo "$$mode"; \
-	case "$$mode" in \
-		*"fresh install"*) ;; \
-		*) $(MAKE) ci ;; \
-	esac; \
-	echo "==> Installing $(APP) with pipx"; \
-	pipx install --force $(PIPX_FLAGS) .; \
-	$(PYTHON) -m solstone_tmux.install_guard write-marker --repo-root "$(CURDIR)"; \
-	echo "==> Installing systemd user unit"; \
-	PATH="$$HOME/.local/bin:$$PATH" $(APP) install-service; \
-	echo "==> Service status"; \
-	systemctl --user --no-pager status $(UNIT) | head
-
-service-restart:
-	systemctl --user restart $(UNIT)
-
-service-status:
-	systemctl --user --no-pager status $(UNIT)
-
-service-logs:
-	journalctl --user -u $(APP) -n 100 --no-pager -f
-
-uninstall-service: .installed
-	$(PYTHON) -m solstone_tmux.install_guard uninstall
-	-systemctl --user disable --now $(UNIT)
-	-rm -f $$HOME/.config/systemd/user/$(UNIT)
-	-systemctl --user daemon-reload
-	-pipx uninstall $(APP)
-	$(PYTHON) -m solstone_tmux.install_guard remove-marker
-
-# Clean build artifacts and caches
 clean:
-	@echo "Cleaning build artifacts..."
-	rm -rf build/ dist/ *.egg-info/ src/*.egg-info/
-	rm -rf .pytest_cache/ .mypy_cache/ .ruff_cache/
-	find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
-	find . -type f -name "*.pyc" -delete 2>/dev/null || true
-	rm -f .installed
 	$(CARGO) clean
 
-uninstall:
-	@echo "ERROR: 'make uninstall' is ambiguous."
-	@echo "  Run 'make uninstall-service' to remove the installed service and pipx package."
-	@echo "  Run 'make clean' to remove build artifacts and the dev venv."
-	@exit 1
+install-service:
+	$(CARGO) build --locked --release -p $(APP)
+	$(CURDIR)/$(RELEASE_BIN) install-service
 
-release:
-	@scripts/release.sh
+uninstall-service:
+	$(CARGO) build --locked --release -p $(APP)
+	$(CURDIR)/$(RELEASE_BIN) uninstall-service
 
-release-test:
-	@scripts/release.sh --test
+service-status:
+	$(CARGO) build --locked --release -p $(APP)
+	$(CURDIR)/$(RELEASE_BIN) status
 
-# Clean everything and reinstall
-clean-install: clean
-	@echo "Removing virtual environment..."
-	rm -rf $(VENV)
-	@$(MAKE) install
+service-logs:
+	@case "$$(uname -s)" in \
+		Linux) journalctl --user -u solstone-tmux.service -n 100 --no-pager -f ;; \
+		Darwin) log stream --style compact --predicate 'process == "solstone-tmux"' ;; \
+		*) echo "service logs are supported only on Linux and macOS" >&2; exit 1 ;; \
+	esac
+
+package-linux:
+	@test -n "$(RUST_TARGET)" || { echo "RUST_TARGET is required" >&2; exit 1; }
+	@test -n "$(SOURCE_COMMIT)" || { echo "SOURCE_COMMIT is required" >&2; exit 1; }
+	@test -n "$(OUTPUT_DIRECTORY)" || { echo "OUTPUT_DIRECTORY is required" >&2; exit 1; }
+	SOLSTONE_TMUX_SOURCE_COMMIT="$(SOURCE_COMMIT)" \
+		$(CARGO) build --locked --release --target "$(RUST_TARGET)"
+	packaging/linux/build-candidate.sh \
+		"$(RUST_TARGET)" \
+		"$(SOURCE_COMMIT)" \
+		"$(CURDIR)/target/$(RUST_TARGET)/release/$(APP)" \
+		"$(OUTPUT_DIRECTORY)" \
+		"$(PACKAGE_FORMATS)"
+
+validate-release:
+	@test -n "$(CANDIDATE_DIRECTORY)" || { echo "CANDIDATE_DIRECTORY is required" >&2; exit 1; }
+	SOLSTONE_TMUX_TEST_COMPLETE_CANDIDATE="$(CANDIDATE_DIRECTORY)" \
+		$(CARGO) test --locked -p $(APP) --test release_validator \
+			validates_real_complete_set_when_requested -- --exact
+
+publish-release:
+	@test -n "$(SOURCE_COMMIT)" || { echo "SOURCE_COMMIT is required" >&2; exit 1; }
+	@test -n "$(CANDIDATE_DIRECTORY)" || { echo "CANDIDATE_DIRECTORY is required" >&2; exit 1; }
+	@test -n "$(MINISIGN_SECRET_KEY)" || { echo "MINISIGN_SECRET_KEY is required" >&2; exit 1; }
+	packaging/publish-release.sh \
+		"$(SOURCE_COMMIT)" \
+		"$(CANDIDATE_DIRECTORY)" \
+		"$(MINISIGN_SECRET_KEY)"
