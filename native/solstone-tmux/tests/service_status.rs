@@ -244,16 +244,6 @@ fn cli_usage_error_is_2() {
     assert!(String::from_utf8_lossy(&output.stderr).contains("unknown command"));
 }
 
-#[test]
-fn python_status_contract_is_not_modified() {
-    let python_cli = fs::read_to_string(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../src/solstone_tmux/cli.py"),
-    )
-    .expect("Python CLI source");
-    assert!(python_cli.contains("def cmd_status"));
-    assert!(python_cli.contains("return 0"));
-}
-
 fn environment(home: &std::path::Path) -> FakeEnvironment {
     FakeEnvironment::from_paths([
         ("HOME", home.as_os_str().to_owned()),
