@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use solstone_tmux::command::{CommandInvocation, CommandOperation, CommandRunner, TmuxOperation};
 use solstone_tmux::tmux::{TMUX_TIMEOUT, TmuxAdapter};
-use support::{ExpectedInvocation, FixtureRunner, output};
+use support::{ExpectedInvocation, FixtureRunner, RecordingWarnings, output};
 
 const TMUX: &str = "/usr/bin/tmux";
 
@@ -154,6 +154,30 @@ async fn fresh_client_is_selected_and_stale_client_is_ignored() {
 
     assert_eq!(clients.len(), 1);
     assert_eq!(clients[0].session, "plain");
+}
+
+#[tokio::test]
+async fn multiple_clients_on_one_session_use_most_recent_activity() {
+    let runner = FixtureRunner::new([ExpectedInvocation {
+        invocation: invocation(
+            TmuxOperation::ListClients,
+            &["list-clients", "-F", "#{client_session} #{client_activity}"],
+        ),
+        outcome: output(b"main 100\nmain 105\nother 103\nmain 102\n".to_vec()),
+    }]);
+    let warnings = RecordingWarnings::default();
+    let adapter =
+        TmuxAdapter::with_warnings(PathBuf::from(TMUX), runner, warnings.clone()).expect("adapter");
+
+    let clients = adapter
+        .list_active_clients(106, Duration::from_secs(2))
+        .await
+        .expect("active clients");
+
+    assert_eq!(clients.len(), 1);
+    assert_eq!(clients[0].session, "main");
+    assert_eq!(clients[0].activity, 105);
+    assert!(warnings.messages().is_empty());
 }
 
 #[tokio::test]

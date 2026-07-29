@@ -138,8 +138,8 @@ where
             source,
         })?;
 
-        let mut clients = Vec::new();
-        let mut seen = HashMap::new();
+        let mut clients: Vec<ClientInfo> = Vec::new();
+        let mut seen: HashMap<String, usize> = HashMap::new();
         for row in stdout.lines() {
             if row.is_empty() {
                 self.warn_client_row(row, "empty row");
@@ -157,13 +157,11 @@ where
                 self.warn_client_row(row, "activity is not an integer");
                 continue;
             };
-            if let Some(previous) = seen.get(session) {
-                if *previous != activity {
-                    self.warn_client_row(row, "duplicate session has contradictory activity");
-                }
+            if let Some(index) = seen.get(session).copied() {
+                clients[index].activity = clients[index].activity.max(activity);
                 continue;
             }
-            seen.insert(session.to_owned(), activity);
+            seen.insert(session.to_owned(), clients.len());
             clients.push(ClientInfo {
                 session: session.to_owned(),
                 activity,
