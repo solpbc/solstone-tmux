@@ -29,6 +29,7 @@ const USER_ID: u32 = 501;
 const STATUS_FIVE_ERROR: &[u8] = b"Boot-out failed: 5: Input/output error";
 const RUNNING: &[u8] = include_bytes!("data/launchd/running.txt");
 const QUIESCENT: &[u8] = include_bytes!("data/launchd/loaded-not-running.txt");
+const NESTED_PID_ONLY: &[u8] = include_bytes!("data/launchd/nested-pid-only.txt");
 
 #[test]
 fn launchd_plist_has_required_keys() {
@@ -686,11 +687,13 @@ fn unchanged_running_job_is_enabled_and_rechecked_without_restart_or_rewrite() {
     let inode = fs::metadata(&artifact).expect("plist").ino();
     let state_path = fixture.config_root().join(STATE_FILENAME);
     let expected_tmux = fs::canonicalize(&fixture.tmux).expect("tmux");
+    // Both prints report the same top-level pid, which is the whole claim of this
+    // path: the already-running observer was never restarted.
     let runner = InspectingRunner {
         inner: FixtureRunner::new(vec![
-            print(running()),
+            print(output(stdout_with_pid("43210"))),
             enable(output([])),
-            print(output(stdout_with_pid("98765"))),
+            print(output(stdout_with_pid("43210"))),
         ]),
         inspect: Box::new(move |_| {
             assert_artifact(&artifact, &desired, inode, "unchanged running");
@@ -712,6 +715,104 @@ fn unchanged_running_job_is_enabled_and_rechecked_without_restart_or_rewrite() {
                 | ServiceOperation::LaunchdBootstrap
         )
     )));
+}
+
+#[test]
+fn unchanged_running_job_rejects_a_changed_pid_without_bootout_or_rewrite() {
+    let fixture = ServiceFixture::new("unchanged-running-pid-change", true);
+    write_desired_plist(&fixture);
+    let artifact = artifact_path(&fixture.home);
+    let bytes = fs::read(&artifact).expect("plist");
+    let inode = fs::metadata(&artifact).expect("plist").ino();
+    let previous_state = write_previous_state(&fixture);
+    // The job restarted underneath install-service between the two prints. Nothing in
+    // this path asked it to, so the install must fail loudly rather than report success
+    // for a process it never observed starting.
+    let runner = FixtureRunner::new(vec![
+        print(output(stdout_with_pid("43210"))),
+        enable(output([])),
+        print(output(stdout_with_pid("98765"))),
+    ]);
+
+    let error = runtime()
+        .block_on(fixture.controller(&runner).0.install())
+        .expect_err("changed pid");
+
+    assert!(matches!(&error, ServiceError::InvalidState(_)));
+    let message = error.to_string();
+    assert!(message.contains(LABEL), "{message}");
+    assert!(message.contains("43210"), "{message}");
+    assert!(message.contains("98765"), "{message}");
+    assert!(
+        message.contains("solstone-tmux-observer install-service"),
+        "{message}"
+    );
+    runner.assert_finished().expect("changed pid calls");
+    let calls = runner.calls();
+    assert_eq!(calls.len(), 3);
+    assert!(
+        !calls.iter().any(|call| matches!(
+            call.operation,
+            CommandOperation::Service(
+                ServiceOperation::LaunchdDisable
+                    | ServiceOperation::LaunchdKill
+                    | ServiceOperation::LaunchdBootout
+                    | ServiceOperation::LaunchdBootstrap
+            )
+        )),
+        "a changed pid must not be escalated into a restart"
+    );
+    assert_preserved_after_failure(&fixture, &bytes, inode, &previous_state);
+}
+
+#[test]
+fn launchd_nested_pid_is_not_the_job_pid_and_never_signals() {
+    // The job block carries no top-level `pid`, but nested dictionaries carry three
+    // decoys, including a verbatim `pid = 777` one level down under `spawn statistics`.
+    // A depth-blind scan would call this running, kill a job that is not there, and on
+    // uninstall destroy a live observer's segment on the strength of another
+    // dictionary's field.
+    let fixture = ServiceFixture::new("nested-pid-only", true);
+    write_desired_plist(&fixture);
+    let artifact = artifact_path(&fixture.home);
+    let bytes = fs::read(&artifact).expect("plist");
+    let inode = fs::metadata(&artifact).expect("plist").ino();
+
+    let install = FixtureRunner::new(vec![
+        print(nested_pid_only()),
+        bootout(&fixture, output([])),
+        enable(output([])),
+        bootstrap(&fixture, output([])),
+        print(running()),
+    ]);
+    fixture.controller(&install).install_blocking();
+    install.assert_finished().expect("nested pid install");
+    assert_artifact(&artifact, &bytes, inode, "nested pid no rewrite");
+    assert!(
+        !install
+            .calls()
+            .iter()
+            .any(|call| call.operation == CommandOperation::Service(ServiceOperation::LaunchdKill)),
+        "a nested pid must never be signalled"
+    );
+
+    let uninstall = FixtureRunner::new(vec![
+        disable(output([])),
+        print(nested_pid_only()),
+        bootout(&fixture, output([])),
+    ]);
+    runtime()
+        .block_on(fixture.controller(&uninstall).0.uninstall())
+        .expect("nested pid uninstall");
+    uninstall.assert_finished().expect("nested pid uninstall");
+    assert!(
+        !uninstall
+            .calls()
+            .iter()
+            .any(|call| call.operation == CommandOperation::Service(ServiceOperation::LaunchdKill)),
+        "uninstall must not signal on a nested pid"
+    );
+    assert!(!artifact.exists());
 }
 
 #[test]
@@ -1044,10 +1145,13 @@ fn launchd_pid_classifier_rejects_zero_and_non_digit_pid_values() {
 fn launchd_pid_classifier_accepts_thirty_digit_nonzero_value() {
     let fixture = ServiceFixture::new("large-pid", true);
     write_desired_plist(&fixture);
+    // Held as a digit string end to end, so a value far past u64 classifies as running
+    // and still compares equal across the two prints without any parse.
+    const HUGE: &str = "123456789012345678901234567890";
     let runner = FixtureRunner::new(vec![
-        print(output(stdout_with_pid("123456789012345678901234567890"))),
+        print(output(stdout_with_pid(HUGE))),
         enable(output([])),
-        print(running()),
+        print(output(stdout_with_pid(HUGE))),
     ]);
 
     fixture.controller(&runner).install_blocking();
@@ -1309,6 +1413,10 @@ fn quiescent() -> FixtureOutcome {
 
 fn absent() -> FixtureOutcome {
     launchd_absent(USER_ID)
+}
+
+fn nested_pid_only() -> FixtureOutcome {
+    output(NESTED_PID_ONLY)
 }
 
 fn stdout_with_pid(value: &str) -> Vec<u8> {

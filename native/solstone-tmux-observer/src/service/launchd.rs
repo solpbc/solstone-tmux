@@ -18,9 +18,9 @@ pub const LABEL: &str = "com.solstone.tmux-observer";
 const QUIESCENCE_TIMEOUT: Duration = Duration::from_secs(5);
 const QUIESCENCE_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 enum JobState {
-    Running,
+    Running(String),
     Quiescent,
     Absent,
 }
@@ -108,13 +108,19 @@ pub async fn activate(
     user_id: u32,
     prepared: PreparedInstall,
 ) -> Result<(), ServiceError> {
+    let mut running_pid = None;
     if prepared.bootstrap {
         bootstrap(runner, user_id, &prepared.path).await?;
     } else {
         let output = print(runner, user_id).await?;
         match classify_print(&output, user_id, "launchd loaded check")? {
-            JobState::Running => {
+            // The plist on disk is already current and the job is already running, so
+            // nothing here may restart it: `enable` only clears a lingering disabled
+            // flag. Carrying the pid forward turns that into a checked claim — the final
+            // print must observe the very same process.
+            JobState::Running(pid) => {
                 enable(runner, user_id).await?;
+                running_pid = Some(pid);
             }
             state @ JobState::Quiescent => {
                 unload(runner, user_id, &prepared.path, state, "install-service").await?;
@@ -128,7 +134,7 @@ pub async fn activate(
         }
     }
 
-    verify_loaded(runner, user_id).await
+    verify_loaded(runner, user_id, running_pid.as_deref()).await
 }
 
 pub async fn uninstall(
@@ -199,7 +205,7 @@ async fn unload(
     mut state: JobState,
     retry_command: &'static str,
 ) -> Result<(), ServiceError> {
-    if state == JobState::Running {
+    if matches!(state, JobState::Running(_)) {
         let output = kill(runner, user_id).await?;
         if output.status != 0 && !reports_missing_service(&output, user_id) {
             return Err(manager_error("launchd kill", &output));
@@ -213,7 +219,7 @@ async fn unload(
             next_poll += QUIESCENCE_POLL_INTERVAL;
             let output = print(runner, user_id).await?;
             state = classify_print(&output, user_id, "launchd quiescence check")?;
-            if state != JobState::Running {
+            if !matches!(state, JobState::Running(_)) {
                 break;
             }
             if tokio::time::Instant::now() >= deadline {
@@ -243,11 +249,10 @@ fn classify_print(
     action: &'static str,
 ) -> Result<JobState, ServiceError> {
     if output.status == 0 {
-        if reports_live_pid(&output.stdout) {
-            Ok(JobState::Running)
-        } else {
-            Ok(JobState::Quiescent)
-        }
+        Ok(match top_level_pid(&output.stdout) {
+            Some(pid) => JobState::Running(pid),
+            None => JobState::Quiescent,
+        })
     } else if reports_missing_service(output, user_id) {
         Ok(JobState::Absent)
     } else {
@@ -255,16 +260,32 @@ fn classify_print(
     }
 }
 
-fn reports_live_pid(stdout: &[u8]) -> bool {
-    String::from_utf8_lossy(stdout).lines().any(|line| {
-        let line = line.trim_start();
-        let Some((key, value)) = line.split_once(" = ") else {
-            return false;
-        };
-        key == "pid"
-            && !value.is_empty()
-            && value.bytes().all(|byte| byte.is_ascii_digit())
-            && value.bytes().any(|byte| byte != b'0')
+/// Extracts the job's own pid from `launchctl print` stdout.
+///
+/// `launchctl print` renders one root block for the service target, so every field the
+/// job itself owns sits at exactly one tab of indentation. Nested blocks such as
+/// `environment` and `pid-local endpoints` indent further, and no line inside them can
+/// be the job's pid however it is spelled. Matching root depth exactly is what makes
+/// this an extractor rather than a scan: a deeper `pid = 777` is another dictionary's
+/// field, not this job's.
+///
+/// The pid stays a digit string. It is only ever compared for equality, never used as a
+/// number, so there is no parse and therefore no overflow case for an absurdly long
+/// digit run.
+fn top_level_pid(stdout: &[u8]) -> Option<String> {
+    String::from_utf8_lossy(stdout).lines().find_map(|line| {
+        let field = line.strip_prefix('\t')?;
+        if field.starts_with(char::is_whitespace) {
+            return None;
+        }
+        let (key, value) = field.split_once(" = ")?;
+        if key != "pid" || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+            return None;
+        }
+        value
+            .bytes()
+            .any(|byte| byte != b'0')
+            .then(|| value.to_owned())
     })
 }
 
@@ -279,18 +300,31 @@ fn reports_missing_service(output: &CommandOutput, user_id: u32) -> bool {
         .any(|line| line == expected.as_bytes())
 }
 
-async fn verify_loaded(runner: &dyn CommandRunner, user_id: u32) -> Result<(), ServiceError> {
+/// Confirms the job is loaded with a live pid, and — when the install left an already
+/// running job untouched — that it is still the same pid `expected_pid` carries.
+async fn verify_loaded(
+    runner: &dyn CommandRunner,
+    user_id: u32,
+    expected_pid: Option<&str>,
+) -> Result<(), ServiceError> {
     let output = print(runner, user_id).await?;
     if output.status != 0 {
         return Err(manager_error("launchd loaded check", &output));
     }
-    if reports_live_pid(&output.stdout) {
-        Ok(())
-    } else {
-        Err(ServiceError::InvalidState(format!(
+    let Some(pid) = top_level_pid(&output.stdout) else {
+        return Err(ServiceError::InvalidState(format!(
             "{LABEL} is loaded but does not report a live pid; rerun \
 solstone-tmux-observer install-service"
-        )))
+        )));
+    };
+    match expected_pid {
+        Some(expected) if pid != expected => Err(ServiceError::InvalidState(format!(
+            "{LABEL} was running as pid {expected} and its plist was already current, so \
+install-service left it alone, but it now reports pid {pid}; the job restarted on its own \
+and this install did not observe what it started. Rerun solstone-tmux-observer \
+install-service"
+        ))),
+        _ => Ok(()),
     }
 }
 
