@@ -10,11 +10,25 @@ use solstone_tmux::indicator::{
     IndicatorError, IndicatorIo, IndicatorOwnership, OBSERVING_VALUE, OptionValue, SOLSTONE_OPTION,
     STATUS_LEFT, SYNCING_VALUE,
 };
-use solstone_tmux::observer::ShutdownIndicator;
+use solstone_tmux::observer::{NoopShutdownIndicator, ShutdownIndicator};
 use solstone_tmux::sync::SyncActivity;
 
 const WRITTEN_STATUS_LEFT: &str = "owner status | ☼ #{@solstone} ☼";
 const NORMALIZED_STATUS_LEFT: &str = "owner status | _ #{@solstone} _";
+
+#[tokio::test]
+async fn disabled_indicator_activity_and_restore_are_noops() {
+    let mut indicator = NoopShutdownIndicator;
+    ShutdownIndicator::set_activity(&mut indicator, SyncActivity::Working)
+        .await
+        .expect("working activity");
+    ShutdownIndicator::set_activity(&mut indicator, SyncActivity::Idle)
+        .await
+        .expect("idle activity");
+    ShutdownIndicator::restore(&mut indicator)
+        .await
+        .expect("restore");
+}
 
 #[tokio::test]
 async fn production_install_uses_native_indicator_values() {

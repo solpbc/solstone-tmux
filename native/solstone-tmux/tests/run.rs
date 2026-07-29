@@ -41,6 +41,44 @@ fn production_run_holds_lock_before_config_or_observer_side_effects() {
 }
 
 #[test]
+fn disabled_status_indicator_never_touches_tmux_options() {
+    let fixture = RunFixture::new("binary-run-disabled-indicator");
+    fixture.install_recording_tmux();
+    fixture.write_config_with_indicator("main", 1, 300, false);
+    fixture.write_local_observer();
+    let status_left = b"owner status \xff left".to_vec();
+    let solstone = b"owner value \x00 retained".to_vec();
+    fs::write(fixture.status_left_path(), &status_left).expect("write status-left fixture");
+    fs::write(fixture.solstone_path(), &solstone).expect("write solstone fixture");
+
+    let mut child = fixture.spawn_run();
+    fixture.wait_for_startup_segment_metadata(&mut child);
+    fixture.wait_for_tmux_invocation(&mut child);
+    let pid = rustix::process::Pid::from_raw(child.id() as i32).expect("positive child pid");
+    rustix::process::kill_process(pid, rustix::process::Signal::TERM)
+        .expect("signal stub-backed observer");
+    let status = child.wait().expect("reap stub-backed observer");
+
+    assert!(status.success(), "observer exit status: {status}");
+    let invocations = fixture.tmux_invocations();
+    assert!(!invocations.is_empty(), "capture must invoke the tmux seam");
+    assert!(
+        invocations
+            .iter()
+            .all(|invocation| invocation == "list-clients"),
+        "disabled indicator emitted an option invocation: {invocations:?}"
+    );
+    assert_eq!(
+        fs::read(fixture.status_left_path()).expect("read status-left fixture"),
+        status_left
+    );
+    assert_eq!(
+        fs::read(fixture.solstone_path()).expect("read solstone fixture"),
+        solstone
+    );
+}
+
+#[test]
 fn overlong_stream_name_fails_before_capture_directory_creation() {
     let fixture = RunFixture::new("binary-run-overlong-stream");
     fixture.write_config(&"a".repeat(201), 1, 300);
@@ -112,6 +150,7 @@ struct RunFixture {
     _temporary: TestDirectory,
     roots: IsolatedRoots,
     tmux: PathBuf,
+    tmux_log: PathBuf,
     first_child_stderr: PathBuf,
 }
 
@@ -128,6 +167,7 @@ impl RunFixture {
         let temporary = TestDirectory::new(label);
         let roots = make_roots(temporary.path());
         let tmux = temporary.path().join("stub-bin/tmux");
+        let tmux_log = temporary.path().join("tmux-invocations.txt");
         let first_child_stderr = temporary.path().join("first-child.stderr");
         fs::create_dir_all(tmux.parent().expect("stub parent")).expect("stub parent");
         let source = ["/usr/bin/true", "/bin/true"]
@@ -141,6 +181,7 @@ impl RunFixture {
             _temporary: temporary,
             roots,
             tmux,
+            tmux_log,
             first_child_stderr,
         }
     }
@@ -154,14 +195,59 @@ impl RunFixture {
     }
 
     fn write_config(&self, stream: &str, capture_interval: u64, segment_interval: u64) {
+        self.write_config_with_indicator(stream, capture_interval, segment_interval, true);
+    }
+
+    fn write_config_with_indicator(
+        &self,
+        stream: &str,
+        capture_interval: u64,
+        segment_interval: u64,
+        status_indicator: bool,
+    ) {
         fs::create_dir_all(self.config_root()).expect("config root");
         let bytes = serde_json::to_vec(&serde_json::json!({
             "stream": stream,
             "capture_interval": capture_interval,
             "segment_interval": segment_interval,
+            "status_indicator": status_indicator,
         }))
         .expect("config JSON");
         fs::write(self.config_root().join(CONFIG_FILENAME), bytes).expect("write config");
+    }
+
+    fn install_recording_tmux(&self) {
+        fs::write(
+            &self.tmux,
+            br#"#!/bin/sh
+printf '%s\n' "$1" >> "$SOLSTONE_TMUX_TMUX_LOG"
+case "$1:$2:$3" in
+  show-options:-gv:status-left) cat "$SOLSTONE_TMUX_STATUS_LEFT" ;;
+  show-options:-gv:@solstone) cat "$SOLSTONE_TMUX_SOLSTONE" ;;
+  set-option:-g:status-left) printf '%s' "$4" > "$SOLSTONE_TMUX_STATUS_LEFT" ;;
+  set-option:-g:@solstone) printf '%s' "$4" > "$SOLSTONE_TMUX_SOLSTONE" ;;
+  set-option:-gu:status-left) rm -f "$SOLSTONE_TMUX_STATUS_LEFT" ;;
+  set-option:-gu:@solstone) rm -f "$SOLSTONE_TMUX_SOLSTONE" ;;
+esac
+"#,
+        )
+        .expect("write recording tmux stub");
+        fs::set_permissions(&self.tmux, fs::Permissions::from_mode(0o700))
+            .expect("chmod recording tmux stub");
+    }
+
+    fn status_left_path(&self) -> PathBuf {
+        self.tmux
+            .parent()
+            .expect("tmux stub parent")
+            .join("status-left.bytes")
+    }
+
+    fn solstone_path(&self) -> PathBuf {
+        self.tmux
+            .parent()
+            .expect("tmux stub parent")
+            .join("solstone.bytes")
     }
 
     fn write_local_observer(&self) {
@@ -184,7 +270,10 @@ impl RunFixture {
         command
             .arg(subcommand)
             .env_clear()
-            .envs(self.roots.entries().iter().cloned());
+            .envs(self.roots.entries().iter().cloned())
+            .env("SOLSTONE_TMUX_TMUX_LOG", &self.tmux_log)
+            .env("SOLSTONE_TMUX_STATUS_LEFT", self.status_left_path())
+            .env("SOLSTONE_TMUX_SOLSTONE", self.solstone_path());
         command
     }
 
@@ -219,6 +308,37 @@ impl RunFixture {
             "startup segment metadata was not observed within five seconds; first-child stderr: {:?}",
             self.read_first_child_stderr()
         );
+    }
+
+    fn wait_for_tmux_invocation(&self, child: &mut Child) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            assert!(
+                child.try_wait().expect("observer status").is_none(),
+                "observer exited before a tmux invocation; stderr: {:?}",
+                self.read_first_child_stderr()
+            );
+            if self
+                .tmux_invocations()
+                .iter()
+                .any(|invocation| invocation == "list-clients")
+            {
+                return;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        panic!(
+            "tmux was not invoked within five seconds; stderr: {:?}",
+            self.read_first_child_stderr()
+        );
+    }
+
+    fn tmux_invocations(&self) -> Vec<String> {
+        fs::read_to_string(&self.tmux_log)
+            .unwrap_or_default()
+            .lines()
+            .map(str::to_owned)
+            .collect()
     }
 
     fn read_first_child_stderr(&self) -> String {

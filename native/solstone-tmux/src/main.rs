@@ -13,8 +13,9 @@ use solstone_tmux::health::{HealthWriter, StatusHealth, emit_diagnostic, read_st
 use solstone_tmux::indicator::{CommandIndicatorIo, IndicatorOwnership};
 use solstone_tmux::instance_lock::InstanceLock;
 use solstone_tmux::observer::{
-    ObserverConfig, SegmentManager, SupervisionControl, production_shutdown_future, run_observer,
-    shutdown_barrier, stream_directory, supervise_observer,
+    NoopShutdownIndicator, ObserverConfig, SegmentManager, ShutdownIndicator, SupervisionControl,
+    production_shutdown_future, run_observer, shutdown_barrier, stream_directory,
+    supervise_observer,
 };
 use solstone_tmux::paths::{
     ProcessEnvironment, ensure_private_directory, resolve_config_root, resolve_data_root,
@@ -156,12 +157,11 @@ fn run_native(
     let hostname = system_hostname().map_err(|error| error.to_string())?;
     let config = RuntimeConfig::load(&config_root, &hostname).map_err(|error| error.to_string())?;
     let local_observer = load_local_observer(&config_root).map_err(|error| error.to_string())?;
+    let tmux_path = local_observer.tmux_path;
     let provider = Arc::new(
-        TmuxAdapter::new(local_observer.tmux_path.clone(), TokioCommandRunner)
+        TmuxAdapter::new(tmux_path.clone(), TokioCommandRunner)
             .map_err(|error| error.to_string())?,
     );
-    let indicator_io = CommandIndicatorIo::new(TokioCommandRunner, local_observer.tmux_path)
-        .map_err(|error| error.to_string())?;
 
     for record in recover_configured_streams(&instance_lock, &data_root, &config.stream)
         .map_err(|error| error.to_string())?
@@ -191,11 +191,17 @@ fn run_native(
     let mut segment =
         SegmentState::create(&stream_dir, wall_now, monotonic_now, clock.local_offset())
             .map_err(|error| error.to_string())?;
-    let indicator = match runtime.block_on(IndicatorOwnership::install_default(indicator_io)) {
-        Ok(indicator) => indicator,
-        Err(error) => {
-            return startup_error(&mut segment, error.to_string());
+    let indicator: Box<dyn ShutdownIndicator> = if config.status_indicator {
+        let indicator_io = CommandIndicatorIo::new(TokioCommandRunner, tmux_path)
+            .map_err(|error| error.to_string())?;
+        match runtime.block_on(IndicatorOwnership::install_default(indicator_io)) {
+            Ok(indicator) => Box::new(indicator),
+            Err(error) => {
+                return startup_error(&mut segment, error.to_string());
+            }
         }
+    } else {
+        Box::new(NoopShutdownIndicator)
     };
     let sync_wake = SyncWake::default();
     let manager = SegmentManager::new(
@@ -252,7 +258,7 @@ fn run_native(
     let exit = runtime.block_on(supervise_observer(
         observer,
         sync,
-        Box::new(indicator),
+        indicator,
         Box::new(instance_lock),
         SupervisionControl {
             activity: activity_receiver,

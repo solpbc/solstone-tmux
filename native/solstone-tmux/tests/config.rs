@@ -20,6 +20,7 @@ fn missing_config_uses_hostname_defaults() {
     assert_eq!(config.capture_interval, Duration::from_secs(5));
     assert_eq!(config.segment_interval, Duration::from_secs(300));
     assert_eq!(config.cache_retention_days, 7);
+    assert!(config.status_indicator);
 }
 
 #[test]
@@ -31,12 +32,27 @@ fn numeric_hostname_joins_all_labels() {
 }
 
 #[test]
+fn present_config_defaults_status_indicator_to_true() {
+    let temporary = TestDirectory::new("config-status-default");
+    fs::write(
+        temporary.path().join(CONFIG_FILENAME),
+        br#"{"stream":"main","capture_interval":5,"segment_interval":300}"#,
+    )
+    .expect("write config without indicator field");
+
+    let config =
+        RuntimeConfig::load(temporary.path(), "ignored").expect("load defaulted indicator");
+
+    assert!(config.status_indicator);
+}
+
+#[test]
 fn present_config_overrides_defaults_and_is_private() {
     let temporary = TestDirectory::new("config-present");
     let path = temporary.path().join(CONFIG_FILENAME);
     fs::write(
         &path,
-        br#"{"stream":"main","capture_interval":2,"segment_interval":30,"cache_retention_days":-1}"#,
+        br#"{"stream":"main","capture_interval":2,"segment_interval":30,"cache_retention_days":-1,"status_indicator":false}"#,
     )
     .expect("write config");
     fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).expect("set config mode");
@@ -47,6 +63,7 @@ fn present_config_overrides_defaults_and_is_private() {
     assert_eq!(config.capture_interval, Duration::from_secs(2));
     assert_eq!(config.segment_interval, Duration::from_secs(30));
     assert_eq!(config.cache_retention_days, -1);
+    assert!(!config.status_indicator);
     assert_eq!(
         fs::metadata(path)
             .expect("config metadata")

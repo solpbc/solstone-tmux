@@ -22,6 +22,7 @@ pub struct RuntimeConfig {
     pub capture_interval: Duration,
     pub segment_interval: Duration,
     pub cache_retention_days: i64,
+    pub status_indicator: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -31,6 +32,7 @@ struct ConfigFile {
     capture_interval: u64,
     segment_interval: u64,
     cache_retention_days: i64,
+    status_indicator: bool,
 }
 
 impl Default for ConfigFile {
@@ -40,6 +42,7 @@ impl Default for ConfigFile {
             capture_interval: DEFAULT_CAPTURE_INTERVAL_SECONDS,
             segment_interval: DEFAULT_SEGMENT_INTERVAL_SECONDS,
             cache_retention_days: DEFAULT_CACHE_RETENTION_DAYS,
+            status_indicator: true,
         }
     }
 }
@@ -104,6 +107,7 @@ impl RuntimeConfig {
             capture_interval: Duration::from_secs(file.capture_interval),
             segment_interval: Duration::from_secs(file.segment_interval),
             cache_retention_days: file.cache_retention_days,
+            status_indicator: file.status_indicator,
         })
     }
 }

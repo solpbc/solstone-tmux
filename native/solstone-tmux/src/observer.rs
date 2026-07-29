@@ -184,6 +184,16 @@ pub trait ShutdownIndicator: Send {
     ) -> Pin<Box<dyn Future<Output = Result<(), ObserverOperationError>> + Send + 'a>>;
 }
 
+pub struct NoopShutdownIndicator;
+
+impl ShutdownIndicator for NoopShutdownIndicator {
+    fn restore<'a>(
+        &'a mut self,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ObserverOperationError>> + Send + 'a>> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
 impl<I: IndicatorIo> ShutdownIndicator for IndicatorOwnership<I> {
     fn set_activity<'a>(
         &'a mut self,
