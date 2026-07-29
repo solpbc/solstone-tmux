@@ -83,7 +83,7 @@ fn every_operator_command_failure_stops_before_later_work() {
 }
 
 fn expected_command_names() -> Vec<&'static str> {
-    let mut names = vec!["sh"; 44];
+    let mut names = vec!["sh"; 45];
     names.extend([
         "rust-targets.sh",
         "git",
@@ -92,6 +92,7 @@ fn expected_command_names() -> Vec<&'static str> {
         "cargo",
         "jq",
         "cargo-deny",
+        "minisign",
         "rustup",
         "grep",
         "security",
@@ -381,6 +382,9 @@ case "$command_name" in
         if [[ "${1:-}" == "--version" ]]; then
             echo "cargo-deny 0.20.2"
         fi
+        ;;
+    minisign)
+        echo "minisign 0.11"
         ;;
     rustup)
         printf '%s\n' "$FAKE_TARGET"

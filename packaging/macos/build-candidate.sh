@@ -69,8 +69,8 @@ fi
 
 required_tools=(
     bash cargo cargo-deny chmod codesign cmp date env find git grep gzip id install
-    installer jq kill launchctl lipo mkdir mktemp mv nohup otool pkgbuild pkgutil
-    productsign rm rustc rustup script security sed seq shasum sleep spctl stat
+    installer jq kill launchctl lipo minisign mkdir mktemp mv nohup otool pkgbuild
+    pkgutil productsign rm rustc rustup script security sed seq shasum sleep spctl stat
     sudo tar test tmux touch xcrun
 )
 for tool in "${required_tools[@]}"; do
@@ -135,6 +135,10 @@ if [[ "$manifest_version" != "$product_version" ]]; then
 fi
 if [[ "$(operator_exec cargo-deny --version)" != "cargo-deny 0.20.2" ]]; then
     echo "cargo-deny 0.20.2 is required" >&2
+    exit 1
+fi
+if [[ "$(operator_exec minisign -v 2>&1)" != "minisign 0.11" ]]; then
+    echo "minisign 0.11 is required" >&2
     exit 1
 fi
 installed_targets="$(operator_exec rustup target list --installed)"
