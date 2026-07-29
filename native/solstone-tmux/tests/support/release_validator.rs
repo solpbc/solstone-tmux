@@ -69,7 +69,7 @@ impl fmt::Display for ValidationError {
             Self::ChecksumSet => "SHA256SUMS file set is incomplete or unlisted",
             Self::DigestMismatch => "candidate digest does not match its declared digest",
             Self::SignaturePlaceholder => {
-                "release public key is still the placeholder; VPE must replace packaging/keys/solstone-tmux-release.pub"
+                "release public key is still the placeholder; the release operator must replace packaging/keys/solstone-tmux-release.pub"
             }
             Self::SignatureInvalid => "SHA256SUMS minisign signature is invalid",
             Self::RecordSchema => "target record schema is invalid",

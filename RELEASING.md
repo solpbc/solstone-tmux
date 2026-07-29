@@ -10,11 +10,17 @@ No individual lane can publish.
 - `Cargo.toml`, `Cargo.lock`, the source-bound executable, target records,
   release tag, title, and `CHANGELOG.md` agree on version and source.
 - `cargo-deny` is exactly version `0.20.2`.
-- The committed file
-  `packaging/keys/solstone-tmux-release.pub` is initially a labelled
-  placeholder. VPE supplies the real release public key in the release-calling
-  session before validation or publication.
+- The committed file `packaging/keys/solstone-tmux-release.pub` contains the
+  real release public key.
 - The minisign private key remains outside the repository.
+
+## 0. Commit the release public key
+
+The labelled placeholder release key cannot validate a release. The release
+operator replaces it with the real public key and lands that repository-state
+change as its own commit before building any candidate. All three lanes then
+build from the resulting clean `HEAD`; do not replace the key in a
+release-calling worktree.
 
 ## 1. Linux candidate lanes
 

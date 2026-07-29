@@ -345,7 +345,7 @@ fn release_key_placeholder_fails_closed() {
     assert!(
         ValidationError::SignaturePlaceholder
             .to_string()
-            .contains("VPE must replace")
+            .contains("release operator must replace")
     );
 }
 
