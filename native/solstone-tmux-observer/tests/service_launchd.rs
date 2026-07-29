@@ -30,37 +30,30 @@ const STATUS_FIVE_ERROR: &[u8] = b"Boot-out failed: 5: Input/output error";
 const RUNNING: &[u8] = include_bytes!("data/launchd/running.txt");
 const QUIESCENT: &[u8] = include_bytes!("data/launchd/loaded-not-running.txt");
 const NESTED_PID_ONLY: &[u8] = include_bytes!("data/launchd/nested-pid-only.txt");
+const LOCALE_KEY: &str = "LC_ALL";
+const LOCALE_VALUE: &str = "UTF-8";
 
 #[test]
-fn launchd_plist_has_required_keys() {
-    let plist = String::from_utf8(
-        render(
-            Path::new("/Applications/Solstone/solstone-tmux-observer"),
-            OsStr::new("/opt/homebrew/bin:/usr/bin:/bin"),
-        )
-        .expect("render plist"),
-    )
-    .expect("UTF-8 plist");
-    for required in [
-        "<key>Label</key>",
-        "<string>com.solstone.tmux-observer</string>",
-        "<key>ProgramArguments</key>",
-        "<string>/Applications/Solstone/solstone-tmux-observer</string>",
-        "<string>run</string>",
-        "<key>EnvironmentVariables</key>",
-        "<key>PATH</key>",
-        "<key>RunAtLoad</key>",
-        "<true/>",
-        "<key>KeepAlive</key>",
-        "<key>SuccessfulExit</key>",
-        "<false/>",
-        "<key>ThrottleInterval</key>",
-        "<integer>5</integer>",
-        "<key>ProcessType</key>",
-        "<string>Background</string>",
-    ] {
-        assert!(plist.contains(required), "missing {required}");
-    }
+fn launchd_plist_has_required_structure_and_locale() {
+    let binary = "/Applications/Solstone/solstone-tmux-observer";
+    let service_path = "/opt/homebrew/bin:/usr/bin:/bin";
+    let plist = read_rendered_launchd_plist(
+        &render(Path::new(binary), OsStr::new(service_path)).expect("render plist"),
+    );
+
+    assert_eq!(plist.label, LABEL);
+    assert_eq!(plist.program_arguments, [binary, "run"]);
+    // LC_ALL, rather than LC_CTYPE, is required because a nonempty inherited LC_ALL
+    // overrides every other locale category. LC_CTYPE alone therefore cannot guarantee
+    // that tmux returns the indicator's UTF-8 bytes unchanged.
+    assert_eq!(
+        plist.environment_variables,
+        expected_environment_variables(service_path)
+    );
+    assert!(plist.run_at_load);
+    assert_eq!(plist.keep_alive, [("SuccessfulExit".to_owned(), false)]);
+    assert_eq!(plist.throttle_interval, 5);
+    assert_eq!(plist.process_type, "Background");
 }
 
 #[test]
@@ -213,6 +206,106 @@ fn launchd_replacement_stops_running_job_before_write() {
     runner.inner.assert_finished().expect("replacement");
     assert_eq!(call_index.load(Ordering::Relaxed), 9);
     assert_eq!(fs::read(artifact).expect("new plist"), desired_bytes);
+}
+
+#[test]
+fn launchd_locale_free_owned_plist_is_replaced_through_graceful_stop() {
+    let fixture = ServiceFixture::new("launchd-locale-replacement", true);
+    let artifact = artifact_path(&fixture.home);
+    let desired_bytes = expected_plist_bytes(&fixture);
+    let (_, service_path) = expected_plist_inputs(&fixture);
+    let service_path = service_path.to_str().expect("UTF-8 service PATH");
+    let locale_entry =
+        format!("<key>{LOCALE_KEY}</key>\n<string>{LOCALE_VALUE}</string>\n").into_bytes();
+
+    // Derive the pre-fix artifact from render instead of hand-authoring a second plist,
+    // so the old and desired artifacts provably differ only by the locale entry. This
+    // deliberately depends on that entry remaining contiguous immediately after PATH.
+    let occurrences = desired_bytes
+        .windows(locale_entry.len())
+        .filter(|window| *window == locale_entry)
+        .count();
+    assert_eq!(
+        occurrences, 1,
+        "rendered locale entry must occur exactly once"
+    );
+    let locale_offset = desired_bytes
+        .windows(locale_entry.len())
+        .position(|window| window == locale_entry)
+        .expect("locale entry asserted present");
+    let mut old_bytes = desired_bytes.clone();
+    old_bytes.drain(locale_offset..locale_offset + locale_entry.len());
+    assert_eq!(
+        old_bytes.len() + locale_entry.len(),
+        desired_bytes.len(),
+        "locale-free fixture length"
+    );
+    let marker = format!("<string>{LABEL}</string>");
+    assert!(
+        old_bytes
+            .windows(marker.len())
+            .any(|window| window == marker.as_bytes()),
+        "locale-free fixture must remain owned"
+    );
+
+    let desired_plist = read_rendered_launchd_plist(&desired_bytes);
+    assert_eq!(
+        desired_plist.environment_variables,
+        expected_environment_variables(service_path)
+    );
+    let mut expected_old_plist = desired_plist.clone();
+    expected_old_plist.environment_variables = vec![("PATH".to_owned(), service_path.to_owned())];
+    assert_eq!(
+        read_rendered_launchd_plist(&old_bytes),
+        expected_old_plist,
+        "locale entry must be the only structural difference"
+    );
+
+    fs::create_dir_all(artifact.parent().expect("plist parent")).expect("plist parent");
+    fs::write(&artifact, &old_bytes).expect("locale-free plist");
+    let old_inode = fs::metadata(&artifact).expect("locale-free plist").ino();
+    let inspected_artifact = artifact.clone();
+    let inspected_old = old_bytes.clone();
+    let inspected_desired = desired_bytes.clone();
+    let call_index = Arc::new(AtomicUsize::new(0));
+    let inspected_index = Arc::clone(&call_index);
+    let runner = InspectingRunner {
+        inner: FixtureRunner::new(vec![
+            disable(output([])),
+            print(running()),
+            kill(output([])),
+            print(running()),
+            print(quiescent()),
+            bootout(&fixture, output([])),
+            enable(output([])),
+            bootstrap(&fixture, output([])),
+            print(running()),
+        ]),
+        inspect: Box::new(move |_| {
+            if inspected_index.fetch_add(1, Ordering::Relaxed) < 6 {
+                assert_artifact(
+                    &inspected_artifact,
+                    &inspected_old,
+                    old_inode,
+                    "during locale replacement stop",
+                );
+            } else {
+                assert_eq!(
+                    fs::read(&inspected_artifact).expect("locale-bearing plist"),
+                    inspected_desired
+                );
+            }
+        }),
+    };
+
+    fixture.controller(&runner).install_blocking();
+
+    runner.inner.assert_finished().expect("locale replacement");
+    assert_eq!(call_index.load(Ordering::Relaxed), 9);
+    assert_eq!(
+        fs::read(artifact).expect("locale-bearing plist"),
+        desired_bytes
+    );
 }
 
 #[test]
@@ -683,6 +776,11 @@ fn unchanged_running_job_is_enabled_and_rechecked_without_restart_or_rewrite() {
     fixture.controller(&first).install_blocking();
     first.assert_finished().expect("first install");
     let artifact = artifact_path(&fixture.home);
+    let (_, service_path) = expected_plist_inputs(&fixture);
+    assert_eq!(
+        read_rendered_launchd_plist(&fs::read(&artifact).expect("plist")).environment_variables,
+        expected_environment_variables(service_path.to_str().expect("UTF-8 service PATH"))
+    );
     let desired = expected_plist_bytes(&fixture);
     let inode = fs::metadata(&artifact).expect("plist").ino();
     let state_path = fixture.config_root().join(STATE_FILENAME);
@@ -1437,6 +1535,123 @@ fn is_stop_operation(call: &CommandInvocation) -> bool {
     )
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct RenderedLaunchdPlist {
+    label: String,
+    program_arguments: Vec<String>,
+    environment_variables: Vec<(String, String)>,
+    run_at_load: bool,
+    keep_alive: Vec<(String, bool)>,
+    throttle_interval: i64,
+    process_type: String,
+}
+fn read_rendered_launchd_plist(bytes: &[u8]) -> RenderedLaunchdPlist {
+    let text = std::str::from_utf8(bytes).expect("rendered plist must be UTF-8");
+    let mut parser = PlistLines(text.lines());
+    parser.expect(r#"<?xml version="1.0" encoding="UTF-8"?>"#);
+    parser.expect(
+        r#"<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">"#,
+    );
+    parser.expect(r#"<plist version="1.0">"#);
+    parser.expect("<dict>");
+    let plist = RenderedLaunchdPlist {
+        label: parser.keyed("Label", |parser| parser.tagged("string")),
+        program_arguments: parser.keyed("ProgramArguments", PlistLines::string_array),
+        environment_variables: parser.keyed("EnvironmentVariables", |parser| {
+            parser.dictionary(|parser| parser.tagged("string"))
+        }),
+        run_at_load: parser.keyed("RunAtLoad", PlistLines::boolean),
+        keep_alive: parser.keyed("KeepAlive", |parser| parser.dictionary(PlistLines::boolean)),
+        throttle_interval: parser.keyed("ThrottleInterval", PlistLines::integer),
+        process_type: parser.keyed("ProcessType", |parser| parser.tagged("string")),
+    };
+    parser.expect("</dict>");
+    parser.expect("</plist>");
+    assert!(
+        parser.0.next().is_none(),
+        "unexpected trailing plist content"
+    );
+    plist
+}
+struct PlistLines<'a>(std::str::Lines<'a>);
+impl<'a> PlistLines<'a> {
+    fn next(&mut self, context: &str) -> &'a str {
+        self.0
+            .next()
+            .unwrap_or_else(|| panic!("unexpected end of plist while reading {context}"))
+            .trim()
+    }
+    fn expect(&mut self, expected: &str) {
+        assert_eq!(self.next(expected), expected, "unexpected plist line");
+    }
+    fn keyed<T>(&mut self, key: &str, read: impl FnOnce(&mut Self) -> T) -> T {
+        assert_eq!(self.tagged("key"), key, "unexpected plist key");
+        read(self)
+    }
+    fn tagged(&mut self, tag: &str) -> String {
+        let line = self.next(tag);
+        let opening = format!("<{tag}>");
+        let closing = format!("</{tag}>");
+        let value = line
+            .strip_prefix(&opening)
+            .and_then(|value| value.strip_suffix(&closing))
+            .unwrap_or_else(|| panic!("expected {opening}value{closing}, got {line:?}"));
+        decode_xml_text(value)
+    }
+    fn boolean(&mut self) -> bool {
+        match self.next("boolean") {
+            "<true/>" => true,
+            "<false/>" => false,
+            line => panic!("expected plist boolean, got {line:?}"),
+        }
+    }
+    fn integer(&mut self) -> i64 {
+        self.tagged("integer")
+            .parse()
+            .expect("plist integer must be valid")
+    }
+    fn string_array(&mut self) -> Vec<String> {
+        self.expect("<array>");
+        let mut values = Vec::new();
+        while self.0.clone().next().map(str::trim) != Some("</array>") {
+            values.push(self.tagged("string"));
+        }
+        self.expect("</array>");
+        values
+    }
+    fn dictionary<T>(&mut self, mut read_value: impl FnMut(&mut Self) -> T) -> Vec<(String, T)> {
+        self.expect("<dict>");
+        let mut values = Vec::new();
+        while self.0.clone().next().map(str::trim) != Some("</dict>") {
+            values.push((self.tagged("key"), read_value(self)));
+        }
+        self.expect("</dict>");
+        values
+    }
+}
+fn decode_xml_text(value: &str) -> String {
+    let entities = ["amp;", "lt;", "gt;", "quot;", "apos;"];
+    for suffix in value.split('&').skip(1) {
+        assert!(
+            entities.iter().any(|entity| suffix.starts_with(entity)),
+            "unexpected XML entity in {value:?}"
+        );
+    }
+    value
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
+}
+
+fn expected_environment_variables(service_path: &str) -> Vec<(String, String)> {
+    vec![
+        ("PATH".to_owned(), service_path.to_owned()),
+        (LOCALE_KEY.to_owned(), LOCALE_VALUE.to_owned()),
+    ]
+}
+
 struct ServiceFixture {
     _temporary: TestDirectory,
     home: PathBuf,
@@ -1501,6 +1716,11 @@ impl ServiceFixture {
 }
 
 fn expected_plist_bytes(fixture: &ServiceFixture) -> Vec<u8> {
+    let (binary, service_path) = expected_plist_inputs(fixture);
+    render(&binary, &service_path).expect("desired plist")
+}
+
+fn expected_plist_inputs(fixture: &ServiceFixture) -> (PathBuf, OsString) {
     let binary = fs::canonicalize(&fixture.binary).expect("canonical binary");
     let tmux = fs::canonicalize(&fixture.tmux).expect("canonical tmux");
     let tmux_parent = tmux.parent().expect("tmux parent").to_owned();
@@ -1509,7 +1729,7 @@ fn expected_plist_bytes(fixture: &ServiceFixture) -> Vec<u8> {
         service_directories.push(fixture.path_entry.clone());
     }
     let service_path = std::env::join_paths(service_directories).expect("service PATH");
-    render(&binary, &service_path).expect("desired plist")
+    (binary, service_path)
 }
 
 fn write_old_plist(fixture: &ServiceFixture) -> (Vec<u8>, u64) {

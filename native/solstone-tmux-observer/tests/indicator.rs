@@ -11,6 +11,9 @@ use solstone_tmux_observer::indicator::{
     STATUS_LEFT,
 };
 
+const WRITTEN_STATUS_LEFT: &str = "owner status | ☼ #{@solstone} ☼";
+const NORMALIZED_STATUS_LEFT: &str = "owner status | _ #{@solstone} _";
+
 #[tokio::test]
 async fn production_install_uses_native_indicator_values() {
     let io = MemoryIndicator::with([
@@ -145,14 +148,106 @@ async fn ownership_is_relinquished_after_external_change() {
     );
 }
 
+#[tokio::test]
+async fn sun_to_underscore_status_left_is_preserved() {
+    // Pin that these constants model only the observed sun-to-underscore substitution,
+    // so the preservation assertion below specifically exercises that normalization.
+    assert_eq!(
+        WRITTEN_STATUS_LEFT.replace('☼', "_"),
+        NORMALIZED_STATUS_LEFT
+    );
+    let io = MemoryIndicator::with([
+        (STATUS_LEFT, OptionValue::Present("owner status".to_owned())),
+        (SOLSTONE_OPTION, OptionValue::Absent),
+    ]);
+    let mut ownership = install(io.clone()).await;
+    // Without a locale launchd made tmux return each UTF-8 sun byte sequence as `_`.
+    // That readback is not byte-for-byte what the observer wrote, so it must be
+    // preserved as a current external value rather than restoring the prior status.
+    io.set_external(
+        STATUS_LEFT,
+        OptionValue::Present(NORMALIZED_STATUS_LEFT.to_owned()),
+    );
+
+    ownership.restore().await.expect("restore");
+
+    assert_eq!(
+        io.value(STATUS_LEFT),
+        OptionValue::Present(NORMALIZED_STATUS_LEFT.to_owned())
+    );
+}
+
+#[tokio::test]
+async fn matching_owned_solstone_restores_nonempty_original() {
+    let io = MemoryIndicator::with([
+        (STATUS_LEFT, OptionValue::Present("owner status".to_owned())),
+        (
+            SOLSTONE_OPTION,
+            OptionValue::Present("owner solstone".to_owned()),
+        ),
+    ]);
+    let mut ownership = install(io.clone()).await;
+    io.set_external(
+        STATUS_LEFT,
+        OptionValue::Present(NORMALIZED_STATUS_LEFT.to_owned()),
+    );
+
+    ownership.restore().await.expect("restore");
+
+    assert_eq!(
+        io.value(STATUS_LEFT),
+        OptionValue::Present(NORMALIZED_STATUS_LEFT.to_owned())
+    );
+    assert_eq!(
+        io.value(SOLSTONE_OPTION),
+        OptionValue::Present("owner solstone".to_owned())
+    );
+}
+
+#[tokio::test]
+async fn externally_cleared_or_emptied_solstone_is_preserved() {
+    for external in [OptionValue::Absent, OptionValue::Present(String::new())] {
+        let io = MemoryIndicator::with([
+            (STATUS_LEFT, OptionValue::Present("owner status".to_owned())),
+            (
+                SOLSTONE_OPTION,
+                OptionValue::Present("owner solstone".to_owned()),
+            ),
+        ]);
+        let mut ownership = install(io.clone()).await;
+        io.set_external(
+            STATUS_LEFT,
+            OptionValue::Present(NORMALIZED_STATUS_LEFT.to_owned()),
+        );
+        io.set_external(SOLSTONE_OPTION, external.clone());
+
+        ownership.restore().await.expect("restore");
+
+        assert_eq!(
+            io.value(STATUS_LEFT),
+            OptionValue::Present(NORMALIZED_STATUS_LEFT.to_owned())
+        );
+        assert_eq!(io.value(SOLSTONE_OPTION), external);
+    }
+}
+
+#[tokio::test]
+async fn matching_owned_status_left_restores_original_absence() {
+    let io = MemoryIndicator::with([
+        (STATUS_LEFT, OptionValue::Absent),
+        (SOLSTONE_OPTION, OptionValue::Absent),
+    ]);
+    let mut ownership = install(io.clone()).await;
+
+    ownership.restore().await.expect("restore");
+
+    assert_eq!(io.value(STATUS_LEFT), OptionValue::Absent);
+}
+
 async fn install(io: MemoryIndicator) -> IndicatorOwnership<MemoryIndicator> {
-    IndicatorOwnership::install(
-        io,
-        "owner status | #{@solstone}".to_owned(),
-        "observer".to_owned(),
-    )
-    .await
-    .expect("install indicator")
+    IndicatorOwnership::install(io, WRITTEN_STATUS_LEFT.to_owned(), "observer".to_owned())
+        .await
+        .expect("install indicator")
 }
 
 #[derive(Clone, Default)]

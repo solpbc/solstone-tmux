@@ -50,6 +50,8 @@ pub fn render(binary: &Path, service_path: &OsStr) -> Result<Vec<u8>, ServiceErr
   <dict>\n\
     <key>PATH</key>\n\
     <string>{service_path}</string>\n\
+    <key>LC_ALL</key>\n\
+    <string>UTF-8</string>\n\
   </dict>\n\
   <key>RunAtLoad</key>\n\
   <true/>\n\
