@@ -19,7 +19,7 @@ use super::package_model::{
     ExecutableArchitecture, FORBIDDEN_MEMBER_BASENAMES, GLIBC_FLOOR, Lane, MACOS_DEPLOYMENT_FLOOR,
     ModelError, PRODUCT, PRODUCT_VERSION, SECRET_CANARIES, SHA256SUMS_NAME, SIGNATURE_NAME,
     TargetRecord, artifacts_for_lane, checksummed_names, complete_candidate_names,
-    install_instructions, modeled_members, parse_sha256sums,
+    install_instructions, modeled_members, parse_sha256sums, render_sha256sums,
 };
 
 const MAX_CANDIDATE_BYTES: u64 = 512 * 1024 * 1024;
@@ -147,6 +147,38 @@ pub fn validate_complete_set(candidate_root: &Path) -> Result<(), ValidationErro
             .map_err(|_| ValidationError::Io)?;
             validate_minisign(&public_key, payload, signature)
         },
+        embedded_version_output,
+    )
+}
+
+pub fn validate_unsigned_set(candidate_root: &Path) -> Result<(), ValidationError> {
+    let mut files = read_candidate_directory(candidate_root, &checksummed_names())?;
+    let digests = files
+        .iter()
+        .map(|(name, bytes)| (name.clone(), sha256_hex(bytes)))
+        .collect::<BTreeMap<_, _>>();
+    let sums = render_sha256sums(&digests).map_err(map_checksum_error)?;
+    files.insert(SHA256SUMS_NAME.to_owned(), sums);
+    files.insert(SIGNATURE_NAME.to_owned(), b"unsigned validation\n".to_vec());
+
+    let x86_tar = ARTIFACTS
+        .iter()
+        .find(|artifact| artifact.lane == Lane::LinuxX86_64 && artifact.kind == ArtifactKind::TarGz)
+        .ok_or(ValidationError::CandidateSet)?;
+    let executable = inspect_tar(
+        files
+            .get(&x86_tar.name)
+            .ok_or(ValidationError::CandidateSet)?,
+        x86_tar,
+        None,
+    )?
+    .binary;
+    let source_commit = run_version_probe(&executable)?;
+    let epoch = git_source_epoch(&source_commit)?;
+    validate_complete_files(
+        &files,
+        epoch,
+        |_payload, _signature| Ok(()),
         embedded_version_output,
     )
 }

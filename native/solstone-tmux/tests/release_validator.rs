@@ -20,7 +20,7 @@ use package_model::{
 use sha2::{Digest, Sha256};
 use validator::{
     ValidationError, validate_complete_files_for_test, validate_complete_set, validate_linux_lane,
-    validate_minisign,
+    validate_minisign, validate_unsigned_set,
 };
 
 const EPOCH: u64 = 1_700_000_000;
@@ -341,6 +341,14 @@ fn validates_real_complete_set_when_requested() {
         return;
     };
     validate_complete_set(Path::new(&candidate)).expect("real complete candidate should validate");
+}
+
+#[test]
+fn validates_real_unsigned_set_when_requested() {
+    let Ok(candidate) = std::env::var("SOLSTONE_TMUX_TEST_UNSIGNED_CANDIDATE") else {
+        return;
+    };
+    validate_unsigned_set(Path::new(&candidate)).expect("real unsigned candidate should validate");
 }
 
 fn complete_fixture() -> BTreeMap<String, Vec<u8>> {
