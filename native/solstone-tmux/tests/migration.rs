@@ -341,6 +341,7 @@ fn write_failure_before_rename_leaves_native_absent_and_legacy_unchanged() {
     assert_eq!(FileSnapshot::at(&fixture.legacy_path()), legacy_before);
 }
 
+#[cfg_attr(target_os = "macos", ignore = "legacy Python migration is Linux-only")]
 #[tokio::test]
 async fn canaries_are_absent_from_native_errors_health_and_captured_stderr() {
     let fixture = MigrationFixture::new("migration-canary-surfaces");
