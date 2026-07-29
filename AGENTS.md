@@ -199,6 +199,9 @@ The launchd plist retains Apple's standard
 `http://www.apple.com/DTDs/PropertyList-1.0.dtd` document-type identifier. It is emitted
 as plist syntax and is never fetched; the native crate has no networking code.
 
+The launchd plist sets `LC_ALL=UTF-8` for the observer process so tmux option values
+round-trip byte-exactly.
+
 ### Sync Service
 
 The `SyncService` runs as a background `asyncio` task. It walks cached days newest-to-oldest, queries the server for existing segments, and uploads missing ones. A circuit breaker opens after 3 consecutive failures.
