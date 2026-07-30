@@ -55,6 +55,78 @@ async fn production_install_uses_native_indicator_values() {
 }
 
 #[tokio::test]
+async fn repeated_unclean_production_starts_keep_one_indicator_and_restore_cleanly() {
+    let io = MemoryIndicator::with([
+        (STATUS_LEFT, OptionValue::Present("owner status".to_owned())),
+        (SOLSTONE_OPTION, OptionValue::Absent),
+    ]);
+
+    let _first = IndicatorOwnership::install_default(io.clone())
+        .await
+        .expect("first install");
+    let _second = IndicatorOwnership::install_default(io.clone())
+        .await
+        .expect("second install");
+    let _third = IndicatorOwnership::install_default(io.clone())
+        .await
+        .expect("third install");
+    let mut fourth = IndicatorOwnership::install_default(io.clone())
+        .await
+        .expect("fourth install");
+
+    let OptionValue::Present(status) = io.value(STATUS_LEFT) else {
+        panic!("status-left must be present");
+    };
+    assert_eq!(status.matches("#{?@solstone").count(), 1);
+    assert!(status.ends_with("owner status"));
+
+    fourth.restore().await.expect("restore fourth install");
+    assert_eq!(
+        io.value(STATUS_LEFT),
+        OptionValue::Present("owner status".to_owned())
+    );
+    assert_eq!(io.value(SOLSTONE_OPTION), OptionValue::Absent);
+}
+
+#[tokio::test]
+async fn stale_owned_solstone_values_are_not_restored() {
+    for stale in ["", OBSERVING_VALUE, SYNCING_VALUE] {
+        let io = MemoryIndicator::with([
+            (STATUS_LEFT, OptionValue::Present("owner status".to_owned())),
+            (SOLSTONE_OPTION, OptionValue::Present(stale.to_owned())),
+        ]);
+
+        let mut ownership = IndicatorOwnership::install_default(io.clone())
+            .await
+            .expect("install over stale state");
+        ownership.restore().await.expect("restore");
+
+        assert_eq!(io.value(SOLSTONE_OPTION), OptionValue::Absent);
+    }
+}
+
+#[tokio::test]
+async fn production_install_preserves_foreign_solstone_value() {
+    let io = MemoryIndicator::with([
+        (STATUS_LEFT, OptionValue::Present("owner status".to_owned())),
+        (
+            SOLSTONE_OPTION,
+            OptionValue::Present("owner value".to_owned()),
+        ),
+    ]);
+
+    let mut ownership = IndicatorOwnership::install_default(io.clone())
+        .await
+        .expect("install over owner value");
+    ownership.restore().await.expect("restore");
+
+    assert_eq!(
+        io.value(SOLSTONE_OPTION),
+        OptionValue::Present("owner value".to_owned())
+    );
+}
+
+#[tokio::test]
 async fn activity_seam_sets_yellow_only_while_working() {
     let io = MemoryIndicator::with([
         (STATUS_LEFT, OptionValue::Present("owner status".to_owned())),

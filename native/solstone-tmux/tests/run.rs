@@ -79,6 +79,42 @@ fn disabled_status_indicator_never_touches_tmux_options() {
 }
 
 #[test]
+fn crash_restart_does_not_duplicate_the_status_indicator() {
+    let fixture = RunFixture::new("binary-run-indicator-restart");
+    fixture.install_recording_tmux();
+    fixture.write_config("main", 1, 300);
+    fixture.write_local_observer();
+    fs::write(fixture.status_left_path(), b"owner status").expect("write owner status");
+
+    let mut first = fixture.spawn_run();
+    fixture.wait_for_startup_segment_metadata(&mut first);
+    fixture.wait_for_tmux_invocation(&mut first);
+    first.kill().expect("kill first observer");
+    first.wait().expect("reap first observer");
+
+    fs::write(&fixture.tmux_log, b"").expect("clear tmux invocation log");
+    let mut second = fixture.spawn_run();
+    fixture.wait_for_startup_segment_metadata(&mut second);
+    fixture.wait_for_tmux_invocation(&mut second);
+
+    let status_left =
+        fs::read_to_string(fixture.status_left_path()).expect("read installed status-left");
+    assert_eq!(status_left.matches("#{?@solstone").count(), 1);
+    assert!(status_left.ends_with("owner status"));
+
+    let pid = rustix::process::Pid::from_raw(second.id() as i32).expect("positive child pid");
+    rustix::process::kill_process(pid, rustix::process::Signal::TERM)
+        .expect("terminate second observer");
+    let status = second.wait().expect("reap second observer");
+    assert!(status.success(), "observer exit status: {status}");
+    assert_eq!(
+        fs::read(fixture.status_left_path()).expect("read restored status-left"),
+        b"owner status"
+    );
+    assert!(!fixture.solstone_path().exists());
+}
+
+#[test]
 fn overlong_stream_name_fails_before_capture_directory_creation() {
     let fixture = RunFixture::new("binary-run-overlong-stream");
     fixture.write_config(&"a".repeat(201), 1, 300);

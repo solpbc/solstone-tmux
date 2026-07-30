@@ -163,8 +163,8 @@ pub struct IndicatorOwnership<I> {
 
 impl<I: IndicatorIo> IndicatorOwnership<I> {
     pub async fn install_default(io: I) -> Result<Self, IndicatorError> {
-        let original_status_left = io.read(STATUS_LEFT).await?;
-        let original_solstone = io.read(SOLSTONE_OPTION).await?;
+        let original_status_left = normalize_status_left(io.read(STATUS_LEFT).await?);
+        let original_solstone = normalize_solstone(io.read(SOLSTONE_OPTION).await?);
         let status_left = match &original_status_left {
             OptionValue::Absent => INDICATOR_PREFIX.to_owned(),
             OptionValue::Present(value) => format!("{INDICATOR_PREFIX}{value}"),
@@ -268,6 +268,30 @@ impl<I: IndicatorIo> IndicatorOwnership<I> {
         } else {
             Err(IndicatorRestoreError(failures))
         }
+    }
+}
+
+fn normalize_status_left(original: OptionValue) -> OptionValue {
+    match original {
+        OptionValue::Present(value) => {
+            let mut base = value.as_str();
+            while let Some(stripped) = base.strip_prefix(INDICATOR_PREFIX) {
+                base = stripped;
+            }
+            OptionValue::Present(base.to_owned())
+        }
+        OptionValue::Absent => OptionValue::Absent,
+    }
+}
+
+fn normalize_solstone(original: OptionValue) -> OptionValue {
+    match original {
+        OptionValue::Present(value)
+            if value.is_empty() || value == OBSERVING_VALUE || value == SYNCING_VALUE =>
+        {
+            OptionValue::Absent
+        }
+        original => original,
     }
 }
 
