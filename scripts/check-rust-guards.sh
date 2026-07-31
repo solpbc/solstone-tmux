@@ -412,7 +412,7 @@ done < <(git -C "$repo_root" ls-files -z)
 
 # SPL is supplied only by the two revision-pinned Git dependencies. No copied
 # core or transport tree may live in this repository.
-expected_spl_revision='742bc9dc789c5a75658844849a04d75033aeb6e3'
+expected_spl_revision='e86c6d0fa0518fcde1fdc1d0e6b9c1ba090a9dbe'
 expected_spl_source="https://github.com/solpbc/spl-rust"
 for spl_package in spl-core spl-transport; do
     expected_dependency="$spl_package = { git = \"$expected_spl_source\", rev = \"$expected_spl_revision\" }"
