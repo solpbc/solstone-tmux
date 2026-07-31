@@ -410,28 +410,11 @@ while IFS= read -r -d '' tracked_path; do
     fi
 done < <(git -C "$repo_root" ls-files -z)
 
-# SPL is supplied only by the two revision-pinned Git dependencies. No copied
-# core or transport tree may live in this repository.
-expected_spl_revision='e86c6d0fa0518fcde1fdc1d0e6b9c1ba090a9dbe'
-expected_spl_source="https://github.com/solpbc/spl-rust"
-for spl_package in spl-core spl-transport; do
-    expected_dependency="$spl_package = { git = \"$expected_spl_source\", rev = \"$expected_spl_revision\" }"
-    if [[ "$(rg -cFx "$expected_dependency" "$native_root/Cargo.toml" || true)" != "1" ]]; then
-        echo "$native_root/Cargo.toml: $spl_package must use the exact pinned Git revision" >&2
-        failed=true
-    fi
-done
-expected_lock_source="source = \"git+$expected_spl_source?rev=$expected_spl_revision#$expected_spl_revision\""
-if [[ "$(rg -cFx "$expected_lock_source" "$repo_root/Cargo.lock" || true)" != "2" ]]; then
-    echo "$repo_root/Cargo.lock: SPL packages must resolve only from the exact pinned Git revision" >&2
+# SPL dependency authority, inheritance, lock resolution, and copied-tree
+# policy are checked together from their repository sources of truth.
+if ! "$repo_root/scripts/spl-pin.sh" "$repo_root"; then
     failed=true
 fi
-while IFS= read -r -d '' tracked_path; do
-    if [[ "$tracked_path" =~ (^|/)(spl-core|spl-transport|spl_core|spl_transport)(/|$) ]]; then
-        echo "$tracked_path: copied in-tree SPL implementation is forbidden" >&2
-        failed=true
-    fi
-done < <(git -C "$repo_root" ls-files -z)
 
 # Exactly one declared binary plus the exact platform identities prove there is
 # no second service executable, unit, plist, or separate sync daemon.

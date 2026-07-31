@@ -20,8 +20,8 @@ rustix = { version = "1", features = ["fs", "process", "system"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = { version = "0.10", default-features = false }
-spl-core = { git = "https://github.com/solpbc/spl-rust", rev = "e86c6d0fa0518fcde1fdc1d0e6b9c1ba090a9dbe" }
-spl-transport = { git = "https://github.com/solpbc/spl-rust", rev = "e86c6d0fa0518fcde1fdc1d0e6b9c1ba090a9dbe" }
+spl-core = { workspace = true }
+spl-transport = { workspace = true }
 time = { version = "0.3", default-features = false, features = ["local-offset"] }
 tokio = { version = "1", features = ["macros", "process", "rt", "signal", "time"] }
 

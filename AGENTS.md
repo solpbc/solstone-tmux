@@ -67,6 +67,7 @@ scripts/
     check-rust-guards.sh           Repository policy guard
     extract_changelog.sh           Exact release-note extraction
     rust-targets.sh                Target parser for rust-toolchain.toml
+    spl-pin.sh                     SPL pin, inheritance, and lock guard
 ```
 
 ## Build and test commands
@@ -105,10 +106,11 @@ type checking only; neither is a linked or native-artifact claim.
 
 ## Dependency policy
 
-The crate pins `spl-core` and `spl-transport` to one exact Git revision and
-allows only the declared crates.io registry and SPL Git source. The committed
-lockfile is authoritative. Packaging parsers are dev-dependencies and do not
-enter the shipped executable graph.
+The workspace pins `spl-core` and `spl-transport` to one exact Git revision, and
+the native crate inherits both declarations. Only the declared crates.io
+registry and SPL Git source are allowed. The committed lockfile is
+authoritative. Packaging parsers are dev-dependencies and do not enter the
+shipped executable graph.
 
 `cargo-deny` must be exactly version `0.20.2`. Its offline gate covers licenses,
 sources, and bans. Advisories are excluded because that database requires
