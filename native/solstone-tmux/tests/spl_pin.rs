@@ -48,6 +48,16 @@ fn spl_pin_missing_inputs_fail_cleanly() {
 }
 
 #[test]
+fn spl_pin_rejects_untracked_repository() {
+    let fixture = PinFixture::untracked();
+    let expected = format!(
+        "{}: spl-core and spl-transport copied-tree check requires a Git repository; run this check against a repository working tree",
+        fixture.repo().display()
+    );
+    assert_exact_failure(&fixture.run(), &expected);
+}
+
+#[test]
 fn spl_pin_rejects_missing_allow_git_authority() {
     let fixture = PinFixture::new(|repo| {
         remove_matching_line(&repo.join(DENY_CONFIG), "allow-git =");
@@ -96,6 +106,25 @@ fn spl_pin_rejects_duplicate_workspace_dependency() {
     });
     let expected = format!(
         "{}: spl-core appears more than once in [workspace.dependencies]; keep exactly one Git revision declaration",
+        fixture.path(WORKSPACE_MANIFEST).display()
+    );
+    assert_exact_failure(&fixture.run(), &expected);
+}
+
+#[test]
+fn spl_pin_rejects_malformed_workspace_declaration() {
+    let fixture = PinFixture::new(|repo| {
+        let line = manifest_entry(repo, WORKSPACE_MANIFEST, "spl-core");
+        replace_manifest_entry(
+            repo,
+            WORKSPACE_MANIFEST,
+            "spl-core",
+            &line.replace(" }", ", features = \"x\" }"),
+        );
+    });
+    let source = approved_source(fixture.repo());
+    let expected = format!(
+        "{}: spl-core must declare only git and rev in [workspace.dependencies]; replace it with spl-core = {{ git = \"{source}\", rev = \"<40-character lowercase hex>\" }}",
         fixture.path(WORKSPACE_MANIFEST).display()
     );
     assert_exact_failure(&fixture.run(), &expected);
@@ -291,6 +320,30 @@ fn spl_pin_rejects_lock_source_from_another_source() {
 }
 
 #[test]
+fn spl_pin_rejects_lock_source_with_approved_prefix() {
+    let fixture = PinFixture::new(|repo| {
+        let approved = approved_source(repo);
+        let revision = workspace_revision(repo);
+        rewrite_lock_package(repo, "spl-core", |block| {
+            let source = block
+                .lines()
+                .find(|line| line.starts_with("source = "))
+                .expect("source line");
+            block.replacen(
+                source,
+                &format!("source = \"git+{approved}-fork?rev={revision}#{revision}\""),
+                1,
+            )
+        });
+    });
+    let expected = format!(
+        "{}: spl-core resolves from a source other than the workspace declaration; regenerate the lockfile from the declared Git source",
+        fixture.path(LOCKFILE).display()
+    );
+    assert_exact_failure(&fixture.run(), &expected);
+}
+
+#[test]
 fn spl_pin_rejects_duplicate_lock_package_resolution() {
     let fixture = PinFixture::new(|repo| {
         rewrite_lockfile(repo, |mut contents| {
@@ -313,6 +366,21 @@ fn spl_pin_rejects_workspace_patch_routing() {
         append_text(
             &repo.join(WORKSPACE_MANIFEST),
             "\n[patch.crates-io]\nspl-core = { path = \"vendor/local-dependency\" }\n",
+        );
+    });
+    let expected = format!(
+        "{}: spl-core must not be routed through [patch]; remove the spl-core patch entry and use its [workspace.dependencies] declaration",
+        fixture.path(WORKSPACE_MANIFEST).display()
+    );
+    assert_exact_failure(&fixture.run(), &expected);
+}
+
+#[test]
+fn spl_pin_rejects_single_quoted_patch_key() {
+    let fixture = PinFixture::new(|repo| {
+        append_text(
+            &repo.join(WORKSPACE_MANIFEST),
+            "\n[patch.crates-io]\n'spl-core' = { path = \"vendor/local-dependency\" }\n",
         );
     });
     let expected = format!(
@@ -358,6 +426,14 @@ struct PinFixture {
 
 impl PinFixture {
     fn new(mutate: impl FnOnce(&Path)) -> Self {
+        Self::from_shipped(mutate, true)
+    }
+
+    fn untracked() -> Self {
+        Self::from_shipped(|_| {}, false)
+    }
+
+    fn from_shipped(mutate: impl FnOnce(&Path), tracked: bool) -> Self {
         let root = TestDirectory::new("pin-guard");
         let repo = root.path().join("repo");
         fs::create_dir_all(repo.join("native/solstone-tmux"))
@@ -367,7 +443,9 @@ impl PinFixture {
             fs::copy(source_root.join(relative), repo.join(relative)).expect("copy pin input");
         }
         mutate(&repo);
-        initialize_git(&repo);
+        if tracked {
+            initialize_git(&repo);
+        }
         Self {
             _root: root,
             repo,

@@ -286,7 +286,7 @@ if $lock_present && $workspace_authority_valid; then
 
     common_revision="${workspace_selector_value[spl-core]}"
     expected_lock_source="git+$approved_source?rev=$common_revision#$common_revision"
-    approved_lock_prefix="git+$approved_source"
+    approved_lock_prefix="git+$approved_source?"
     for package in "${spl_packages[@]}"; do
         if ((lock_block_count["$package"] == 0)); then
             fail "$lock_file: $package is missing from Cargo.lock; regenerate the lockfile from the workspace declaration"
@@ -310,13 +310,15 @@ scan_patch_tables() {
     local manifest="$1"
     local in_patch=false
     local line package
+    local patch_package_re="[.][\"']?(spl-core|spl-transport)[\"']?[[:space:]]*\\][[:space:]]*$"
+    local patch_assignment_re="^[[:space:]]*[\"']?(spl-core|spl-transport)[\"']?[[:space:]]*="
     declare -A reported=([spl-core]=false [spl-transport]=false)
 
-    [[ -f "$manifest" ]] || return
+    [[ -f "$manifest" ]] || return 0
     while IFS= read -r line || [[ -n "$line" ]]; do
         if [[ "$line" =~ ^[[:space:]]*\[patch(\.|[[:space:]]*\]) ]]; then
             in_patch=true
-            if [[ "$line" =~ [.]\"?(spl-core|spl-transport)\"?[[:space:]]*\][[:space:]]*$ ]]; then
+            if [[ "$line" =~ $patch_package_re ]]; then
                 package="${BASH_REMATCH[1]}"
                 if [[ "${reported[$package]}" != true ]]; then
                     fail "$manifest: $package must not be routed through [patch]; remove the $package patch entry and use its [workspace.dependencies] declaration"
@@ -330,8 +332,7 @@ scan_patch_tables() {
             continue
         fi
         $in_patch || continue
-        if [[ "$line" =~ ^[[:space:]]*\"(spl-core|spl-transport)\"[[:space:]]*= ]] ||
-            [[ "$line" =~ ^[[:space:]]*(spl-core|spl-transport)[[:space:]]*= ]]; then
+        if [[ "$line" =~ $patch_assignment_re ]]; then
             package="${BASH_REMATCH[1]}"
             if [[ "${reported[$package]}" != true ]]; then
                 fail "$manifest: $package must not be routed through [patch]; remove the $package patch entry and use its [workspace.dependencies] declaration"
@@ -344,12 +345,16 @@ scan_patch_tables() {
 scan_patch_tables "$workspace_file"
 scan_patch_tables "$native_file"
 
-while IFS= read -r -d '' tracked_path; do
-    if [[ "$tracked_path" =~ (^|/)(spl-core|spl-transport|spl_core|spl_transport)(/|$) ]]; then
-        echo "$tracked_path: copied in-tree SPL implementation is forbidden" >&2
-        failed=true
-    fi
-done < <(git -C "$repo_root" ls-files -z)
+if ! git -C "$repo_root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    fail "$repo_root: spl-core and spl-transport copied-tree check requires a Git repository; run this check against a repository working tree"
+else
+    while IFS= read -r -d '' tracked_path; do
+        if [[ "$tracked_path" =~ (^|/)(spl-core|spl-transport|spl_core|spl_transport)(/|$) ]]; then
+            echo "$tracked_path: copied in-tree SPL implementation is forbidden" >&2
+            failed=true
+        fi
+    done < <(git -C "$repo_root" ls-files -z)
+fi
 
 if $failed; then
     exit 1
