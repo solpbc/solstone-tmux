@@ -247,10 +247,6 @@ remove vendored material without an explicit authority import.
 
 ## Brand canon
 
-- solstone-tmux is an observer. Owner-facing prose says it experiences tmux
-  sessions along with the owner.
-- Never describe it as watching, capturing, recording, monitoring, or tracking
-  the owner.
 - Internal code terms such as capture loop, `capture_interval`, and `captures/`
   remain correct in engineering contexts.
 - Diagnostics and documentation never expose credentials, observed pane
