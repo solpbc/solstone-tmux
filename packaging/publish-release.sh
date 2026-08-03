@@ -107,8 +107,6 @@ lock_version="$(
 version="$manifest_version"
 tag="v$version"
 title="solstone-tmux $version"
-[[ "$tag" == "v1.0.0" && "$title" == "solstone-tmux 1.0.0" ]] ||
-    die "publisher is restricted to the native 1.0.0 cutover"
 notes="$("$repo_root/scripts/extract_changelog.sh" "$version" "$repo_root/CHANGELOG.md")" ||
     die "could not extract exact release notes"
 [[ "$notes" == "## [$version]"* ]] ||

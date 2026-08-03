@@ -20,9 +20,19 @@ use support::TestDirectory;
 use tar::{Builder, Header};
 
 const VERSION: &str = PRODUCT_VERSION;
-const TAG: &str = "v1.0.0";
-const TITLE: &str = "solstone-tmux 1.0.0";
-const NOTES: &str = "## [1.0.0] - 2026-07-29\n\n### Added\n- native candidate release.";
+// Derived from the crate version so the publisher suite re-proves itself at every
+// release. The publisher was once pinned to the 1.0.0 cutover; deriving these means
+// a future version-specific restriction cannot pass these tests unnoticed.
+const TAG: &str = concat!("v", env!("CARGO_PKG_VERSION"));
+const TITLE: &str = concat!("solstone-tmux ", env!("CARGO_PKG_VERSION"));
+const NOTES: &str = concat!(
+    "## [",
+    env!("CARGO_PKG_VERSION"),
+    "] - 2026-08-03\n\n### Added\n- native candidate release."
+);
+// A version the crate will never carry, so manifest/lockfile disagreement stays a
+// real disagreement no matter what the crate version becomes.
+const MISMATCHED_VERSION: &str = "9.9.9";
 type RefusalSetup = for<'a> fn(&'a PublisherFixture) -> RunRequest<'a>;
 
 #[test]
@@ -204,14 +214,20 @@ fn every_local_refusal_precedes_any_remote_call() {
         ("Cargo.toml version", |fixture| {
             fixture.commit_repo_mutation(
                 "native/solstone-tmux/Cargo.toml",
-                b"[package]\nname = \"solstone-tmux\"\nversion = \"1.0.1\"\n",
+                format!(
+                    "[package]\nname = \"solstone-tmux\"\nversion = \"{MISMATCHED_VERSION}\"\n"
+                )
+                .as_bytes(),
             );
             fixture.request()
         }),
         ("Cargo.lock version", |fixture| {
             fixture.commit_repo_mutation(
                 "Cargo.lock",
-                b"version = 4\n\n[[package]]\nname = \"solstone-tmux\"\nversion = \"1.0.1\"\n",
+                format!(
+                    "version = 4\n\n[[package]]\nname = \"solstone-tmux\"\nversion = \"{MISMATCHED_VERSION}\"\n"
+                )
+                .as_bytes(),
             );
             fixture.request()
         }),
@@ -386,12 +402,15 @@ impl PublisherFixture {
 
         fs::write(
             repo.join("native/solstone-tmux/Cargo.toml"),
-            b"[package]\nname = \"solstone-tmux\"\nversion = \"1.0.0\"\n",
+            format!("[package]\nname = \"solstone-tmux\"\nversion = \"{VERSION}\"\n").as_bytes(),
         )
         .expect("write manifest");
         fs::write(
             repo.join("Cargo.lock"),
-            b"version = 4\n\n[[package]]\nname = \"solstone-tmux\"\nversion = \"1.0.0\"\n",
+            format!(
+                "version = 4\n\n[[package]]\nname = \"solstone-tmux\"\nversion = \"{VERSION}\"\n"
+            )
+            .as_bytes(),
         )
         .expect("write lockfile");
         fs::write(
@@ -817,6 +836,7 @@ impl RunRequest<'_> {
             .env("FAKE_GH_REMOTE", &fixture.remote)
             .env("FAKE_GH_LOG", &fixture.log_path)
             .env("FAKE_GH_EXPECTED_COMMIT", fixture.head())
+            .env("FAKE_GH_EXPECTED_VERSION", VERSION)
             .env("FAKE_GH_INTERRUPT", self.interrupt.unwrap_or_default())
             .env(
                 "FAKE_GH_REMOTE_MUTATION",
@@ -880,7 +900,7 @@ if [[ "$count" == "1" ]]; then
     source_binding_found=false
     while IFS= read -r candidate_tar; do
         if tar -xOf "$candidate_tar" 2>/dev/null |
-            grep -aFq "solstone-tmux 1.0.0 (source $FAKE_GH_EXPECTED_COMMIT)"; then
+            grep -aFq "solstone-tmux $FAKE_GH_EXPECTED_VERSION (source $FAKE_GH_EXPECTED_COMMIT)"; then
             source_binding_found=true
             break
         fi

@@ -4,13 +4,19 @@ All notable changes to solstone-tmux will be documented in this file.
 
 Format adapted from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [1.0.1] - 2026-08-03
 
 ### Changed
-- When solstone-tmux experiences tmux sessions alongside you, syncing now
-  reuses Journal custody checks within a sweep to converge large local queues
-  with less unnecessary Journal work. Local segments are still removed only
-  after a current custody check proves they are safely held by the Journal.
+- syncing no longer re-sends what your journal already holds. everything
+  still in the local cache used to be sent again and again, for as long as
+  your retention setting kept it. nothing changed about what goes into your
+  journal, or how long it stays on this machine.
+
+### Fixed
+- a reply from your journal that got cut short used to count as a complete
+  one. syncing now treats those as unfinished and tries again.
+- a large reply from your journal could be cut short before all of it
+  arrived. those now come through intact.
 
 ## [1.0.0] - 2026-07-29
 
