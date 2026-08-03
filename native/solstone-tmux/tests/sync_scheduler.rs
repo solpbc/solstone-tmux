@@ -240,7 +240,7 @@ fn second_sweep_reuses_custody_without_uploads_across_passes() {
         let mut listings_by_day = HashMap::new();
         for call in &second_calls {
             if let ObservedCall::Listing(day) = call {
-                *listings_by_day.entry(day).or_insert(0_usize) += 1;
+                *listings_by_day.entry(day.clone()).or_insert(0_usize) += 1;
             }
         }
 
@@ -248,7 +248,14 @@ fn second_sweep_reuses_custody_without_uploads_across_passes() {
             uploads.is_empty(),
             "second sweep re-uploaded custodied segments: {uploads:?}"
         );
-        assert!(listings_by_day.values().all(|count| *count <= 1));
+        assert_eq!(
+            listings_by_day,
+            HashMap::from([
+                ("20260701".to_owned(), 1),
+                ("20260702".to_owned(), 1),
+                ("20260703".to_owned(), 1),
+            ])
+        );
         assert_eq!(attempted, segments.len());
         for (day, segment) in segments {
             assert!(segment_path_in_day(temporary.path(), day, segment).is_dir());
@@ -381,8 +388,8 @@ fn listings_per_day_do_not_exceed_uploads_plus_one() {
     run(async {
         let temporary = TestDirectory::new("sync-listing-bound");
         for (day, segment) in [
-            ("20260702", "120100_300"),
-            ("20260702", "120000_300"),
+            ("20260702", "130100_300"),
+            ("20260702", "130000_300"),
             ("20260701", "120100_300"),
             ("20260701", "120000_300"),
         ] {
@@ -394,28 +401,56 @@ fn listings_per_day_do_not_exceed_uploads_plus_one() {
         scheduler.run_pass(&mut journal).await;
         let calls = drain_calls(&mut calls);
         let mut listings_by_day = HashMap::new();
+        let segment_days = HashMap::from([
+            ("130100_300", "20260702"),
+            ("130000_300", "20260702"),
+            ("120100_300", "20260701"),
+            ("120000_300", "20260701"),
+        ]);
+        let mut uploads_by_day = HashMap::new();
         for call in calls {
-            if let ObservedCall::Listing(day) = call {
-                *listings_by_day.entry(day).or_insert(0_usize) += 1;
+            match call {
+                ObservedCall::Listing(day) => {
+                    *listings_by_day.entry(day).or_insert(0_usize) += 1;
+                }
+                ObservedCall::Upload(segment) => {
+                    let day = segment_days
+                        .get(segment.as_str())
+                        .expect("attribute listing-bound upload");
+                    *uploads_by_day.entry((*day).to_owned()).or_insert(0_usize) += 1;
+                }
+                ObservedCall::Register => {}
             }
         }
 
-        assert_eq!(listings_by_day.get("20260702"), Some(&3));
-        assert_eq!(listings_by_day.get("20260701"), Some(&3));
+        assert_eq!(uploads_by_day.get("20260702"), Some(&2));
+        assert_eq!(uploads_by_day.get("20260701"), Some(&2));
+        for day in ["20260702", "20260701"] {
+            assert!(
+                listings_by_day[day] <= uploads_by_day[day] + 1,
+                "{day} exceeded its listing bound"
+            );
+        }
     });
 }
 
 #[test]
-fn reused_custody_counts_as_sync_and_resets_backoff() {
+fn reused_custody_counts_as_successful_sync() {
     run(async {
         let temporary = TestDirectory::new("sync-reused-custody-success");
         ensure_private_directory(temporary.path()).expect("prepare data root");
+        create_segment(temporary.path(), "120100_300", b"fixture\n");
         create_segment(temporary.path(), "120000_300", b"fixture\n");
         let lock = InstanceLock::acquire(temporary.path()).expect("instance lock");
         let health = HealthWriter::new(temporary.path().to_path_buf(), &lock);
         let (activity, _activity_receiver) = tokio::sync::watch::channel(SyncActivity::Idle);
-        let (journal, mut calls) = FakeJournal::new();
-        let listing = listing_for_segments(temporary.path(), &[(DAY, "120000_300")]).await;
+        let listing = listing_for_segments(
+            temporary.path(),
+            &[(DAY, "120100_300"), (DAY, "120000_300")],
+        )
+        .await;
+        let (mut journal, mut calls) = FakeJournal::new();
+        journal.push_list_outcome(DAY, Ok(listing));
         let (stop, stopped) = oneshot::channel();
         let mut scheduler = SyncScheduler::new(
             temporary.path().join("captures"),
@@ -426,8 +461,6 @@ fn reused_custody_counts_as_sync_and_resets_backoff() {
         )
         .with_observability(activity, health);
         let task = tokio::spawn(async move {
-            let mut journal = journal;
-            journal.push_list_outcome(DAY, Ok(listing));
             scheduler
                 .run(&mut journal, async move {
                     let _ = stopped.await;
@@ -436,8 +469,9 @@ fn reused_custody_counts_as_sync_and_resets_backoff() {
         });
 
         expect_listing(&mut calls, "reused custody").await;
-        let snapshot = wait_for_idle_snapshot(temporary.path()).await;
+        let snapshot = wait_for_successful_sync_snapshot(temporary.path()).await;
         assert!(!snapshot["last_successful_sync_unix_seconds"].is_null());
+        assert_eq!(snapshot["pending_segments"], 0);
         assert!(drain_uploads(&mut calls).is_empty());
         let _ = stop.send(());
         task.await.expect("join reused scheduler");
@@ -446,7 +480,7 @@ fn reused_custody_counts_as_sync_and_resets_backoff() {
 
 #[test]
 fn pending_segments_drains_monotonically_when_custody_is_proven() {
-    run(async {
+    paused(async {
         let temporary = TestDirectory::new("sync-pending-drain");
         ensure_private_directory(temporary.path()).expect("prepare data root");
         for index in 0..(SEGMENTS_PER_PASS + 1) {
@@ -460,6 +494,8 @@ fn pending_segments_drains_monotonically_when_custody_is_proven() {
         let health = HealthWriter::new(temporary.path().to_path_buf(), &lock);
         let (activity, _activity_receiver) = tokio::sync::watch::channel(SyncActivity::Idle);
         let (journal, mut calls) = FakeJournal::new();
+        let (entered, in_flight) = oneshot::channel();
+        let (release, released) = oneshot::channel();
         let (stop, stopped) = oneshot::channel();
         let mut scheduler = SyncScheduler::new(
             temporary.path().join("captures"),
@@ -470,7 +506,12 @@ fn pending_segments_drains_monotonically_when_custody_is_proven() {
         )
         .with_observability(activity, health);
         let task = tokio::spawn(async move {
-            let mut journal = journal;
+            let mut journal = GatedFakeJournal {
+                inner: journal,
+                gate_segment: "120000_300".to_owned(),
+                entered: Some(entered),
+                release: Some(released),
+            };
             scheduler
                 .run(&mut journal, async move {
                     let _ = stopped.await;
@@ -478,12 +519,20 @@ fn pending_segments_drains_monotonically_when_custody_is_proven() {
                 .await;
         });
 
-        let mut uploads = Vec::new();
-        while uploads.len() < SEGMENTS_PER_PASS + 1 {
-            uploads.push(expect_upload(&mut calls).await);
+        for _ in 0..SEGMENTS_PER_PASS {
+            expect_upload(&mut calls).await;
         }
-        let snapshot = wait_for_idle_snapshot(temporary.path()).await;
-        assert_eq!(snapshot["pending_segments"], 0);
+        in_flight.await.expect("ninth upload is gated");
+        let first = wait_for_pending_snapshot(temporary.path(), 1).await;
+        let _ = release.send(());
+        assert_eq!(expect_upload(&mut calls).await, "120000_300");
+        let second = wait_for_idle_snapshot(temporary.path()).await;
+        let pending = [
+            first["pending_segments"].as_u64(),
+            second["pending_segments"].as_u64(),
+        ];
+        assert!(pending.windows(2).all(|pair| pair[0] >= pair[1]));
+        assert_eq!(pending, [Some(1), Some(0)]);
         let _ = stop.send(());
         task.await.expect("join pending scheduler");
     });
@@ -1276,6 +1325,58 @@ impl SyncJournal for FakeJournal {
     }
 }
 
+struct GatedFakeJournal {
+    inner: FakeJournal,
+    gate_segment: String,
+    entered: Option<oneshot::Sender<()>>,
+    release: Option<oneshot::Receiver<()>>,
+}
+
+impl SyncJournal for GatedFakeJournal {
+    fn observer_name(&self) -> Option<&str> {
+        self.inner.observer_name()
+    }
+
+    fn ensure_registered<'a>(
+        &'a mut self,
+    ) -> Pin<Box<dyn Future<Output = Result<bool, SyncOperationError>> + Send + 'a>> {
+        self.inner.ensure_registered()
+    }
+
+    fn upload<'a>(
+        &'a mut self,
+        candidate: &'a SegmentCandidate,
+        files: Vec<PathBuf>,
+    ) -> Pin<Box<dyn Future<Output = Result<UploadResult, SyncOperationError>> + Send + 'a>> {
+        Box::pin(async move {
+            if candidate.segment() == self.gate_segment {
+                if let Some(entered) = self.entered.take() {
+                    let _ = entered.send(());
+                }
+                if let Some(release) = self.release.take() {
+                    let _ = release.await;
+                }
+            }
+            self.inner.upload(candidate, files).await
+        })
+    }
+
+    fn segments<'a>(
+        &'a mut self,
+        day: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<SegmentsEnvelope, SyncOperationError>> + Send + 'a>>
+    {
+        self.inner.segments(day)
+    }
+
+    fn status_event<'a>(
+        &'a mut self,
+        beacon: &'a StatusBeacon,
+    ) -> Pin<Box<dyn Future<Output = Result<(), SyncOperationError>> + Send + 'a>> {
+        self.inner.status_event(beacon)
+    }
+}
+
 struct CountingCapture(Arc<AtomicUsize>);
 
 impl CaptureProvider for CountingCapture {
@@ -1538,6 +1639,39 @@ async fn wait_for_idle_snapshot(root: &Path) -> serde_json::Value {
         }
         if Instant::now() >= deadline {
             panic!("scheduler did not publish its idle health snapshot");
+        }
+        tokio::task::yield_now().await;
+    }
+}
+
+async fn wait_for_successful_sync_snapshot(root: &Path) -> serde_json::Value {
+    let deadline = Instant::now() + WAIT_CEILING;
+    loop {
+        if let Ok(bytes) = std::fs::read(root.join(HEALTH_FILENAME))
+            && let Ok(snapshot) = serde_json::from_slice::<serde_json::Value>(&bytes)
+            && snapshot["sync_in_progress"] == false
+            && !snapshot["last_successful_sync_unix_seconds"].is_null()
+        {
+            return snapshot;
+        }
+        if Instant::now() >= deadline {
+            panic!("scheduler did not publish its successful-sync health snapshot");
+        }
+        tokio::task::yield_now().await;
+    }
+}
+
+async fn wait_for_pending_snapshot(root: &Path, pending: u64) -> serde_json::Value {
+    let deadline = Instant::now() + WAIT_CEILING;
+    loop {
+        if let Ok(bytes) = std::fs::read(root.join(HEALTH_FILENAME))
+            && let Ok(snapshot) = serde_json::from_slice::<serde_json::Value>(&bytes)
+            && snapshot["pending_segments"] == pending
+        {
+            return snapshot;
+        }
+        if Instant::now() >= deadline {
+            panic!("scheduler did not publish pending segment count {pending}");
         }
         tokio::task::yield_now().await;
     }

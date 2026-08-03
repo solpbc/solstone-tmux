@@ -879,6 +879,8 @@ impl SyncScheduler {
             if listing_proves_custody {
                 summary.custodied += 1;
                 summary.contacted = true;
+                // end_pass clears cached listings after a delay, forcing refresh before reuse;
+                // this reset cannot be independently observed in integration tests.
                 self.backoff.successful_operation();
                 self.pending_uncustodied_in_sweep =
                     self.pending_uncustodied_in_sweep.saturating_sub(1);
