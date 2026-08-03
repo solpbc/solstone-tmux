@@ -618,6 +618,8 @@ pub struct SyncScheduler {
     wake: SyncWake,
     cursor: Option<SegmentCandidate>,
     remaining_in_sweep: usize,
+    listings_by_day: HashMap<String, SegmentsEnvelope>,
+    pending_uncustodied_in_sweep: usize,
     backoff: Backoff,
     activity: Option<watch::Sender<SyncActivity>>,
     health: Option<HealthWriter>,
@@ -643,6 +645,8 @@ impl SyncScheduler {
             wake,
             cursor: None,
             remaining_in_sweep: 0,
+            listings_by_day: HashMap::new(),
+            pending_uncustodied_in_sweep: 0,
             backoff: Backoff::new(),
             activity: None,
             health: None,
@@ -760,6 +764,9 @@ impl SyncScheduler {
                 Ok(Ok(candidates)) => candidates,
                 _ => {
                     self.remaining_in_sweep = 0;
+                    self.pending_uncustodied_in_sweep = 0;
+                    self.facts.pending_segments = 0;
+                    self.listings_by_day.clear();
                     return self.end_pass(
                         summary,
                         SyncOperationError::EndPassDiagnostic(
@@ -769,9 +776,11 @@ impl SyncScheduler {
                     );
                 }
             };
-        self.facts.pending_segments = u64::try_from(candidates.len()).unwrap_or(u64::MAX);
         if candidates.is_empty() {
             self.remaining_in_sweep = 0;
+            self.pending_uncustodied_in_sweep = 0;
+            self.facts.pending_segments = 0;
+            self.listings_by_day.clear();
             let today = local_today(self.clock.as_ref());
             match journal.segments(&format_day(today)).await {
                 Ok(_) => {
@@ -785,11 +794,19 @@ impl SyncScheduler {
 
         let ordered = candidates_after_cursor(candidates, self.cursor.as_ref());
         if self.remaining_in_sweep == 0 {
+            self.listings_by_day.clear();
             self.remaining_in_sweep = ordered.len();
+            self.pending_uncustodied_in_sweep = ordered.len();
         } else {
             self.remaining_in_sweep = self.remaining_in_sweep.min(ordered.len());
+            self.pending_uncustodied_in_sweep =
+                self.pending_uncustodied_in_sweep.min(ordered.len());
         }
+        self.facts.pending_segments =
+            u64::try_from(self.pending_uncustodied_in_sweep).unwrap_or(u64::MAX);
         let candidate_limit = SEGMENTS_PER_PASS.min(self.remaining_in_sweep);
+        let today = local_today(self.clock.as_ref());
+        let mut pass_fresh_listing_days = HashSet::new();
         self.facts.sync_in_progress = true;
         self.write_health().await;
         let _activity = ActivityGuard::new(self.activity.as_ref());
@@ -809,7 +826,91 @@ impl SyncScheduler {
                         continue;
                     }
                 };
-            let custody_paths = files.clone();
+            let local_files = match inventory_files(files.clone()).await {
+                Ok(files) => files,
+                Err(_) => {
+                    summary.diagnostic = Some(DiagnosticCode::LocalSegmentInvalid);
+                    continue;
+                }
+            };
+            let deletion_eligible = self.retention_days >= 0
+                && retention_eligible(candidate.day(), today, self.retention_days);
+            let cached_listing_proves_custody = self
+                .listings_by_day
+                .get(candidate.day())
+                .is_some_and(|listing| {
+                    fresh_listing_proves_custody(
+                        listing,
+                        candidate.segment(),
+                        candidate.segment(),
+                        &local_files,
+                    )
+                });
+            let should_fetch_preupload_listing =
+                !self.listings_by_day.contains_key(candidate.day())
+                    || (deletion_eligible
+                        && cached_listing_proves_custody
+                        && !pass_fresh_listing_days.contains(candidate.day()));
+            let mut preupload_listing_failed = false;
+            if should_fetch_preupload_listing {
+                match journal.segments(candidate.day()).await {
+                    Ok(listing) => {
+                        summary.contacted = true;
+                        self.backoff.successful_operation();
+                        self.listings_by_day
+                            .insert(candidate.day().to_owned(), listing);
+                        pass_fresh_listing_days.insert(candidate.day().to_owned());
+                    }
+                    Err(_) => preupload_listing_failed = true,
+                }
+            }
+            let listing_proves_custody = !preupload_listing_failed
+                && self
+                    .listings_by_day
+                    .get(candidate.day())
+                    .is_some_and(|listing| {
+                        fresh_listing_proves_custody(
+                            listing,
+                            candidate.segment(),
+                            candidate.segment(),
+                            &local_files,
+                        )
+                    });
+            if listing_proves_custody {
+                summary.custodied += 1;
+                summary.contacted = true;
+                self.backoff.successful_operation();
+                self.pending_uncustodied_in_sweep =
+                    self.pending_uncustodied_in_sweep.saturating_sub(1);
+                self.facts.pending_segments =
+                    u64::try_from(self.pending_uncustodied_in_sweep).unwrap_or(u64::MAX);
+                if deletion_eligible
+                    && pass_fresh_listing_days.contains(candidate.day())
+                    && let Some(listing) = self.listings_by_day.get(candidate.day())
+                {
+                    match delete_custodied_segment(
+                        &self.captures_root,
+                        &self.stream,
+                        today,
+                        self.retention_days,
+                        &candidate,
+                        candidate.segment(),
+                        listing,
+                    )
+                    .await
+                    {
+                        RetentionOutcome::Retained => {
+                            summary.diagnostic = Some(DiagnosticCode::LocalSegmentInvalid);
+                        }
+                        RetentionOutcome::Disabled
+                        | RetentionOutcome::Ineligible
+                        | RetentionOutcome::Deleted => {}
+                    }
+                }
+                continue;
+            }
+            self.listings_by_day.remove(candidate.day());
+            pass_fresh_listing_days.remove(candidate.day());
             let upload = match journal.upload(&candidate, files).await {
                 Ok(upload) => {
                     summary.contacted = true;
@@ -840,18 +941,14 @@ impl SyncScheduler {
                 Ok(listing) => {
                     summary.contacted = true;
                     self.backoff.successful_operation();
+                    self.listings_by_day
+                        .insert(candidate.day().to_owned(), listing.clone());
+                    pass_fresh_listing_days.insert(candidate.day().to_owned());
                     listing
                 }
                 Err(error) => {
                     summary.more_work = self.remaining_in_sweep > 0;
                     return self.end_pass(summary, error);
-                }
-            };
-            let local_files = match inventory_files(custody_paths).await {
-                Ok(files) => files,
-                Err(_) => {
-                    summary.diagnostic = Some(DiagnosticCode::LocalSegmentInvalid);
-                    continue;
                 }
             };
             if !fresh_listing_proves_custody(
@@ -864,10 +961,13 @@ impl SyncScheduler {
                 continue;
             }
             summary.custodied += 1;
+            self.pending_uncustodied_in_sweep = self.pending_uncustodied_in_sweep.saturating_sub(1);
+            self.facts.pending_segments =
+                u64::try_from(self.pending_uncustodied_in_sweep).unwrap_or(u64::MAX);
             match delete_custodied_segment(
                 &self.captures_root,
                 &self.stream,
-                local_today(self.clock.as_ref()),
+                today,
                 self.retention_days,
                 &candidate,
                 &authoritative_key,
@@ -875,9 +975,7 @@ impl SyncScheduler {
             )
             .await
             {
-                RetentionOutcome::Deleted => {
-                    self.facts.pending_segments = self.facts.pending_segments.saturating_sub(1);
-                }
+                RetentionOutcome::Deleted => {}
                 RetentionOutcome::Retained => {
                     summary.diagnostic = Some(DiagnosticCode::LocalSegmentInvalid);
                 }
@@ -937,6 +1035,7 @@ impl SyncScheduler {
         mut summary: SyncPassSummary,
         error: SyncOperationError,
     ) -> SyncPassSummary {
+        self.listings_by_day.clear();
         let failure = match error {
             SyncOperationError::RetainCandidate(code) => {
                 summary.diagnostic = Some(code);

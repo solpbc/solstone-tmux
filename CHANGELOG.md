@@ -4,6 +4,14 @@ All notable changes to solstone-tmux will be documented in this file.
 
 Format adapted from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Changed
+- When solstone-tmux experiences tmux sessions alongside you, syncing now
+  reuses Journal custody checks within a sweep to converge large local queues
+  with less unnecessary Journal work. Local segments are still removed only
+  after a current custody check proves they are safely held by the Journal.
+
 ## [1.0.0] - 2026-07-29
 
 ### Changed

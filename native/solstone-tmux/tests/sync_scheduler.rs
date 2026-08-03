@@ -90,7 +90,7 @@ fn one_backoff_owner_advances_holds_resets_and_never_stops_capture() {
             failure(SyncFailureClass::Direct),
             Ok(empty_listing()),
         ];
-        let (journal, mut calls) = FakeJournal::with_list_outcomes(outcomes);
+        let (journal, mut calls) = FakeJournal::with_list_outcomes("20260710", outcomes);
         let (sync_stop, sync_stopped) = oneshot::channel();
         let mut scheduler = scheduler(&temporary, Arc::clone(&clock), wake.clone());
         let sync_task = tokio::spawn(async move {
@@ -192,6 +192,374 @@ fn one_pass_attempts_at_most_eight_candidates_sequentially() {
             SEGMENTS_PER_PASS,
             "a pass exceeded its candidate bound"
         );
+    });
+}
+
+#[test]
+fn second_sweep_reuses_custody_without_uploads_across_passes() {
+    run(async {
+        let temporary = TestDirectory::new("sync-second-sweep-reuse");
+        let segments = vec![
+            ("20260701", "120000_300"),
+            ("20260701", "120100_300"),
+            ("20260701", "120200_300"),
+            ("20260702", "120000_300"),
+            ("20260702", "120100_300"),
+            ("20260702", "120200_300"),
+            ("20260703", "120000_300"),
+            ("20260703", "120100_300"),
+            ("20260703", "120200_300"),
+        ];
+        for (day, segment) in &segments {
+            create_segment_in_day(temporary.path(), day, segment, b"fixture\n");
+        }
+        let (mut journal, mut calls) = FakeJournal::new();
+        let mut scheduler = scheduler(&temporary, clock(), SyncWake::default());
+
+        let mut first = scheduler.run_pass(&mut journal).await;
+        while first.more_work {
+            first = scheduler.run_pass(&mut journal).await;
+        }
+        let _ = drain_calls(&mut calls);
+
+        let mut attempted = 0;
+        let mut second = scheduler.run_pass(&mut journal).await;
+        attempted += second.attempted;
+        while second.more_work {
+            second = scheduler.run_pass(&mut journal).await;
+            attempted += second.attempted;
+        }
+        let second_calls = drain_calls(&mut calls);
+        let uploads = second_calls
+            .iter()
+            .filter_map(|call| match call {
+                ObservedCall::Upload(segment) => Some(segment.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let mut listings_by_day = HashMap::new();
+        for call in &second_calls {
+            if let ObservedCall::Listing(day) = call {
+                *listings_by_day.entry(day).or_insert(0_usize) += 1;
+            }
+        }
+
+        assert!(
+            uploads.is_empty(),
+            "second sweep re-uploaded custodied segments: {uploads:?}"
+        );
+        assert!(listings_by_day.values().all(|count| *count <= 1));
+        assert_eq!(attempted, segments.len());
+        for (day, segment) in segments {
+            assert!(segment_path_in_day(temporary.path(), day, segment).is_dir());
+        }
+    });
+}
+
+#[test]
+fn stale_cached_custody_does_not_delete_when_current_listing_disagrees() {
+    run(async {
+        for mismatched_digest in [false, true] {
+            let temporary = TestDirectory::new("sync-stale-custody");
+            let segments = [
+                "120800_300",
+                "120700_300",
+                "120600_300",
+                "120500_300",
+                "120400_300",
+                "120300_300",
+                "120200_300",
+                "120100_300",
+                "120000_300",
+            ];
+            for segment in segments {
+                create_segment_in_day(temporary.path(), "20260710", segment, b"fixture\n");
+            }
+            let clock = clock();
+            let (mut journal, mut calls) = FakeJournal::new();
+            journal.push_list_outcome(
+                "20260710",
+                Ok(listing_for_segments(
+                    temporary.path(),
+                    &segments
+                        .iter()
+                        .map(|segment| ("20260710", *segment))
+                        .collect::<Vec<_>>(),
+                )
+                .await),
+            );
+            let mut scheduler = SyncScheduler::new(
+                temporary.path().join("captures"),
+                stream(),
+                0,
+                Arc::clone(&clock) as Arc<dyn Clock>,
+                SyncWake::default(),
+            );
+
+            let first = scheduler.run_pass(&mut journal).await;
+            assert!(first.more_work);
+            clock.set_wall(clock.wall_now() + time::Duration::days(1));
+            let mut stale = if mismatched_digest {
+                listing_for_segments(temporary.path(), &[("20260710", "120000_300")]).await
+            } else {
+                empty_listing()
+            };
+            if mismatched_digest {
+                stale.items[0].files[0].sha256 = "b".repeat(64);
+            }
+            journal.push_list_outcome("20260710", Ok(stale));
+            journal.upload_outcomes.insert(
+                "120000_300".to_owned(),
+                VecDeque::from([Ok(UploadResult {
+                    status: UploadStatus::Conflict,
+                    authoritative_key: None,
+                })]),
+            );
+
+            let second = scheduler.run_pass(&mut journal).await;
+            assert!(!second.more_work);
+            assert_eq!(drain_uploads(&mut calls), vec!["120000_300".to_owned()]);
+            assert!(segment_path_in_day(temporary.path(), "20260710", "120000_300").is_dir());
+        }
+    });
+}
+
+#[test]
+fn sweep_cache_is_keyed_by_day_when_rotation_splits_a_day() {
+    run(async {
+        let temporary = TestDirectory::new("sync-split-day-cache");
+        create_segment_in_day(temporary.path(), "20260702", "120100_300", b"fixture\n");
+        let (mut journal, mut calls) = FakeJournal::new();
+        let mut scheduler = scheduler(&temporary, clock(), SyncWake::default());
+        scheduler.run_pass(&mut journal).await;
+        let _ = drain_calls(&mut calls);
+        std::fs::remove_dir_all(temporary.path().join("captures")).expect("remove cursor fixture");
+        scheduler.run_pass(&mut journal).await;
+        let _ = drain_calls(&mut calls);
+
+        for (day, segment) in [
+            ("20260703", "120000_300"),
+            ("20260702", "120200_300"),
+            ("20260702", "120100_300"),
+            ("20260702", "120000_300"),
+            ("20260701", "120000_300"),
+        ] {
+            create_segment_in_day(temporary.path(), day, segment, b"fixture\n");
+        }
+        let summary = scheduler.run_pass(&mut journal).await;
+        let calls = drain_calls(&mut calls);
+        let day_two_listings = calls
+            .iter()
+            .filter(|call| matches!(call, ObservedCall::Listing(day) if day == "20260702"))
+            .count();
+
+        assert_eq!(summary.attempted, 5);
+        assert_eq!(day_two_listings, 3);
+    });
+}
+
+#[test]
+fn failed_preupload_listing_falls_through_without_failure_or_diagnostic() {
+    run(async {
+        let temporary = TestDirectory::new("sync-fail-open-preupload");
+        create_segment(temporary.path(), "120000_300", b"fixture\n");
+        let (mut journal, mut calls) = FakeJournal::new();
+        journal.push_list_outcome(DAY, failure(SyncFailureClass::Timeout));
+        let mut scheduler = scheduler(&temporary, clock(), SyncWake::default());
+
+        let summary = scheduler.run_pass(&mut journal).await;
+
+        assert_eq!(summary.failure, None);
+        assert_eq!(summary.diagnostic, None);
+        assert_eq!(summary.custodied, 1);
+        assert_eq!(drain_uploads(&mut calls), vec!["120000_300".to_owned()]);
+    });
+}
+
+#[test]
+fn listings_per_day_do_not_exceed_uploads_plus_one() {
+    run(async {
+        let temporary = TestDirectory::new("sync-listing-bound");
+        for (day, segment) in [
+            ("20260702", "120100_300"),
+            ("20260702", "120000_300"),
+            ("20260701", "120100_300"),
+            ("20260701", "120000_300"),
+        ] {
+            create_segment_in_day(temporary.path(), day, segment, b"fixture\n");
+        }
+        let (mut journal, mut calls) = FakeJournal::new();
+        let mut scheduler = scheduler(&temporary, clock(), SyncWake::default());
+
+        scheduler.run_pass(&mut journal).await;
+        let calls = drain_calls(&mut calls);
+        let mut listings_by_day = HashMap::new();
+        for call in calls {
+            if let ObservedCall::Listing(day) = call {
+                *listings_by_day.entry(day).or_insert(0_usize) += 1;
+            }
+        }
+
+        assert_eq!(listings_by_day.get("20260702"), Some(&3));
+        assert_eq!(listings_by_day.get("20260701"), Some(&3));
+    });
+}
+
+#[test]
+fn reused_custody_counts_as_sync_and_resets_backoff() {
+    run(async {
+        let temporary = TestDirectory::new("sync-reused-custody-success");
+        ensure_private_directory(temporary.path()).expect("prepare data root");
+        create_segment(temporary.path(), "120000_300", b"fixture\n");
+        let lock = InstanceLock::acquire(temporary.path()).expect("instance lock");
+        let health = HealthWriter::new(temporary.path().to_path_buf(), &lock);
+        let (activity, _activity_receiver) = tokio::sync::watch::channel(SyncActivity::Idle);
+        let (journal, mut calls) = FakeJournal::new();
+        let listing = listing_for_segments(temporary.path(), &[(DAY, "120000_300")]).await;
+        let (stop, stopped) = oneshot::channel();
+        let mut scheduler = SyncScheduler::new(
+            temporary.path().join("captures"),
+            stream(),
+            -1,
+            clock(),
+            SyncWake::default(),
+        )
+        .with_observability(activity, health);
+        let task = tokio::spawn(async move {
+            let mut journal = journal;
+            journal.push_list_outcome(DAY, Ok(listing));
+            scheduler
+                .run(&mut journal, async move {
+                    let _ = stopped.await;
+                })
+                .await;
+        });
+
+        expect_listing(&mut calls, "reused custody").await;
+        let snapshot = wait_for_idle_snapshot(temporary.path()).await;
+        assert!(!snapshot["last_successful_sync_unix_seconds"].is_null());
+        assert!(drain_uploads(&mut calls).is_empty());
+        let _ = stop.send(());
+        task.await.expect("join reused scheduler");
+    });
+}
+
+#[test]
+fn pending_segments_drains_monotonically_when_custody_is_proven() {
+    run(async {
+        let temporary = TestDirectory::new("sync-pending-drain");
+        ensure_private_directory(temporary.path()).expect("prepare data root");
+        for index in 0..(SEGMENTS_PER_PASS + 1) {
+            create_segment(
+                temporary.path(),
+                &format!("12{index:02}00_300"),
+                b"fixture\n",
+            );
+        }
+        let lock = InstanceLock::acquire(temporary.path()).expect("instance lock");
+        let health = HealthWriter::new(temporary.path().to_path_buf(), &lock);
+        let (activity, _activity_receiver) = tokio::sync::watch::channel(SyncActivity::Idle);
+        let (journal, mut calls) = FakeJournal::new();
+        let (stop, stopped) = oneshot::channel();
+        let mut scheduler = SyncScheduler::new(
+            temporary.path().join("captures"),
+            stream(),
+            -1,
+            clock(),
+            SyncWake::default(),
+        )
+        .with_observability(activity, health);
+        let task = tokio::spawn(async move {
+            let mut journal = journal;
+            scheduler
+                .run(&mut journal, async move {
+                    let _ = stopped.await;
+                })
+                .await;
+        });
+
+        let mut uploads = Vec::new();
+        while uploads.len() < SEGMENTS_PER_PASS + 1 {
+            uploads.push(expect_upload(&mut calls).await);
+        }
+        let snapshot = wait_for_idle_snapshot(temporary.path()).await;
+        assert_eq!(snapshot["pending_segments"], 0);
+        let _ = stop.send(());
+        task.await.expect("join pending scheduler");
+    });
+}
+
+#[test]
+fn collision_renamed_remote_segment_skips_upload() {
+    run(async {
+        let temporary = TestDirectory::new("sync-collision-skip");
+        create_segment(temporary.path(), "120000_300", b"fixture\n");
+        let (mut journal, mut calls) = FakeJournal::new();
+        let mut listing = listing_for_segments(temporary.path(), &[(DAY, "120000_300")]).await;
+        listing.items[0].key = "120000_301".to_owned();
+        listing.items[0].original_key = Some("120000_300".to_owned());
+        journal.push_list_outcome(DAY, Ok(listing));
+        let mut scheduler = scheduler(&temporary, clock(), SyncWake::default());
+
+        let summary = scheduler.run_pass(&mut journal).await;
+
+        assert_eq!(summary.custodied, 1);
+        assert!(drain_uploads(&mut calls).is_empty());
+        assert!(segment_path(temporary.path(), "120000_300").is_dir());
+    });
+}
+
+#[test]
+fn changed_local_bytes_force_reupload() {
+    run(async {
+        let temporary = TestDirectory::new("sync-changed-local-bytes");
+        create_segment(temporary.path(), "120000_300", b"first\n");
+        let (mut journal, mut calls) = FakeJournal::new();
+        let mut scheduler = scheduler(&temporary, clock(), SyncWake::default());
+
+        let first = scheduler.run_pass(&mut journal).await;
+        assert_eq!(first.custodied, 1);
+        let _ = drain_calls(&mut calls);
+        std::fs::write(
+            segment_path(temporary.path(), "120000_300").join(FILE),
+            b"changed\n",
+        )
+        .expect("mutate local segment");
+
+        let second = scheduler.run_pass(&mut journal).await;
+
+        assert_eq!(second.attempted, 1);
+        assert_eq!(drain_uploads(&mut calls), vec!["120000_300".to_owned()]);
+        assert!(segment_path(temporary.path(), "120000_300").is_dir());
+    });
+}
+
+#[test]
+fn listing_loss_self_corrects_by_reuploading_only_the_missing_segment() {
+    run(async {
+        let temporary = TestDirectory::new("sync-listing-loss");
+        let segments = [
+            ("20260702", "130000_300"),
+            ("20260702", "120000_300"),
+            ("20260701", "120000_300"),
+        ];
+        for (day, segment) in segments {
+            create_segment_in_day(temporary.path(), day, segment, b"fixture\n");
+        }
+        let (mut journal, mut calls) = FakeJournal::new();
+        let mut scheduler = scheduler(&temporary, clock(), SyncWake::default());
+        let first = scheduler.run_pass(&mut journal).await;
+        assert!(!first.more_work);
+        let _ = drain_calls(&mut calls);
+        journal.push_list_outcome(
+            "20260702",
+            Ok(listing_for_segments(temporary.path(), &[("20260702", "120000_300")]).await),
+        );
+
+        let second = scheduler.run_pass(&mut journal).await;
+
+        assert_eq!(second.attempted, segments.len());
+        assert_eq!(drain_uploads(&mut calls), vec!["130000_300".to_owned()]);
     });
 }
 
@@ -750,30 +1118,33 @@ enum ObservationWaitError {
 
 struct FakeJournal {
     calls: mpsc::UnboundedSender<ObservedCall>,
-    list_outcomes: VecDeque<Result<SegmentsEnvelope, SyncOperationError>>,
+    list_outcomes: HashMap<String, VecDeque<Result<SegmentsEnvelope, SyncOperationError>>>,
     upload_outcomes: HashMap<String, VecDeque<Result<UploadResult, SyncOperationError>>>,
-    uploaded: HashMap<String, Vec<(String, Vec<solstone_tmux::journal::LocalFile>)>>,
+    uploaded: HashMap<String, HashMap<String, Vec<solstone_tmux::journal::LocalFile>>>,
 }
 
 impl FakeJournal {
     fn new() -> (Self, mpsc::UnboundedReceiver<ObservedCall>) {
-        Self::with_scripts(VecDeque::new(), HashMap::new())
+        Self::with_scripts(HashMap::new(), HashMap::new())
     }
 
     fn with_list_outcomes(
+        day: &str,
         outcomes: impl IntoIterator<Item = Result<SegmentsEnvelope, SyncOperationError>>,
     ) -> (Self, mpsc::UnboundedReceiver<ObservedCall>) {
-        Self::with_scripts(outcomes.into_iter().collect(), HashMap::new())
+        let mut list_outcomes = HashMap::new();
+        list_outcomes.insert(day.to_owned(), outcomes.into_iter().collect());
+        Self::with_scripts(list_outcomes, HashMap::new())
     }
 
     fn with_upload_outcomes(
         outcomes: HashMap<String, VecDeque<Result<UploadResult, SyncOperationError>>>,
     ) -> (Self, mpsc::UnboundedReceiver<ObservedCall>) {
-        Self::with_scripts(VecDeque::new(), outcomes)
+        Self::with_scripts(HashMap::new(), outcomes)
     }
 
     fn with_scripts(
-        list_outcomes: VecDeque<Result<SegmentsEnvelope, SyncOperationError>>,
+        list_outcomes: HashMap<String, VecDeque<Result<SegmentsEnvelope, SyncOperationError>>>,
         upload_outcomes: HashMap<String, VecDeque<Result<UploadResult, SyncOperationError>>>,
     ) -> (Self, mpsc::UnboundedReceiver<ObservedCall>) {
         let (calls, receiver) = mpsc::unbounded_channel();
@@ -786,6 +1157,17 @@ impl FakeJournal {
             },
             receiver,
         )
+    }
+
+    fn push_list_outcome(
+        &mut self,
+        day: &str,
+        outcome: Result<SegmentsEnvelope, SyncOperationError>,
+    ) {
+        self.list_outcomes
+            .entry(day.to_owned())
+            .or_default()
+            .push_back(outcome);
     }
 }
 
@@ -819,13 +1201,23 @@ impl SyncJournal for FakeJournal {
             {
                 return outcome;
             }
+            if self
+                .uploaded
+                .get(candidate.day())
+                .is_some_and(|segments| segments.contains_key(candidate.segment()))
+            {
+                return Ok(UploadResult {
+                    status: UploadStatus::Duplicate,
+                    authoritative_key: Some(candidate.segment().to_owned()),
+                });
+            }
             let inventory = inventory_files(files).await.map_err(|_| {
                 SyncOperationError::RetainCandidate(DiagnosticCode::LocalSegmentInvalid)
             })?;
             self.uploaded
                 .entry(candidate.day().to_owned())
                 .or_default()
-                .push((candidate.segment().to_owned(), inventory));
+                .insert(candidate.segment().to_owned(), inventory);
             Ok(UploadResult {
                 status: UploadStatus::Ok,
                 authoritative_key: Some(candidate.segment().to_owned()),
@@ -840,14 +1232,18 @@ impl SyncJournal for FakeJournal {
     {
         Box::pin(async move {
             let _ = self.calls.send(ObservedCall::Listing(day.to_owned()));
-            if let Some(outcome) = self.list_outcomes.pop_front() {
+            if let Some(outcome) = self
+                .list_outcomes
+                .get_mut(day)
+                .and_then(VecDeque::pop_front)
+            {
                 return outcome;
             }
             let items = self
                 .uploaded
                 .get(day)
                 .into_iter()
-                .flatten()
+                .flat_map(|segments| segments.iter())
                 .map(|(key, files)| SegmentItem {
                     key: key.clone(),
                     observed: false,
@@ -952,13 +1348,21 @@ fn clock() -> Arc<TestClock> {
 }
 
 fn create_segment(root: &Path, segment: &str, bytes: &[u8]) {
-    let path = segment_path(root, segment);
+    create_segment_in_day(root, DAY, segment, bytes);
+}
+
+fn create_segment_in_day(root: &Path, day: &str, segment: &str, bytes: &[u8]) {
+    let path = segment_path_in_day(root, day, segment);
     std::fs::create_dir_all(&path).expect("create scheduler segment");
     std::fs::write(path.join(FILE), bytes).expect("write scheduler segment");
 }
 
 fn segment_path(root: &Path, segment: &str) -> PathBuf {
-    root.join("captures").join(DAY).join(STREAM).join(segment)
+    segment_path_in_day(root, DAY, segment)
+}
+
+fn segment_path_in_day(root: &Path, day: &str, segment: &str) -> PathBuf {
+    root.join("captures").join(day).join(STREAM).join(segment)
 }
 
 fn retaining_scheduler(temporary: &TestDirectory) -> SyncScheduler {
@@ -975,6 +1379,35 @@ fn empty_listing() -> SegmentsEnvelope {
     SegmentsEnvelope {
         items: Vec::new(),
         total: 0,
+        protocol_version: 2,
+    }
+}
+
+async fn listing_for_segments(root: &Path, segments: &[(&str, &str)]) -> SegmentsEnvelope {
+    let mut items = Vec::new();
+    for (day, segment) in segments {
+        let files = inventory_files(vec![segment_path_in_day(root, day, segment).join(FILE)])
+            .await
+            .expect("inventory listing fixture");
+        items.push(SegmentItem {
+            key: (*segment).to_owned(),
+            observed: false,
+            files: files
+                .into_iter()
+                .map(|file| SegmentFile {
+                    name: file.name,
+                    size: file.size,
+                    sha256: file.sha256,
+                    status: ListingFileStatus::Present,
+                    submitted_name: None,
+                })
+                .collect(),
+            original_key: None,
+        });
+    }
+    SegmentsEnvelope {
+        total: items.len(),
+        items,
         protocol_version: 2,
     }
 }
@@ -1072,6 +1505,14 @@ fn drain_uploads(calls: &mut mpsc::UnboundedReceiver<ObservedCall>) -> Vec<Strin
         }
     }
     uploads
+}
+
+fn drain_calls(calls: &mut mpsc::UnboundedReceiver<ObservedCall>) -> Vec<ObservedCall> {
+    let mut observed = Vec::new();
+    while let Ok(call) = calls.try_recv() {
+        observed.push(call);
+    }
+    observed
 }
 
 async fn advance_both(clock: &TestClock, duration: Duration) {

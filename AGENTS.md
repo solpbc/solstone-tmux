@@ -196,9 +196,13 @@ observer state is persisted.
 
 The sync task rescans on startup, segment finalization, and periodic wakeups. It
 processes at most eight candidates sequentially per pass and owns one bounded
-backoff sequence. Upload success alone never permits deletion: a fresh Journal
-listing must prove filename, SHA-256 digest, and held status for every local
-file.
+backoff sequence. Before uploading, it may reuse a Journal listing fetched
+during the current sweep to prove existing custody; a failed pre-upload lookup
+falls through to the normal upload path. Listings are reused only for that
+sweep and refreshed after uploads. A listing may authorize local deletion only
+when it was freshly fetched during the current pass. Upload success alone never
+permits deletion: a fresh Journal listing must prove filename, SHA-256 digest,
+and held status for every local file.
 
 ### Service lifecycle
 
