@@ -65,12 +65,14 @@ ci:
 	@set -o pipefail; \
 	host="$$(rustc -vV | sed -n 's/^host: //p')"; \
 	targets="$$($(RUST_TARGETS))"; \
+	host_base="$$(echo "$$host" | cut -d- -f1-3)"; \
 	host_configured=false; \
 	while IFS= read -r target; do \
-		if [[ "$$target" == "$$host" ]]; then host_configured=true; fi; \
+		target_base="$$(echo "$$target" | cut -d- -f1-3)"; \
+		if [[ "$$target" == "$$host" || "$$target_base" == "$$host_base" ]]; then host_configured=true; fi; \
 	done <<< "$$targets"; \
 	if [[ "$$host_configured" != true ]]; then \
-		echo "host target is absent from rust-toolchain.toml" >&2; \
+		echo "host cannot build any configured target: $$host" >&2; \
 		exit 1; \
 	fi; \
 	echo "Rust host compile evidence (cargo check --locked --workspace --all-targets; host only; no executable linked; no native-artifact claim):"; \

@@ -53,8 +53,8 @@ impl Lane {
 
     pub const fn rust_target(self) -> &'static str {
         match self {
-            Self::LinuxX86_64 => "x86_64-unknown-linux-gnu",
-            Self::LinuxAarch64 => "aarch64-unknown-linux-gnu",
+            Self::LinuxX86_64 => "x86_64-unknown-linux-musl",
+            Self::LinuxAarch64 => "aarch64-unknown-linux-musl",
             Self::MacosAarch64 => "aarch64-apple-darwin",
         }
     }

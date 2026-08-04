@@ -29,13 +29,13 @@ if ! $target_found; then
 fi
 
 case "$rust_target" in
-    x86_64-*-linux-gnu)
+    x86_64-*-linux-musl)
         archive_arch="x86_64"
         deb_arch="amd64"
         rpm_arch="x86_64"
         elf_machine_hex="3e00"
         ;;
-    aarch64-*-linux-gnu)
+    aarch64-*-linux-musl)
         archive_arch="aarch64"
         deb_arch="arm64"
         rpm_arch="aarch64"

@@ -39,14 +39,17 @@ fi
 
 host_target="$(rustc -vV | sed -n 's/^host: //p')"
 case "$host_target" in
-    x86_64-*-linux-gnu | aarch64-*-linux-gnu) ;;
+    x86_64-*-linux-gnu | aarch64-*-linux-gnu | x86_64-*-linux-musl | aarch64-*-linux-musl) ;;
     *)
         echo "unsupported native Linux release host: $host_target" >&2
         exit 1
         ;;
 esac
-if ! "$repo_root/scripts/rust-targets.sh" | grep -Fx "$host_target" >/dev/null; then
-    echo "native Rust host is absent from rust-toolchain.toml: $host_target" >&2
+# The shipped Linux lanes are musl while the build hosts are gnu, so match on
+# architecture, vendor and OS and ignore the libc component.
+host_base="$(echo "$host_target" | cut -d- -f1-3)"
+if ! "$repo_root/scripts/rust-targets.sh" | cut -d- -f1-3 | grep -Fx "$host_base" >/dev/null; then
+    echo "native Rust host cannot build any configured target: $host_target" >&2
     exit 1
 fi
 
