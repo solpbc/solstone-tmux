@@ -14,7 +14,6 @@ pub const EXECUTABLE_MODE: u32 = 0o755;
 pub const DOCUMENT_MODE: u32 = 0o644;
 pub const ROOT_UID: u64 = 0;
 pub const ROOT_GID: u64 = 0;
-pub const GLIBC_FLOOR: (u32, u32) = (2, 35);
 pub const MACOS_DEPLOYMENT_FLOOR: (u32, u32) = (14, 0);
 pub const DEB_DEPENDS: &str = "tmux";
 pub const RPM_REQUIRES: &str = "tmux";
@@ -87,6 +86,17 @@ pub enum ExecutableArchitecture {
     ElfX86_64,
     ElfAarch64,
     MachOAarch64,
+}
+
+impl ExecutableArchitecture {
+    pub const fn elf_type(self) -> Option<u16> {
+        match self {
+            // rustc 1.97.1 builds x86_64-musl as static PIE (ET_DYN), while aarch64-musl is ET_EXEC.
+            Self::ElfX86_64 => Some(3),
+            Self::ElfAarch64 => Some(2),
+            Self::MachOAarch64 => None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]

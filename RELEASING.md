@@ -38,7 +38,7 @@ make release-linux \
 
 The local release entrypoint derives the lane from the native Rust host, fetches
 the complete locked dependency graph, runs `make ci`, builds the source-bound
-executable and all three package formats, validates architecture, GLIBC floor,
+executable and all three package formats, validates architecture, static linkage,
 source binding, package model, target record, and checksums, then proves normal
 foreground operation with real tmux in isolated roots. It produces three
 packages and one target record in the requested directory and performs no

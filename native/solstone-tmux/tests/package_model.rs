@@ -9,11 +9,12 @@ use std::collections::BTreeMap;
 
 use package_model::{
     ARTIFACTS, ArtifactKind, ArtifactRecord, DEB_DEPENDS, DEB_DESTINATION, DOCUMENT_MODE,
-    EXECUTABLE_MODE, EXECUTABLE_NAME, ExecutableRecord, GLIBC_FLOOR, LINUX_TAR_DESTINATION, Lane,
-    MACOS_DEPLOYMENT_FLOOR, MACOS_DESTINATION, ModelError, ModeledMemberKind, PRODUCT,
-    PRODUCT_VERSION, ROOT_GID, ROOT_UID, RPM_DESTINATION, RPM_REQUIRES, SHA256SUMS_NAME,
-    SIGNATURE_NAME, TargetRecord, artifacts_for_lane, checksummed_names, complete_candidate_names,
-    install_instructions, modeled_members, parse_sha256sums, render_sha256sums,
+    EXECUTABLE_MODE, EXECUTABLE_NAME, ExecutableArchitecture, ExecutableRecord,
+    LINUX_TAR_DESTINATION, Lane, MACOS_DEPLOYMENT_FLOOR, MACOS_DESTINATION, ModelError,
+    ModeledMemberKind, PRODUCT, PRODUCT_VERSION, ROOT_GID, ROOT_UID, RPM_DESTINATION, RPM_REQUIRES,
+    SHA256SUMS_NAME, SIGNATURE_NAME, TargetRecord, artifacts_for_lane, checksummed_names,
+    complete_candidate_names, install_instructions, modeled_members, parse_sha256sums,
+    render_sha256sums,
 };
 use serde_json::json;
 
@@ -26,7 +27,6 @@ fn package_model_is_the_exact_release_set() {
     assert_eq!(PRODUCT, "solstone-tmux");
     assert_eq!(PRODUCT_VERSION, env!("CARGO_PKG_VERSION"));
     assert_eq!(ARTIFACTS.len(), 8);
-    assert_eq!(GLIBC_FLOOR, (2, 35));
     assert_eq!(MACOS_DEPLOYMENT_FLOOR, (14, 0));
 
     let linux_x86 = artifacts_for_lane(Lane::LinuxX86_64);
@@ -70,6 +70,13 @@ fn package_model_is_the_exact_release_set() {
     assert_eq!(complete.len(), 13);
     assert!(complete.contains(&SHA256SUMS_NAME.to_owned()));
     assert!(complete.contains(&SIGNATURE_NAME.to_owned()));
+}
+
+#[test]
+fn executable_architecture_elf_types_match_release_lanes() {
+    assert_eq!(ExecutableArchitecture::ElfX86_64.elf_type(), Some(3));
+    assert_eq!(ExecutableArchitecture::ElfAarch64.elf_type(), Some(2));
+    assert_eq!(ExecutableArchitecture::MachOAarch64.elf_type(), None);
 }
 
 #[test]

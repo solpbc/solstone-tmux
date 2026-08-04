@@ -15,20 +15,21 @@ use flate2::Compression;
 use flate2::write::GzEncoder;
 use minisign_verify::PublicKey;
 use package_model::{
-    ArtifactKind, ArtifactRecord, DEB_DEPENDS, EXECUTABLE_NAME, ExecutableRecord, Lane, PRODUCT,
-    PRODUCT_VERSION, SHA256SUMS_NAME, SIGNATURE_NAME, TargetRecord, artifacts_for_lane,
-    checksummed_names, install_instructions, render_sha256sums,
+    ArtifactKind, ArtifactRecord, DEB_DEPENDS, EXECUTABLE_NAME, ExecutableArchitecture,
+    ExecutableRecord, Lane, PRODUCT, PRODUCT_VERSION, SHA256SUMS_NAME, SIGNATURE_NAME,
+    TargetRecord, artifacts_for_lane, checksummed_names, install_instructions, render_sha256sums,
 };
 use sha2::{Digest, Sha256};
 use validator::{
     ValidationError, run_version_probe_for_test, validate_complete_files_for_test,
-    validate_complete_files_with_hooks_for_test, validate_complete_set, validate_linux_lane,
-    validate_minisign, validate_unsigned_set,
+    validate_complete_files_with_hooks_for_test, validate_complete_set,
+    validate_executable_for_test, validate_linux_lane, validate_minisign, validate_unsigned_set,
 };
 
 const EPOCH: u64 = 1_700_000_000;
 const COMMIT: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const FIXTURE_ROOT: &str = "tests/data/packaging/minisign";
+const ELF_FIXTURE_ROOT: &str = "tests/data/elf";
 
 #[test]
 fn complete_candidate_fixture_is_accepted() {
@@ -80,8 +81,8 @@ fn aggregate_validation_accepts_compiler_split_version_template() {
     let mut files = complete_fixture();
     for lane in Lane::ALL {
         let mut executable = match lane {
-            Lane::LinuxX86_64 => elf_fixture(62, "2.35"),
-            Lane::LinuxAarch64 => elf_fixture(183, "2.35"),
+            Lane::LinuxX86_64 => elf_fixture(62),
+            Lane::LinuxAarch64 => elf_fixture(183),
             Lane::MacosAarch64 => macho_fixture(14, 0),
         };
         executable.truncate(executable.len() - version_line().len());
@@ -110,86 +111,232 @@ fn native_version_probe_closes_the_staged_executable_before_running_it() {
 }
 
 #[test]
+fn committed_x86_64_elf_fixtures_have_expected_verdicts() {
+    let static_pie = committed_elf_fixture("x86_64/static-pie.bin");
+    assert_eq!(
+        validate_executable_for_test(&static_pie, ExecutableArchitecture::ElfX86_64),
+        Ok(())
+    );
+
+    let dynamic_interpreter = committed_elf_fixture("x86_64/dynamic-interp.bin");
+    assert_eq!(
+        validate_executable_for_test(&dynamic_interpreter, ExecutableArchitecture::ElfX86_64),
+        Err(ValidationError::ExecutableInterpreter)
+    );
+    assert_eq!(maximum_version_marker(&dynamic_interpreter), Some((2, 34)));
+
+    let shared_object = committed_elf_fixture("x86_64/shared-nodeps.so");
+    assert_eq!(
+        validate_executable_for_test(&shared_object, ExecutableArchitecture::ElfX86_64),
+        Err(ValidationError::ExecutableEntryPoint)
+    );
+
+    let relocatable = committed_elf_fixture("x86_64/relocatable.o");
+    assert_eq!(
+        validate_executable_for_test(&relocatable, ExecutableArchitecture::ElfX86_64),
+        Err(ValidationError::ExecutableType)
+    );
+}
+
+#[test]
+fn elf_lane_type_expectations_are_not_swappable() {
+    assert_eq!(
+        validate_executable_for_test(
+            &committed_elf_fixture("x86_64/static-pie.bin"),
+            ExecutableArchitecture::ElfX86_64,
+        ),
+        Ok(())
+    );
+    assert_eq!(
+        validate_executable_for_test(
+            &committed_elf_fixture("x86_64/static-exec.bin"),
+            ExecutableArchitecture::ElfX86_64,
+        ),
+        Err(ValidationError::ExecutableType)
+    );
+    assert_eq!(
+        validate_executable_for_test(
+            &committed_elf_fixture("aarch64/static-exec.bin"),
+            ExecutableArchitecture::ElfAarch64,
+        ),
+        Ok(())
+    );
+    assert_eq!(
+        validate_executable_for_test(
+            &committed_elf_fixture("aarch64/static-pie.bin"),
+            ExecutableArchitecture::ElfAarch64,
+        ),
+        Err(ValidationError::ExecutableType)
+    );
+}
+
+#[test]
+fn program_headers_are_required_for_static_executables() {
+    let static_executable = committed_elf_fixture("aarch64/static-exec.bin");
+    assert_eq!(
+        validate_executable_for_test(&static_executable, ExecutableArchitecture::ElfAarch64),
+        Ok(())
+    );
+
+    let mut no_headers = static_executable.clone();
+    set_elf_u16(&mut no_headers, 56, 0);
+    assert_eq!(
+        validate_executable_for_test(&no_headers, ExecutableArchitecture::ElfAarch64),
+        Err(ValidationError::ExecutableProgramHeaders)
+    );
+}
+
+#[test]
+fn program_headers_must_describe_a_loadable_image() {
+    let static_pie = committed_elf_fixture("x86_64/static-pie.bin");
+    assert!(elf_program_header_count(&static_pie) > 0);
+    assert!(
+        elf_program_header_offsets(&static_pie)
+            .into_iter()
+            .any(|offset| elf_u32(&static_pie, offset) == 1)
+    );
+
+    let mut no_load = static_pie;
+    for offset in elf_program_header_offsets(&no_load) {
+        if elf_u32(&no_load, offset) == 1 {
+            set_elf_u32(&mut no_load, offset, 0);
+        }
+    }
+    assert_eq!(
+        validate_executable_for_test(&no_load, ExecutableArchitecture::ElfX86_64),
+        Err(ValidationError::ExecutableProgramHeaders)
+    );
+}
+
+#[test]
+fn program_header_validation_ignores_section_headers() {
+    let mut fixture = committed_elf_fixture("x86_64/static-pie.bin");
+    set_elf_u64(&mut fixture, 40, 0);
+    set_elf_u16(&mut fixture, 60, 0);
+    assert_eq!(
+        validate_executable_for_test(&fixture, ExecutableArchitecture::ElfX86_64),
+        Ok(())
+    );
+}
+
+#[test]
+fn malformed_elf_program_header_layouts_fail_closed() {
+    let fixture = committed_elf_fixture("x86_64/static-pie.bin");
+    let mut past_end = fixture.clone();
+    let past_end_offset = past_end.len() as u64 + 1;
+    set_elf_u64(&mut past_end, 32, past_end_offset);
+
+    let mut bad_entry_size = fixture.clone();
+    set_elf_u16(&mut bad_entry_size, 54, 55);
+
+    let mut dynamic_past_end = fixture;
+    let dynamic_header = elf_program_header_offsets(&dynamic_past_end)
+        .into_iter()
+        .find(|offset| elf_u32(&dynamic_past_end, *offset) == 2)
+        .expect("dynamic program header");
+    let dynamic_past_end_offset = dynamic_past_end.len() as u64;
+    set_elf_u64(
+        &mut dynamic_past_end,
+        dynamic_header + 8,
+        dynamic_past_end_offset,
+    );
+    set_elf_u64(&mut dynamic_past_end, dynamic_header + 32, 1);
+
+    for malformed in [past_end, bad_entry_size, dynamic_past_end] {
+        assert_eq!(
+            validate_executable_for_test(&malformed, ExecutableArchitecture::ElfX86_64),
+            Err(ValidationError::ExecutableElfLayout)
+        );
+    }
+}
+
+#[test]
+fn dynamic_tags_have_specific_rejections() {
+    let dynamic_interpreter = committed_elf_fixture("x86_64/dynamic-interp.bin");
+
+    let mut needed_library = dynamic_interpreter.clone();
+    neutralize_program_header_type(&mut needed_library, 3);
+    assert_eq!(
+        validate_executable_for_test(&needed_library, ExecutableArchitecture::ElfX86_64),
+        Err(ValidationError::ExecutableNeededLibraries)
+    );
+
+    let mut version_requirement = dynamic_interpreter;
+    neutralize_program_header_type(&mut version_requirement, 3);
+    for offset in dynamic_entry_offsets(&version_requirement) {
+        if elf_i64(&version_requirement, offset) == 1 {
+            set_elf_i64(&mut version_requirement, offset, 21);
+        }
+    }
+    assert!(
+        dynamic_entry_offsets(&version_requirement)
+            .into_iter()
+            .any(|offset| elf_i64(&version_requirement, offset) == 0x6fff_fffe)
+    );
+    assert_eq!(
+        validate_executable_for_test(&version_requirement, ExecutableArchitecture::ElfX86_64),
+        Err(ValidationError::ExecutableVersionRequirements)
+    );
+}
+
+#[test]
+fn synthetic_elf_fixture_has_real_program_headers() {
+    for (machine, architecture) in [
+        (62, ExecutableArchitecture::ElfX86_64),
+        (183, ExecutableArchitecture::ElfAarch64),
+    ] {
+        let fixture = elf_fixture(machine);
+        assert!(elf_program_header_count(&fixture) > 0);
+        assert!(
+            elf_program_header_offsets(&fixture)
+                .into_iter()
+                .any(|offset| elf_u32(&fixture, offset) == 1)
+        );
+        assert_eq!(validate_executable_for_test(&fixture, architecture), Ok(()));
+    }
+}
+
+#[test]
 fn archive_mutations_have_specific_rejections() {
     let cases = [
         (
-            tar_fixture(
-                Lane::LinuxX86_64,
-                elf_fixture(62, "2.35"),
-                TarMutation::Traversal,
-            ),
+            tar_fixture(Lane::LinuxX86_64, elf_fixture(62), TarMutation::Traversal),
             ValidationError::ArchivePath,
         ),
         (
-            tar_fixture(
-                Lane::LinuxX86_64,
-                elf_fixture(62, "2.35"),
-                TarMutation::Symlink,
-            ),
+            tar_fixture(Lane::LinuxX86_64, elf_fixture(62), TarMutation::Symlink),
             ValidationError::ArchiveType,
         ),
         (
-            tar_fixture(
-                Lane::LinuxX86_64,
-                elf_fixture(62, "2.35"),
-                TarMutation::Extra,
-            ),
+            tar_fixture(Lane::LinuxX86_64, elf_fixture(62), TarMutation::Extra),
             ValidationError::ArchiveMembers,
         ),
         (
-            tar_fixture(
-                Lane::LinuxX86_64,
-                elf_fixture(62, "2.35"),
-                TarMutation::WrongMode,
-            ),
+            tar_fixture(Lane::LinuxX86_64, elf_fixture(62), TarMutation::WrongMode),
             ValidationError::ArchiveMetadata,
         ),
         (
-            tar_fixture(
-                Lane::LinuxX86_64,
-                elf_fixture(62, "2.35"),
-                TarMutation::Config,
-            ),
+            tar_fixture(Lane::LinuxX86_64, elf_fixture(62), TarMutation::Config),
             ValidationError::ForbiddenMember,
         ),
         (
-            tar_fixture(
-                Lane::LinuxX86_64,
-                elf_fixture(62, "2.35"),
-                TarMutation::Credentials,
-            ),
+            tar_fixture(Lane::LinuxX86_64, elf_fixture(62), TarMutation::Credentials),
             ValidationError::ForbiddenMember,
         ),
         (
-            tar_fixture(
-                Lane::LinuxX86_64,
-                elf_fixture(62, "2.35"),
-                TarMutation::Observer,
-            ),
+            tar_fixture(Lane::LinuxX86_64, elf_fixture(62), TarMutation::Observer),
             ValidationError::ForbiddenMember,
         ),
         (
-            tar_fixture(
-                Lane::LinuxX86_64,
-                elf_fixture(62, "2.35"),
-                TarMutation::Health,
-            ),
+            tar_fixture(Lane::LinuxX86_64, elf_fixture(62), TarMutation::Health),
             ValidationError::ForbiddenMember,
         ),
         (
-            tar_fixture(
-                Lane::LinuxX86_64,
-                elf_fixture(62, "2.35"),
-                TarMutation::Captures,
-            ),
+            tar_fixture(Lane::LinuxX86_64, elf_fixture(62), TarMutation::Captures),
             ValidationError::ForbiddenMember,
         ),
         (
-            tar_fixture(
-                Lane::LinuxX86_64,
-                elf_fixture(62, "2.35"),
-                TarMutation::PrivateKey,
-            ),
+            tar_fixture(Lane::LinuxX86_64, elf_fixture(62), TarMutation::PrivateKey),
             ValidationError::ForbiddenMember,
         ),
     ];
@@ -215,7 +362,7 @@ fn architecture_and_platform_floor_mutations_have_specific_rejections() {
         &mut declared,
         Lane::LinuxX86_64,
         ArtifactKind::Deb,
-        deb_fixture(Lane::LinuxX86_64, elf_fixture(62, "2.35"), "arm64"),
+        deb_fixture(Lane::LinuxX86_64, elf_fixture(62), "arm64"),
     );
     assert_eq!(
         validate_complete_files_for_test(&declared, EPOCH),
@@ -223,19 +370,11 @@ fn architecture_and_platform_floor_mutations_have_specific_rejections() {
     );
 
     let mut elf_machine = complete_fixture();
-    let wrong_elf = elf_fixture(183, "2.35");
+    let wrong_elf = elf_fixture(183);
     replace_executable_and_tar(&mut elf_machine, Lane::LinuxX86_64, wrong_elf);
     assert_eq!(
         validate_complete_files_for_test(&elf_machine, EPOCH),
         Err(ValidationError::ExecutableArchitecture)
-    );
-
-    let mut glibc = complete_fixture();
-    let newer_glibc = elf_fixture(62, "2.36");
-    replace_executable_and_tar(&mut glibc, Lane::LinuxX86_64, newer_glibc);
-    assert_eq!(
-        validate_complete_files_for_test(&glibc, EPOCH),
-        Err(ValidationError::GlibcFloor)
     );
 
     let mut macos = complete_fixture();
@@ -251,7 +390,7 @@ fn architecture_and_platform_floor_mutations_have_specific_rejections() {
 fn byte_checksum_record_and_set_mutations_are_rejected() {
     let mut executable = complete_fixture();
     let tar = artifact(Lane::LinuxX86_64, ArtifactKind::TarGz);
-    let mut changed_binary = elf_fixture(62, "2.35");
+    let mut changed_binary = elf_fixture(62);
     changed_binary.push(0);
     executable.insert(
         tar.name.clone(),
@@ -335,10 +474,7 @@ fn candidate_canaries_are_scoped_and_rejected() {
     );
 
     let mut extracted = complete_fixture();
-    let canary_tar = tar_with_install(
-        elf_fixture(62, "2.35"),
-        b"MINISIGN_SECRET_CANARY_DO_NOT_SHIP",
-    );
+    let canary_tar = tar_with_install(elf_fixture(62), b"MINISIGN_SECRET_CANARY_DO_NOT_SHIP");
     replace_artifact(
         &mut extracted,
         Lane::LinuxX86_64,
@@ -456,8 +592,8 @@ fn complete_fixture() -> BTreeMap<String, Vec<u8>> {
     let mut files = BTreeMap::new();
     for lane in Lane::ALL {
         let executable = match lane {
-            Lane::LinuxX86_64 => elf_fixture(62, "2.35"),
-            Lane::LinuxAarch64 => elf_fixture(183, "2.35"),
+            Lane::LinuxX86_64 => elf_fixture(62),
+            Lane::LinuxAarch64 => elf_fixture(183),
             Lane::MacosAarch64 => macho_fixture(14, 0),
         };
         for spec in artifacts_for_lane(lane) {
@@ -580,14 +716,43 @@ fn artifact(lane: Lane, kind: ArtifactKind) -> package_model::ArtifactSpec {
         .expect("modeled artifact")
 }
 
-fn elf_fixture(machine: u16, glibc: &str) -> Vec<u8> {
-    let mut bytes = vec![0u8; 64];
+fn elf_fixture(machine: u16) -> Vec<u8> {
+    let has_dynamic = machine != 183;
+    let program_header_count = if has_dynamic { 2 } else { 1 };
+    let program_header_offset = 64usize;
+    let program_header_size = 56usize;
+    let dynamic_offset = program_header_offset + program_header_count * program_header_size;
+    let mut bytes = vec![0u8; dynamic_offset];
     bytes[..4].copy_from_slice(b"\x7fELF");
     bytes[4] = 2;
     bytes[5] = 1;
+    let elf_type = if has_dynamic { 3u16 } else { 2u16 };
+    bytes[16..18].copy_from_slice(&elf_type.to_le_bytes());
     bytes[18..20].copy_from_slice(&machine.to_le_bytes());
-    bytes.extend_from_slice(format!("GLIBC_{glibc}\0").as_bytes());
+    bytes[24..32].copy_from_slice(&0x1000u64.to_le_bytes());
+    bytes[32..40].copy_from_slice(&(program_header_offset as u64).to_le_bytes());
+    bytes[54..56].copy_from_slice(&(program_header_size as u16).to_le_bytes());
+    bytes[56..58].copy_from_slice(&(program_header_count as u16).to_le_bytes());
+
+    bytes[program_header_offset..program_header_offset + 4].copy_from_slice(&1u32.to_le_bytes());
+    if has_dynamic {
+        let dynamic_header_offset = program_header_offset + program_header_size;
+        bytes[dynamic_header_offset..dynamic_header_offset + 4]
+            .copy_from_slice(&2u32.to_le_bytes());
+        bytes[dynamic_header_offset + 8..dynamic_header_offset + 16]
+            .copy_from_slice(&(dynamic_offset as u64).to_le_bytes());
+        bytes[dynamic_header_offset + 32..dynamic_header_offset + 40]
+            .copy_from_slice(&16u64.to_le_bytes());
+        bytes[dynamic_header_offset + 40..dynamic_header_offset + 48]
+            .copy_from_slice(&16u64.to_le_bytes());
+        bytes.extend_from_slice(&[0u8; 16]);
+    }
     bytes.extend_from_slice(version_line().as_bytes());
+    let load_size = bytes.len() as u64;
+    bytes[program_header_offset + 32..program_header_offset + 40]
+        .copy_from_slice(&load_size.to_le_bytes());
+    bytes[program_header_offset + 40..program_header_offset + 48]
+        .copy_from_slice(&load_size.to_le_bytes());
     bytes
 }
 
@@ -768,6 +933,175 @@ fn append_ar(builder: &mut ar::Builder<Vec<u8>>, name: &str, bytes: &[u8]) {
 
 fn sha256_hex(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
+}
+
+fn committed_elf_fixture(name: &str) -> Vec<u8> {
+    std::fs::read(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join(ELF_FIXTURE_ROOT)
+            .join(name),
+    )
+    .expect("read ELF fixture")
+}
+
+fn elf_u16(bytes: &[u8], offset: usize) -> u16 {
+    let end = offset.checked_add(2).expect("ELF u16 end");
+    let value: [u8; 2] = bytes
+        .get(offset..end)
+        .expect("ELF u16 bytes")
+        .try_into()
+        .expect("ELF u16 length");
+    u16::from_le_bytes(value)
+}
+
+fn elf_u32(bytes: &[u8], offset: usize) -> u32 {
+    let end = offset.checked_add(4).expect("ELF u32 end");
+    let value: [u8; 4] = bytes
+        .get(offset..end)
+        .expect("ELF u32 bytes")
+        .try_into()
+        .expect("ELF u32 length");
+    u32::from_le_bytes(value)
+}
+
+fn elf_u64(bytes: &[u8], offset: usize) -> u64 {
+    let end = offset.checked_add(8).expect("ELF u64 end");
+    let value: [u8; 8] = bytes
+        .get(offset..end)
+        .expect("ELF u64 bytes")
+        .try_into()
+        .expect("ELF u64 length");
+    u64::from_le_bytes(value)
+}
+
+fn elf_i64(bytes: &[u8], offset: usize) -> i64 {
+    let end = offset.checked_add(8).expect("ELF i64 end");
+    let value: [u8; 8] = bytes
+        .get(offset..end)
+        .expect("ELF i64 bytes")
+        .try_into()
+        .expect("ELF i64 length");
+    i64::from_le_bytes(value)
+}
+
+fn set_elf_u16(bytes: &mut [u8], offset: usize, value: u16) {
+    let end = offset.checked_add(2).expect("ELF u16 end");
+    bytes
+        .get_mut(offset..end)
+        .expect("ELF u16 bytes")
+        .copy_from_slice(&value.to_le_bytes());
+}
+
+fn set_elf_u32(bytes: &mut [u8], offset: usize, value: u32) {
+    let end = offset.checked_add(4).expect("ELF u32 end");
+    bytes
+        .get_mut(offset..end)
+        .expect("ELF u32 bytes")
+        .copy_from_slice(&value.to_le_bytes());
+}
+
+fn set_elf_u64(bytes: &mut [u8], offset: usize, value: u64) {
+    let end = offset.checked_add(8).expect("ELF u64 end");
+    bytes
+        .get_mut(offset..end)
+        .expect("ELF u64 bytes")
+        .copy_from_slice(&value.to_le_bytes());
+}
+
+fn set_elf_i64(bytes: &mut [u8], offset: usize, value: i64) {
+    let end = offset.checked_add(8).expect("ELF i64 end");
+    bytes
+        .get_mut(offset..end)
+        .expect("ELF i64 bytes")
+        .copy_from_slice(&value.to_le_bytes());
+}
+
+fn elf_program_header_count(bytes: &[u8]) -> usize {
+    usize::from(elf_u16(bytes, 56))
+}
+
+fn elf_program_header_offsets(bytes: &[u8]) -> Vec<usize> {
+    let offset = usize::try_from(elf_u64(bytes, 32)).expect("ELF program header offset");
+    let size = usize::from(elf_u16(bytes, 54));
+    (0..elf_program_header_count(bytes))
+        .map(|index| {
+            offset
+                .checked_add(index.checked_mul(size).expect("ELF program header index"))
+                .expect("ELF program header offset")
+        })
+        .collect()
+}
+
+fn dynamic_entry_offsets(bytes: &[u8]) -> Vec<usize> {
+    let mut entries = Vec::new();
+    for program_header in elf_program_header_offsets(bytes) {
+        if elf_u32(bytes, program_header) != 2 {
+            continue;
+        }
+        let offset =
+            usize::try_from(elf_u64(bytes, program_header + 8)).expect("ELF dynamic offset");
+        let end = offset
+            .checked_add(
+                usize::try_from(elf_u64(bytes, program_header + 32)).expect("ELF dynamic length"),
+            )
+            .expect("ELF dynamic end");
+        let mut entry = offset;
+        while entry.checked_add(16).is_some_and(|next| next <= end) {
+            entries.push(entry);
+            if elf_i64(bytes, entry) == 0 {
+                break;
+            }
+            entry = entry.checked_add(16).expect("ELF dynamic entry");
+        }
+    }
+    entries
+}
+
+fn neutralize_program_header_type(bytes: &mut [u8], program_header_type: u32) {
+    for offset in elf_program_header_offsets(bytes) {
+        if elf_u32(bytes, offset) == program_header_type {
+            set_elf_u32(bytes, offset, 0);
+        }
+    }
+}
+
+fn maximum_version_marker(bytes: &[u8]) -> Option<(u32, u32)> {
+    let marker = b"GLIBC_";
+    let mut maximum = None;
+    let mut offset = 0usize;
+    while let Some(found) = bytes
+        .get(offset..)?
+        .windows(marker.len())
+        .position(|window| window == marker)
+    {
+        let start = offset.checked_add(found)?.checked_add(marker.len())?;
+        let tail = bytes.get(start..)?;
+        let major_length = tail.iter().take_while(|byte| byte.is_ascii_digit()).count();
+        if major_length > 0 && tail.get(major_length) == Some(&b'.') {
+            let minor_start = major_length.checked_add(1)?;
+            let minor_length = tail
+                .get(minor_start..)?
+                .iter()
+                .take_while(|byte| byte.is_ascii_digit())
+                .count();
+            if minor_length > 0 {
+                let major = std::str::from_utf8(tail.get(..major_length)?)
+                    .ok()?
+                    .parse()
+                    .ok()?;
+                let minor_end = minor_start.checked_add(minor_length)?;
+                let minor = std::str::from_utf8(tail.get(minor_start..minor_end)?)
+                    .ok()?
+                    .parse()
+                    .ok()?;
+                maximum = Some(maximum.map_or((major, minor), |current: (u32, u32)| {
+                    current.max((major, minor))
+                }));
+            }
+        }
+        offset = start;
+    }
+    maximum
 }
 
 fn fixture(name: &str) -> Vec<u8> {

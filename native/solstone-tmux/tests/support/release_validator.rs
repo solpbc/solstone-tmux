@@ -16,10 +16,10 @@ use sha2::{Digest, Sha256};
 
 use super::package_model::{
     ARTIFACTS, ArtifactKind, ArtifactSpec, DEB_DEPENDS, EXECUTABLE_MODE, EXECUTABLE_NAME,
-    ExecutableArchitecture, FORBIDDEN_MEMBER_BASENAMES, GLIBC_FLOOR, Lane, MACOS_DEPLOYMENT_FLOOR,
-    ModelError, PRODUCT, PRODUCT_VERSION, SECRET_CANARIES, SHA256SUMS_NAME, SIGNATURE_NAME,
-    TargetRecord, artifacts_for_lane, checksummed_names, complete_candidate_names,
-    install_instructions, modeled_members, parse_sha256sums, render_sha256sums,
+    ExecutableArchitecture, FORBIDDEN_MEMBER_BASENAMES, Lane, MACOS_DEPLOYMENT_FLOOR, ModelError,
+    PRODUCT, PRODUCT_VERSION, SECRET_CANARIES, SHA256SUMS_NAME, SIGNATURE_NAME, TargetRecord,
+    artifacts_for_lane, checksummed_names, complete_candidate_names, install_instructions,
+    modeled_members, parse_sha256sums, render_sha256sums,
 };
 
 const MAX_CANDIDATE_BYTES: u64 = 512 * 1024 * 1024;
@@ -48,7 +48,13 @@ pub enum ValidationError {
     DeclaredArchitecture,
     Dependency,
     ExecutableArchitecture,
-    GlibcFloor,
+    ExecutableType,
+    ExecutableProgramHeaders,
+    ExecutableElfLayout,
+    ExecutableEntryPoint,
+    ExecutableInterpreter,
+    ExecutableNeededLibraries,
+    ExecutableVersionRequirements,
     MacosFloor,
     ExecutableDigest,
     SourceCommit,
@@ -82,7 +88,17 @@ impl fmt::Display for ValidationError {
             Self::DeclaredArchitecture => "package declared architecture is invalid",
             Self::Dependency => "package tmux dependency is invalid",
             Self::ExecutableArchitecture => "package executable architecture is invalid",
-            Self::GlibcFloor => "package executable requires a GLIBC version newer than 2.35",
+            Self::ExecutableType => "package executable ELF type is invalid",
+            Self::ExecutableProgramHeaders => {
+                "package executable program headers do not describe a loadable image"
+            }
+            Self::ExecutableElfLayout => "package executable ELF layout is invalid",
+            Self::ExecutableEntryPoint => "package executable entry point is invalid",
+            Self::ExecutableInterpreter => "package executable has a program interpreter",
+            Self::ExecutableNeededLibraries => "package executable has a needed library",
+            Self::ExecutableVersionRequirements => {
+                "package executable has a version requirement"
+            }
             Self::MacosFloor => "package executable deployment target is not macOS 14.0",
             Self::ExecutableDigest => "packaged executable bytes differ from the target record",
             Self::SourceCommit => "executable source commit does not match the target record",
@@ -791,65 +807,189 @@ fn validate_executable(
     expected: ExecutableArchitecture,
 ) -> Result<(), ValidationError> {
     match expected {
-        ExecutableArchitecture::ElfX86_64 => validate_elf(bytes, 62),
-        ExecutableArchitecture::ElfAarch64 => validate_elf(bytes, 183),
+        architecture @ ExecutableArchitecture::ElfX86_64 => validate_elf(
+            bytes,
+            62,
+            architecture
+                .elf_type()
+                .ok_or(ValidationError::ExecutableArchitecture)?,
+        ),
+        architecture @ ExecutableArchitecture::ElfAarch64 => validate_elf(
+            bytes,
+            183,
+            architecture
+                .elf_type()
+                .ok_or(ValidationError::ExecutableArchitecture)?,
+        ),
         ExecutableArchitecture::MachOAarch64 => validate_macho(bytes),
     }
 }
 
-fn validate_elf(bytes: &[u8], expected_machine: u16) -> Result<(), ValidationError> {
+pub fn validate_executable_for_test(
+    bytes: &[u8],
+    expected: ExecutableArchitecture,
+) -> Result<(), ValidationError> {
+    validate_executable(bytes, expected)
+}
+
+fn validate_elf(
+    bytes: &[u8],
+    expected_machine: u16,
+    expected_type: u16,
+) -> Result<(), ValidationError> {
     if bytes.len() < 64
-        || &bytes[..4] != b"\x7fELF"
-        || bytes[4] != 2
-        || bytes[5] != 1
-        || u16::from_le_bytes([bytes[18], bytes[19]]) != expected_machine
+        || bytes.get(..4) != Some(b"\x7fELF".as_slice())
+        || bytes.get(4) != Some(&2)
+        || bytes.get(5) != Some(&1)
     {
         return Err(ValidationError::ExecutableArchitecture);
     }
-    for version in glibc_versions(bytes) {
-        if version > GLIBC_FLOOR {
-            return Err(ValidationError::GlibcFloor);
+
+    let machine = elf_u16(bytes, 18).ok_or(ValidationError::ExecutableArchitecture)?;
+    if machine != expected_machine {
+        return Err(ValidationError::ExecutableArchitecture);
+    }
+
+    let elf_type = elf_u16(bytes, 16).ok_or(ValidationError::ExecutableElfLayout)?;
+    if elf_type != expected_type {
+        return Err(ValidationError::ExecutableType);
+    }
+
+    let entry = elf_u64(bytes, 24).ok_or(ValidationError::ExecutableElfLayout)?;
+    let program_header_offset =
+        usize::try_from(elf_u64(bytes, 32).ok_or(ValidationError::ExecutableElfLayout)?)
+            .map_err(|_| ValidationError::ExecutableElfLayout)?;
+    let program_header_size =
+        usize::from(elf_u16(bytes, 54).ok_or(ValidationError::ExecutableElfLayout)?);
+    let program_header_count =
+        usize::from(elf_u16(bytes, 56).ok_or(ValidationError::ExecutableElfLayout)?);
+    if program_header_count == 0 {
+        return Err(ValidationError::ExecutableProgramHeaders);
+    }
+    if program_header_size != 56 {
+        return Err(ValidationError::ExecutableElfLayout);
+    }
+    let program_headers_length = program_header_size
+        .checked_mul(program_header_count)
+        .ok_or(ValidationError::ExecutableElfLayout)?;
+    let program_headers_end = program_header_offset
+        .checked_add(program_headers_length)
+        .ok_or(ValidationError::ExecutableElfLayout)?;
+    if bytes
+        .get(program_header_offset..program_headers_end)
+        .is_none()
+    {
+        return Err(ValidationError::ExecutableElfLayout);
+    }
+
+    let mut has_load = false;
+    let mut has_interpreter = false;
+    let mut has_needed_library = false;
+    let mut has_version_requirement = false;
+    for index in 0..program_header_count {
+        let program_header_offset = program_header_offset
+            .checked_add(
+                index
+                    .checked_mul(program_header_size)
+                    .ok_or(ValidationError::ExecutableElfLayout)?,
+            )
+            .ok_or(ValidationError::ExecutableElfLayout)?;
+        let program_header_type =
+            elf_u32(bytes, program_header_offset).ok_or(ValidationError::ExecutableElfLayout)?;
+        match program_header_type {
+            1 => has_load = true,
+            3 => has_interpreter = true,
+            2 => {
+                let dynamic_offset = usize::try_from(
+                    elf_u64(
+                        bytes,
+                        program_header_offset
+                            .checked_add(8)
+                            .ok_or(ValidationError::ExecutableElfLayout)?,
+                    )
+                    .ok_or(ValidationError::ExecutableElfLayout)?,
+                )
+                .map_err(|_| ValidationError::ExecutableElfLayout)?;
+                let dynamic_length = usize::try_from(
+                    elf_u64(
+                        bytes,
+                        program_header_offset
+                            .checked_add(32)
+                            .ok_or(ValidationError::ExecutableElfLayout)?,
+                    )
+                    .ok_or(ValidationError::ExecutableElfLayout)?,
+                )
+                .map_err(|_| ValidationError::ExecutableElfLayout)?;
+                let dynamic_end = dynamic_offset
+                    .checked_add(dynamic_length)
+                    .ok_or(ValidationError::ExecutableElfLayout)?;
+                if bytes.get(dynamic_offset..dynamic_end).is_none() {
+                    return Err(ValidationError::ExecutableElfLayout);
+                }
+
+                let mut dynamic_entry_offset = dynamic_offset;
+                while let Some(next_entry_offset) = dynamic_entry_offset.checked_add(16) {
+                    if next_entry_offset > dynamic_end {
+                        break;
+                    }
+                    let tag = elf_i64(bytes, dynamic_entry_offset)
+                        .ok_or(ValidationError::ExecutableElfLayout)?;
+                    if tag == 0 {
+                        break;
+                    }
+                    if tag == 1 {
+                        has_needed_library = true;
+                    }
+                    if tag == 0x6fff_fffe {
+                        has_version_requirement = true;
+                    }
+                    dynamic_entry_offset = next_entry_offset;
+                }
+            }
+            _ => {}
         }
+    }
+
+    if !has_load {
+        return Err(ValidationError::ExecutableProgramHeaders);
+    }
+    if entry == 0 {
+        return Err(ValidationError::ExecutableEntryPoint);
+    }
+    if has_interpreter {
+        return Err(ValidationError::ExecutableInterpreter);
+    }
+    if has_needed_library {
+        return Err(ValidationError::ExecutableNeededLibraries);
+    }
+    if has_version_requirement {
+        return Err(ValidationError::ExecutableVersionRequirements);
     }
     Ok(())
 }
 
-fn glibc_versions(bytes: &[u8]) -> Vec<(u32, u32)> {
-    let marker = b"GLIBC_";
-    let mut versions = Vec::new();
-    let mut offset = 0usize;
-    while offset + marker.len() < bytes.len() {
-        let Some(found) = bytes[offset..]
-            .windows(marker.len())
-            .position(|window| window == marker)
-        else {
-            break;
-        };
-        let start = offset + found + marker.len();
-        let tail = &bytes[start..];
-        let major_length = tail.iter().take_while(|byte| byte.is_ascii_digit()).count();
-        if major_length > 0 && tail.get(major_length) == Some(&b'.') {
-            let minor_start = major_length + 1;
-            let minor_length = tail[minor_start..]
-                .iter()
-                .take_while(|byte| byte.is_ascii_digit())
-                .count();
-            if minor_length > 0
-                && let (Ok(major), Ok(minor)) = (
-                    std::str::from_utf8(&tail[..major_length])
-                        .unwrap_or_default()
-                        .parse(),
-                    std::str::from_utf8(&tail[minor_start..minor_start + minor_length])
-                        .unwrap_or_default()
-                        .parse(),
-                )
-            {
-                versions.push((major, minor));
-            }
-        }
-        offset = start;
-    }
-    versions
+fn elf_u16(bytes: &[u8], offset: usize) -> Option<u16> {
+    let end = offset.checked_add(2)?;
+    let value: [u8; 2] = bytes.get(offset..end)?.try_into().ok()?;
+    Some(u16::from_le_bytes(value))
+}
+
+fn elf_u32(bytes: &[u8], offset: usize) -> Option<u32> {
+    let end = offset.checked_add(4)?;
+    let value: [u8; 4] = bytes.get(offset..end)?.try_into().ok()?;
+    Some(u32::from_le_bytes(value))
+}
+
+fn elf_u64(bytes: &[u8], offset: usize) -> Option<u64> {
+    let end = offset.checked_add(8)?;
+    let value: [u8; 8] = bytes.get(offset..end)?.try_into().ok()?;
+    Some(u64::from_le_bytes(value))
+}
+
+fn elf_i64(bytes: &[u8], offset: usize) -> Option<i64> {
+    let end = offset.checked_add(8)?;
+    let value: [u8; 8] = bytes.get(offset..end)?.try_into().ok()?;
+    Some(i64::from_le_bytes(value))
 }
 
 fn validate_macho(bytes: &[u8]) -> Result<(), ValidationError> {
