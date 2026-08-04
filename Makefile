@@ -112,8 +112,12 @@ package-linux:
 	@test -n "$(RUST_TARGET)" || { echo "RUST_TARGET is required" >&2; exit 1; }
 	@test -n "$(SOURCE_COMMIT)" || { echo "SOURCE_COMMIT is required" >&2; exit 1; }
 	@test -n "$(OUTPUT_DIRECTORY)" || { echo "OUTPUT_DIRECTORY is required" >&2; exit 1; }
+	@case "$(RUST_TARGET)" in \
+		*-musl) builder="zigbuild";; \
+		*) builder="build";; \
+	esac; \
 	SOLSTONE_TMUX_SOURCE_COMMIT="$(SOURCE_COMMIT)" \
-		$(CARGO) build --locked --release --target "$(RUST_TARGET)"
+		$(CARGO) $$builder --locked --release --target "$(RUST_TARGET)"
 	packaging/linux/build-candidate.sh \
 		"$(RUST_TARGET)" \
 		"$(SOURCE_COMMIT)" \

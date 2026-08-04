@@ -48,7 +48,12 @@ esac
 # The shipped Linux lanes are musl while the build hosts are gnu, so match on
 # architecture, vendor and OS and ignore the libc component.
 host_base="$(echo "$host_target" | cut -d- -f1-3)"
-if ! "$repo_root/scripts/rust-targets.sh" | cut -d- -f1-3 | grep -Fx "$host_base" >/dev/null; then
+# The lane builds the configured target for this architecture, which is musl while the host is
+# gnu. Resolve it here so the build, packaging and proof all refer to the same triple.
+lane_target="$("$repo_root/scripts/rust-targets.sh" | while IFS= read -r configured; do
+    if [[ "$(echo "$configured" | cut -d- -f1-3)" == "$host_base" ]]; then echo "$configured"; fi
+done | head -n 1)"
+if [[ -z "$lane_target" ]]; then
     echo "native Rust host cannot build any configured target: $host_target" >&2
     exit 1
 fi
@@ -92,14 +97,14 @@ make ci
 
 packager_log="$work_root/packager.log"
 make package-linux \
-    RUST_TARGET="$host_target" \
+    RUST_TARGET="$lane_target" \
     SOURCE_COMMIT="$source_commit" \
     OUTPUT_DIRECTORY="$output_directory" \
     2>&1 | tee "$packager_log"
 
-source_executable="$repo_root/target/$host_target/release/solstone-tmux"
+source_executable="$repo_root/target/$lane_target/release/solstone-tmux"
 SOLSTONE_TMUX_TEST_CANDIDATE="$output_directory" \
-SOLSTONE_TMUX_TEST_TARGET="$host_target" \
+SOLSTONE_TMUX_TEST_TARGET="$lane_target" \
 SOLSTONE_TMUX_TEST_EXECUTABLE="$source_executable" \
 SOLSTONE_TMUX_TEST_PACKAGER_LOG="$(<"$packager_log")" \
     cargo test --locked -p solstone-tmux --test release_validator \
