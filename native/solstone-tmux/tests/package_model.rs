@@ -74,7 +74,11 @@ fn package_model_is_the_exact_release_set() {
 
 #[test]
 fn executable_architecture_elf_types_match_release_lanes() {
-    assert_eq!(ExecutableArchitecture::ElfX86_64.elf_type(), Some(3));
+    // ET_EXEC (2) on both Linux lanes, verified against the real 1.0.1 artifacts. The x86_64
+    // target spec requests static PIE, so reading the spec alone predicts 3. The release lanes
+    // link through cargo-zigbuild, which does not honour that request, so the shipped binary is
+    // ET_EXEC. See ExecutableArchitecture::elf_type for the full note.
+    assert_eq!(ExecutableArchitecture::ElfX86_64.elf_type(), Some(2));
     assert_eq!(ExecutableArchitecture::ElfAarch64.elf_type(), Some(2));
     assert_eq!(ExecutableArchitecture::MachOAarch64.elf_type(), None);
 }

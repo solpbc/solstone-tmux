@@ -850,10 +850,11 @@ fn validate_elf(
         return Err(ValidationError::ExecutableArchitecture);
     }
 
+    // Read the ELF type here, but compare it last. A dynamically linked binary is also the wrong
+    // type for our lanes, so an early comparison would mask the interpreter, needed-library, and
+    // version-requirement rules behind a generic type mismatch and leave them untested. Report the
+    // specific defect first; the type pin is the residual toolchain-change detector.
     let elf_type = elf_u16(bytes, 16).ok_or(ValidationError::ExecutableElfLayout)?;
-    if elf_type != expected_type {
-        return Err(ValidationError::ExecutableType);
-    }
 
     let entry = elf_u64(bytes, 24).ok_or(ValidationError::ExecutableElfLayout)?;
     let program_header_offset =
@@ -964,6 +965,9 @@ fn validate_elf(
     }
     if has_version_requirement {
         return Err(ValidationError::ExecutableVersionRequirements);
+    }
+    if elf_type != expected_type {
+        return Err(ValidationError::ExecutableType);
     }
     Ok(())
 }

@@ -91,8 +91,18 @@ pub enum ExecutableArchitecture {
 impl ExecutableArchitecture {
     pub const fn elf_type(self) -> Option<u16> {
         match self {
-            // rustc 1.97.1 builds x86_64-musl as static PIE (ET_DYN), while aarch64-musl is ET_EXEC.
-            Self::ElfX86_64 => Some(3),
+            // Both Linux release binaries are ET_EXEC. Verified against the real artifacts for
+            // 1.0.1 on both architectures.
+            //
+            // Reading the target spec alone predicts ET_DYN for x86_64, because
+            // x86_64-unknown-linux-musl sets static_position_independent_executables. That
+            // prediction is wrong for what we ship: the release lanes link through
+            // cargo-zigbuild, and zig's driver does not honour rustc's static-pie request, so the
+            // emitted binary is ET_EXEC. aarch64-musl is ET_EXEC from its own spec.
+            //
+            // Pin what we actually ship, so a toolchain change that alters the ELF type trips this
+            // gate loudly instead of shipping quietly.
+            Self::ElfX86_64 => Some(2),
             Self::ElfAarch64 => Some(2),
             Self::MachOAarch64 => None,
         }

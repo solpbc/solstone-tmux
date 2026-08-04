@@ -112,9 +112,9 @@ fn native_version_probe_closes_the_staged_executable_before_running_it() {
 
 #[test]
 fn committed_x86_64_elf_fixtures_have_expected_verdicts() {
-    let static_pie = committed_elf_fixture("x86_64/static-pie.bin");
+    let static_executable = committed_elf_fixture("x86_64/static-exec.bin");
     assert_eq!(
-        validate_executable_for_test(&static_pie, ExecutableArchitecture::ElfX86_64),
+        validate_executable_for_test(&static_executable, ExecutableArchitecture::ElfX86_64),
         Ok(())
     );
 
@@ -125,16 +125,20 @@ fn committed_x86_64_elf_fixtures_have_expected_verdicts() {
     );
     assert_eq!(maximum_version_marker(&dynamic_interpreter), Some((2, 34)));
 
+    // A dependency-free shared object is otherwise indistinguishable from a static executable:
+    // same class, machine, no interpreter, no needed libraries. Its zero entry point is what
+    // separates a library from a program.
     let shared_object = committed_elf_fixture("x86_64/shared-nodeps.so");
     assert_eq!(
         validate_executable_for_test(&shared_object, ExecutableArchitecture::ElfX86_64),
         Err(ValidationError::ExecutableEntryPoint)
     );
 
+    // A relocatable object has no program headers at all, so it never describes a loadable image.
     let relocatable = committed_elf_fixture("x86_64/relocatable.o");
     assert_eq!(
         validate_executable_for_test(&relocatable, ExecutableArchitecture::ElfX86_64),
-        Err(ValidationError::ExecutableType)
+        Err(ValidationError::ExecutableProgramHeaders)
     );
 }
 
@@ -142,14 +146,17 @@ fn committed_x86_64_elf_fixtures_have_expected_verdicts() {
 fn elf_lane_type_expectations_are_not_swappable() {
     assert_eq!(
         validate_executable_for_test(
-            &committed_elf_fixture("x86_64/static-pie.bin"),
+            &committed_elf_fixture("x86_64/static-exec.bin"),
             ExecutableArchitecture::ElfX86_64,
         ),
         Ok(())
     );
+    // Static-PIE is equally static, but it is not what our lanes emit. Rejecting it is the
+    // toolchain-change detector: if zig ever starts honouring rustc's static-pie request, this
+    // fails loudly rather than changing the shipped artifact silently.
     assert_eq!(
         validate_executable_for_test(
-            &committed_elf_fixture("x86_64/static-exec.bin"),
+            &committed_elf_fixture("x86_64/static-pie.bin"),
             ExecutableArchitecture::ElfX86_64,
         ),
         Err(ValidationError::ExecutableType)
@@ -188,15 +195,15 @@ fn program_headers_are_required_for_static_executables() {
 
 #[test]
 fn program_headers_must_describe_a_loadable_image() {
-    let static_pie = committed_elf_fixture("x86_64/static-pie.bin");
-    assert!(elf_program_header_count(&static_pie) > 0);
+    let static_exec = committed_elf_fixture("x86_64/static-exec.bin");
+    assert!(elf_program_header_count(&static_exec) > 0);
     assert!(
-        elf_program_header_offsets(&static_pie)
+        elf_program_header_offsets(&static_exec)
             .into_iter()
-            .any(|offset| elf_u32(&static_pie, offset) == 1)
+            .any(|offset| elf_u32(&static_exec, offset) == 1)
     );
 
-    let mut no_load = static_pie;
+    let mut no_load = static_exec;
     for offset in elf_program_header_offsets(&no_load) {
         if elf_u32(&no_load, offset) == 1 {
             set_elf_u32(&mut no_load, offset, 0);
@@ -210,7 +217,7 @@ fn program_headers_must_describe_a_loadable_image() {
 
 #[test]
 fn program_header_validation_ignores_section_headers() {
-    let mut fixture = committed_elf_fixture("x86_64/static-pie.bin");
+    let mut fixture = committed_elf_fixture("x86_64/static-exec.bin");
     set_elf_u64(&mut fixture, 40, 0);
     set_elf_u16(&mut fixture, 60, 0);
     assert_eq!(
@@ -221,7 +228,7 @@ fn program_header_validation_ignores_section_headers() {
 
 #[test]
 fn malformed_elf_program_header_layouts_fail_closed() {
-    let fixture = committed_elf_fixture("x86_64/static-pie.bin");
+    let fixture = committed_elf_fixture("x86_64/static-exec.bin");
     let mut past_end = fixture.clone();
     let past_end_offset = past_end.len() as u64 + 1;
     set_elf_u64(&mut past_end, 32, past_end_offset);
@@ -229,7 +236,10 @@ fn malformed_elf_program_header_layouts_fail_closed() {
     let mut bad_entry_size = fixture.clone();
     set_elf_u16(&mut bad_entry_size, 54, 55);
 
-    let mut dynamic_past_end = fixture;
+    // The shipped lanes carry no PT_DYNAMIC, so the out-of-range-dynamic case needs a fixture that
+    // has one. Static-PIE is rejected on its ELF type, but the layout checks run before the type
+    // pin, so a malformed one still fails closed on layout.
+    let mut dynamic_past_end = committed_elf_fixture("x86_64/static-pie.bin");
     let dynamic_header = elf_program_header_offsets(&dynamic_past_end)
         .into_iter()
         .find(|offset| elf_u32(&dynamic_past_end, *offset) == 2)
@@ -717,7 +727,11 @@ fn artifact(lane: Lane, kind: ArtifactKind) -> package_model::ArtifactSpec {
 }
 
 fn elf_fixture(machine: u16) -> Vec<u8> {
-    let has_dynamic = machine != 183;
+    // Both shipped Linux binaries are ET_EXEC with a PT_LOAD and no PT_DYNAMIC, verified against
+    // the real 1.0.1 artifacts on both architectures. This stand-in matches that shape so the
+    // candidate-set tests exercise the same path a release artifact takes. Coverage for the
+    // PT_DYNAMIC-bearing shapes lives in the committed fixtures under tests/data/elf/.
+    let has_dynamic = false;
     let program_header_count = if has_dynamic { 2 } else { 1 };
     let program_header_offset = 64usize;
     let program_header_size = 56usize;
