@@ -4,17 +4,22 @@ All notable changes to solstone-tmux will be documented in this file.
 
 Format adapted from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [1.0.2] - 2026-08-08
 
 ### Changed
-- syncing now works through larger local backlogs without repeatedly reading
-  the same finished captures, while still noticing changes before they are sent.
+- syncing works through larger local backlogs without repeatedly reading work
+  your journal already has. changes made locally before delivery are still
+  noticed.
 
 ### Fixed
-- stopping the observer now waits briefly for syncing to finish safely, so a
-  shutdown cannot leave a local cleanup half-finished.
-- the tmux sun now stays steady when your journal already has the finished
-  work, and shows one continuous interval while new work is delivered.
+- an unexpectedly large reply from your journal could make syncing keep growing
+  in memory. that attempt now stops cleanly and reports the reason.
+- stopping solstone-tmux no longer has to wait for a large backlog to finish
+  syncing. any local cleanup already in progress finishes before shutdown
+  completes.
+- the tmux sun no longer flickers during routine sync checks. it stays steady
+  when your journal already has the finished work, and shows one continuous
+  interval while new work is delivered.
 
 ## [1.0.1] - 2026-08-03
 
