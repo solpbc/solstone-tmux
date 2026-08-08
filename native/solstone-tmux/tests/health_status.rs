@@ -323,6 +323,14 @@ fn health_write_failures_use_the_health_diagnostic_and_setup_guidance_is_actiona
                 .message()
                 .contains("verify the link")
         );
+        assert_eq!(
+            DiagnosticCode::JournalResponseTooLarge.as_str(),
+            "journal_response_too_large"
+        );
+        assert_eq!(
+            DiagnosticCode::SyncTaskTimedOut.as_str(),
+            "sync_task_timed_out"
+        );
     });
 }
 

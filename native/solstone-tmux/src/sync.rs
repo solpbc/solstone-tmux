@@ -9,13 +9,14 @@ use std::io::{Read, Seek, SeekFrom};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use spl_transport::client::TokenPersistHook;
 use spl_transport::credential::Credential;
 use time::{Date, Month};
-use tokio::sync::{Notify, watch};
+use tokio::sync::{Mutex as AsyncMutex, Notify, OwnedSemaphorePermit, Semaphore, watch};
 use tokio::time::Instant;
 
 use crate::clock::Clock;
@@ -44,13 +45,49 @@ const RETRY_DELAYS: [Duration; 4] = [
     Duration::from_secs(300),
 ];
 const PERIODIC_SYNC_INTERVAL: Duration = Duration::from_secs(60);
-pub const SEGMENTS_PER_PASS: usize = 8;
+const SEGMENTS_PER_PASS: usize = 8;
 const STATUS_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SyncActivity {
     Idle,
     Working,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct SyncInstrumentationSnapshot {
+    pub candidate_scans: usize,
+    pub hashed_files: usize,
+    pub hashed_bytes: u64,
+}
+
+#[derive(Clone, Default)]
+pub struct SyncInstrumentation {
+    candidate_scans: Arc<AtomicUsize>,
+    hashed_files: Arc<AtomicUsize>,
+    hashed_bytes: Arc<AtomicUsize>,
+}
+
+impl SyncInstrumentation {
+    pub fn snapshot(&self) -> SyncInstrumentationSnapshot {
+        SyncInstrumentationSnapshot {
+            candidate_scans: self.candidate_scans.load(Ordering::Relaxed),
+            hashed_files: self.hashed_files.load(Ordering::Relaxed),
+            hashed_bytes: self.hashed_bytes.load(Ordering::Relaxed) as u64,
+        }
+    }
+
+    pub(crate) fn candidate_scan(&self) {
+        self.candidate_scans.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn hashed_file(&self, bytes: u64) {
+        self.hashed_files.fetch_add(1, Ordering::Relaxed);
+        self.hashed_bytes.fetch_add(
+            usize::try_from(bytes).unwrap_or(usize::MAX),
+            Ordering::Relaxed,
+        );
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -303,7 +340,7 @@ pub fn fresh_listing_proves_custody(
     })
 }
 
-#[derive(Clone, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct SegmentCandidate {
     day: String,
     stream: String,
@@ -344,14 +381,53 @@ pub enum RetentionOutcome {
     Deleted,
 }
 
+pub struct RetentionFence {
+    accepting: AsyncMutex<bool>,
+    irreversible: Arc<Semaphore>,
+}
+
+impl RetentionFence {
+    pub fn new() -> Self {
+        Self {
+            accepting: AsyncMutex::new(true),
+            irreversible: Arc::new(Semaphore::new(1)),
+        }
+    }
+
+    async fn begin_irreversible(&self) -> Option<OwnedSemaphorePermit> {
+        let accepting = self.accepting.lock().await;
+        if !*accepting {
+            return None;
+        }
+        self.irreversible.clone().acquire_owned().await.ok()
+    }
+
+    pub async fn close_and_drain(&self) {
+        let mut accepting = self.accepting.lock().await;
+        *accepting = false;
+        let _permit = self.irreversible.clone().acquire_owned().await;
+    }
+}
+
+impl Default for RetentionFence {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Clone, Eq, PartialEq)]
 struct FileIdentity {
     name: String,
     device: u64,
     inode: u64,
     size: u64,
+    mtime: i64,
+    mtime_nsec: i64,
+    ctime: i64,
+    ctime_nsec: i64,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn delete_custodied_segment(
     captures_root: &Path,
     configured_stream: &DerivedName,
@@ -360,6 +436,8 @@ pub async fn delete_custodied_segment(
     candidate: &SegmentCandidate,
     authoritative_key: &str,
     listing: &SegmentsEnvelope,
+    instrumentation: SyncInstrumentation,
+    fence: Arc<RetentionFence>,
 ) -> RetentionOutcome {
     delete_custodied_segment_with_hook_inner(
         captures_root,
@@ -369,11 +447,14 @@ pub async fn delete_custodied_segment(
         candidate,
         (authoritative_key, listing),
         None,
+        instrumentation,
+        fence,
     )
     .await
 }
 
 #[doc(hidden)]
+#[allow(clippy::too_many_arguments)]
 pub async fn delete_custodied_segment_with_hook(
     captures_root: &Path,
     configured_stream: &DerivedName,
@@ -382,6 +463,8 @@ pub async fn delete_custodied_segment_with_hook(
     candidate: &SegmentCandidate,
     custody: (&str, &SegmentsEnvelope),
     delete_hook: Arc<dyn Fn(usize) + Send + Sync>,
+    instrumentation: SyncInstrumentation,
+    fence: Arc<RetentionFence>,
 ) -> RetentionOutcome {
     delete_custodied_segment_with_hook_inner(
         captures_root,
@@ -391,10 +474,13 @@ pub async fn delete_custodied_segment_with_hook(
         candidate,
         custody,
         Some(delete_hook),
+        instrumentation,
+        fence,
     )
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn delete_custodied_segment_with_hook_inner(
     captures_root: &Path,
     configured_stream: &DerivedName,
@@ -403,6 +489,8 @@ async fn delete_custodied_segment_with_hook_inner(
     candidate: &SegmentCandidate,
     custody: (&str, &SegmentsEnvelope),
     delete_hook: Option<Arc<dyn Fn(usize) + Send + Sync>>,
+    instrumentation: SyncInstrumentation,
+    fence: Arc<RetentionFence>,
 ) -> RetentionOutcome {
     let (authoritative_key, listing) = custody;
     if retention_days < 0 {
@@ -418,10 +506,11 @@ async fn delete_custodied_segment_with_hook_inner(
     let target = candidate.clone();
     let paths =
         match tokio::task::spawn_blocking(move || resolve_segment_files(&root, &target)).await {
-            Ok(Some(paths)) => paths,
+            Ok(ResolvedSegmentFiles::Found(paths)) => paths,
             _ => return RetentionOutcome::Retained,
         };
-    let first_inventory = match inventory_files(paths.clone()).await {
+    let first_inventory = match inventory_files(paths.clone(), Some(instrumentation.clone())).await
+    {
         Ok(inventory) => inventory,
         Err(_) => return RetentionOutcome::Retained,
     };
@@ -445,10 +534,11 @@ async fn delete_custodied_segment_with_hook_inner(
     let target = candidate.clone();
     let second_paths =
         match tokio::task::spawn_blocking(move || resolve_segment_files(&root, &target)).await {
-            Ok(Some(paths)) if paths == expected_paths => paths,
+            Ok(ResolvedSegmentFiles::Found(paths)) if paths == expected_paths => paths,
             _ => return RetentionOutcome::Retained,
         };
-    let second_inventory = match inventory_files(second_paths.clone()).await {
+    let second_inventory = match inventory_files(second_paths.clone(), Some(instrumentation)).await
+    {
         Ok(inventory) if inventory == first_inventory => inventory,
         _ => return RetentionOutcome::Retained,
     };
@@ -469,7 +559,11 @@ async fn delete_custodied_segment_with_hook_inner(
 
     let root = captures_root.to_owned();
     let target = candidate.clone();
+    let Some(permit) = fence.begin_irreversible().await else {
+        return RetentionOutcome::Retained;
+    };
     match tokio::task::spawn_blocking(move || {
+        let _permit = permit;
         delete_revalidated_segment(
             &root,
             &target,
@@ -540,41 +634,59 @@ pub trait SyncJournal: Send {
 #[derive(Clone, Default)]
 pub struct SyncWake {
     notify: Arc<Notify>,
+    pending: Arc<AtomicBool>,
 }
 
 impl SyncWake {
     pub fn segment_closed(&self, close: &SegmentClose) {
         if matches!(close, SegmentClose::Finalized(_)) {
+            self.pending.store(true, Ordering::Release);
             self.notify.notify_one();
         }
     }
 
     pub async fn wait(&self) {
-        self.notify.notified().await;
+        loop {
+            let notified = self.notify.notified();
+            if self.pending.swap(false, Ordering::AcqRel) {
+                return;
+            }
+            notified.await;
+        }
+    }
+
+    fn take_pending(&self) -> bool {
+        self.pending.swap(false, Ordering::AcqRel)
     }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct SyncPassSummary {
+pub struct SyncSweepSummary {
     pub attempted: usize,
     pub contacted: bool,
     pub custodied: usize,
-    pub more_work: bool,
+    pub cancelled: bool,
     pub failure: Option<SyncFailureClass>,
     pub diagnostic: Option<DiagnosticCode>,
 }
 
-impl SyncPassSummary {
+impl SyncSweepSummary {
     fn empty() -> Self {
         Self {
             attempted: 0,
             contacted: false,
             custodied: 0,
-            more_work: false,
+            cancelled: false,
             failure: None,
             diagnostic: None,
         }
     }
+}
+
+struct CachedInventory {
+    names: Vec<String>,
+    identities: Vec<FileIdentity>,
+    inventory: Vec<LocalFile>,
 }
 
 struct Backoff {
@@ -616,16 +728,15 @@ pub struct SyncScheduler {
     retention_days: i64,
     clock: Arc<dyn Clock>,
     wake: SyncWake,
-    cursor: Option<SegmentCandidate>,
-    remaining_in_sweep: usize,
-    listings_by_day: HashMap<String, SegmentsEnvelope>,
-    pending_uncustodied_in_sweep: usize,
+    inventories: HashMap<SegmentCandidate, CachedInventory>,
+    instrumentation: SyncInstrumentation,
     backoff: Backoff,
     activity: Option<watch::Sender<SyncActivity>>,
     health: Option<HealthWriter>,
     facts: SyncFacts,
     started_at: Duration,
     last_status_event: Option<Duration>,
+    retention_fence: Arc<RetentionFence>,
 }
 
 impl SyncScheduler {
@@ -643,16 +754,15 @@ impl SyncScheduler {
             retention_days,
             clock,
             wake,
-            cursor: None,
-            remaining_in_sweep: 0,
-            listings_by_day: HashMap::new(),
-            pending_uncustodied_in_sweep: 0,
+            inventories: HashMap::new(),
+            instrumentation: SyncInstrumentation::default(),
             backoff: Backoff::new(),
             activity: None,
             health: None,
             facts: SyncFacts::default(),
             started_at,
             last_status_event: None,
+            retention_fence: Arc::new(RetentionFence::new()),
         }
     }
 
@@ -671,11 +781,36 @@ impl SyncScheduler {
         self
     }
 
-    pub async fn run<S>(&mut self, journal: &mut dyn SyncJournal, shutdown: S)
+    pub fn with_retention_fence(mut self, fence: Arc<RetentionFence>) -> Self {
+        self.retention_fence = fence;
+        self
+    }
+
+    pub fn instrumentation(&self) -> SyncInstrumentationSnapshot {
+        self.instrumentation.snapshot()
+    }
+
+    pub fn cached_inventories(&self) -> usize {
+        self.inventories.len()
+    }
+
+    pub async fn run<S>(&mut self, journal: &mut dyn SyncJournal, shutdown_future: S)
     where
-        S: Future<Output = ()> + Send,
+        S: Future<Output = ()> + Send + 'static,
     {
-        tokio::pin!(shutdown);
+        let (stop, receiver) = watch::channel(false);
+        tokio::spawn(async move {
+            shutdown_future.await;
+            stop.send_replace(true);
+        });
+        self.run_with_shutdown(journal, receiver).await;
+    }
+
+    pub async fn run_with_shutdown(
+        &mut self,
+        journal: &mut dyn SyncJournal,
+        mut shutdown: watch::Receiver<bool>,
+    ) {
         let mut periodic = tokio::time::interval_at(
             Instant::now() + PERIODIC_SYNC_INTERVAL,
             PERIODIC_SYNC_INTERVAL,
@@ -691,7 +826,7 @@ impl SyncScheduler {
                     } else {
                         tokio::select! {
                             biased;
-                            () = &mut shutdown => return,
+                            () = wait_for_shutdown(&mut shutdown) => return,
                             () = self.wake.wait() => {},
                             _ = periodic.tick() => {
                                 self.write_health().await;
@@ -704,7 +839,10 @@ impl SyncScheduler {
                     }
                 }
 
-                let mut summary = self.run_pass(journal).await;
+                let mut summary = self.run_sweep(journal, shutdown.clone()).await;
+                if summary.cancelled {
+                    return;
+                }
                 self.update_facts(&summary);
                 if summary.failure.is_none()
                     && summary.diagnostic.is_none()
@@ -712,22 +850,26 @@ impl SyncScheduler {
                     && journal.observer_name().is_some()
                 {
                     let beacon = self.status_beacon(journal.observer_name());
-                    match journal.status_event(&beacon).await {
-                        Ok(()) => {
+                    match cancellable(&mut shutdown, journal.status_event(&beacon)).await {
+                        Err(()) => return,
+                        Ok(Ok(())) => {
                             summary.contacted = true;
                             self.facts
                                 .successful_contact(self.clock.wall_now().unix_timestamp());
                             self.backoff.successful_operation();
                         }
-                        Err(error) => {
-                            summary = self.end_pass(summary, error);
+                        Ok(Err(error)) => {
+                            summary = self.end_sweep(summary, error);
                             self.update_facts(&summary);
                         }
                     }
                     self.last_status_event = Some(self.clock.monotonic_now());
                 }
                 self.write_health().await;
-                requested = summary.failure.is_some() || summary.more_work;
+                requested = summary.failure.is_some();
+                if self.wake.take_pending() {
+                    requested = true;
+                }
                 if requested {
                     tokio::task::yield_now().await;
                 }
@@ -736,139 +878,109 @@ impl SyncScheduler {
 
             tokio::select! {
                 biased;
-                () = &mut shutdown => return,
+                () = wait_for_shutdown(&mut shutdown) => return,
                 () = self.wake.wait() => requested = true,
                 _ = periodic.tick() => requested = true,
             }
         }
     }
 
-    pub async fn run_pass(&mut self, journal: &mut dyn SyncJournal) -> SyncPassSummary {
-        let mut summary = SyncPassSummary::empty();
-        match journal.ensure_registered().await {
-            Ok(contacted) => {
+    pub async fn run_sweep(
+        &mut self,
+        journal: &mut dyn SyncJournal,
+        mut shutdown: watch::Receiver<bool>,
+    ) -> SyncSweepSummary {
+        let mut summary = SyncSweepSummary::empty();
+        match cancellable(&mut shutdown, journal.ensure_registered()).await {
+            Err(()) => return self.cancelled_sweep(summary).await,
+            Ok(Ok(contacted)) => {
                 if contacted {
                     summary.contacted = true;
                     self.backoff.successful_operation();
                 }
             }
-            Err(error) => return self.end_pass(summary, error),
+            Ok(Err(error)) => return self.end_sweep(summary, error),
         }
 
         let captures_root = self.captures_root.clone();
         let stream = self.stream.clone();
-        let candidates =
-            match tokio::task::spawn_blocking(move || scan_candidates(&captures_root, &stream))
-                .await
-            {
-                Ok(Ok(candidates)) => candidates,
-                _ => {
-                    self.remaining_in_sweep = 0;
-                    self.pending_uncustodied_in_sweep = 0;
-                    self.facts.pending_segments = 0;
-                    self.listings_by_day.clear();
-                    return self.end_pass(
-                        summary,
-                        SyncOperationError::EndPassDiagnostic(
-                            SyncFailureClass::Contract,
-                            DiagnosticCode::LocalSegmentInvalid,
-                        ),
-                    );
-                }
-            };
+        let instrumentation = self.instrumentation.clone();
+        let candidates = match tokio::task::spawn_blocking(move || {
+            instrumentation.candidate_scan();
+            scan_candidates(&captures_root, &stream)
+        })
+        .await
+        {
+            Ok(Ok(candidates)) => candidates,
+            _ => {
+                self.facts.pending_segments = 0;
+                return self.end_sweep(
+                    summary,
+                    SyncOperationError::EndPassDiagnostic(
+                        SyncFailureClass::Contract,
+                        DiagnosticCode::LocalSegmentInvalid,
+                    ),
+                );
+            }
+        };
+        let snapshot = candidates.iter().cloned().collect::<HashSet<_>>();
+        self.inventories
+            .retain(|candidate, _| snapshot.contains(candidate));
         if candidates.is_empty() {
-            self.remaining_in_sweep = 0;
-            self.pending_uncustodied_in_sweep = 0;
             self.facts.pending_segments = 0;
-            self.listings_by_day.clear();
             let today = local_today(self.clock.as_ref());
-            match journal.segments(&format_day(today)).await {
-                Ok(_) => {
+            match cancellable(&mut shutdown, journal.segments(&format_day(today))).await {
+                Err(()) => return self.cancelled_sweep(summary).await,
+                Ok(Ok(_)) => {
                     summary.contacted = true;
                     self.backoff.successful_operation();
                 }
-                Err(error) => return self.end_pass(summary, error),
+                Ok(Err(error)) => return self.end_sweep(summary, error),
             }
             return summary;
         }
-
-        let ordered = candidates_after_cursor(candidates, self.cursor.as_ref());
-        if self.remaining_in_sweep == 0 {
-            self.listings_by_day.clear();
-            self.remaining_in_sweep = ordered.len();
-            self.pending_uncustodied_in_sweep = ordered.len();
-        } else {
-            self.remaining_in_sweep = self.remaining_in_sweep.min(ordered.len());
-            self.pending_uncustodied_in_sweep =
-                self.pending_uncustodied_in_sweep.min(ordered.len());
-        }
-        self.facts.pending_segments =
-            u64::try_from(self.pending_uncustodied_in_sweep).unwrap_or(u64::MAX);
-        let candidate_limit = SEGMENTS_PER_PASS.min(self.remaining_in_sweep);
+        self.facts.pending_segments = u64::try_from(candidates.len()).unwrap_or(u64::MAX);
         let today = local_today(self.clock.as_ref());
-        let mut pass_fresh_listing_days = HashSet::new();
+        let mut listings_by_day = HashMap::new();
         self.facts.sync_in_progress = true;
         self.write_health().await;
-        let _activity = ActivityGuard::new(self.activity.as_ref());
-        for candidate in ordered.into_iter().take(candidate_limit) {
-            self.cursor = Some(candidate.clone());
-            summary.attempted += 1;
-            self.remaining_in_sweep = self.remaining_in_sweep.saturating_sub(1);
-            let root = self.captures_root.clone();
-            let target = candidate.clone();
-            let files =
-                match tokio::task::spawn_blocking(move || resolve_segment_files(&root, &target))
-                    .await
+        let mut activity = None;
+        for (batch_index, batch) in candidates.chunks(SEGMENTS_PER_PASS).enumerate() {
+            let mut batch_fresh_listing_days = HashSet::new();
+            for candidate in batch {
+                if shutdown_requested(&mut shutdown) {
+                    return self.cancelled_sweep_with_activity(summary, activity).await;
+                }
+                summary.attempted += 1;
+                let root = self.captures_root.clone();
+                let target = candidate.clone();
+                let files = match tokio::task::spawn_blocking(move || {
+                    resolve_segment_files(&root, &target)
+                })
+                .await
                 {
-                    Ok(Some(files)) => files,
-                    _ => {
+                    Ok(ResolvedSegmentFiles::Found(files)) => files,
+                    Ok(ResolvedSegmentFiles::Missing) => {
+                        self.inventories.remove(candidate);
+                        self.facts.pending_segments = self.facts.pending_segments.saturating_sub(1);
+                        continue;
+                    }
+                    Ok(ResolvedSegmentFiles::Invalid) | Err(_) => {
                         summary.diagnostic = Some(DiagnosticCode::LocalSegmentInvalid);
                         continue;
                     }
                 };
-            let local_files = match inventory_files(files.clone()).await {
-                Ok(files) => files,
-                Err(_) => {
-                    summary.diagnostic = Some(DiagnosticCode::LocalSegmentInvalid);
-                    continue;
-                }
-            };
-            let deletion_eligible = self.retention_days >= 0
-                && retention_eligible(candidate.day(), today, self.retention_days);
-            let cached_listing_proves_custody = self
-                .listings_by_day
-                .get(candidate.day())
-                .is_some_and(|listing| {
-                    fresh_listing_proves_custody(
-                        listing,
-                        candidate.segment(),
-                        candidate.segment(),
-                        &local_files,
-                    )
-                });
-            let should_fetch_preupload_listing =
-                !self.listings_by_day.contains_key(candidate.day())
-                    || (deletion_eligible
-                        && cached_listing_proves_custody
-                        && !pass_fresh_listing_days.contains(candidate.day()));
-            let mut preupload_listing_failed = false;
-            if should_fetch_preupload_listing {
-                match journal.segments(candidate.day()).await {
-                    Ok(listing) => {
-                        summary.contacted = true;
-                        self.backoff.successful_operation();
-                        self.listings_by_day
-                            .insert(candidate.day().to_owned(), listing);
-                        pass_fresh_listing_days.insert(candidate.day().to_owned());
+                let local_files = match self.inventory_for(candidate, &files).await {
+                    Ok(files) => files,
+                    Err(()) => {
+                        summary.diagnostic = Some(DiagnosticCode::LocalSegmentInvalid);
+                        continue;
                     }
-                    Err(_) => preupload_listing_failed = true,
-                }
-            }
-            let listing_proves_custody = !preupload_listing_failed
-                && self
-                    .listings_by_day
-                    .get(candidate.day())
-                    .is_some_and(|listing| {
+                };
+                let deletion_eligible = self.retention_days >= 0
+                    && retention_eligible(candidate.day(), today, self.retention_days);
+                let cached_listing_proves_custody =
+                    listings_by_day.get(candidate.day()).is_some_and(|listing| {
                         fresh_listing_proves_custody(
                             listing,
                             candidate.segment(),
@@ -876,119 +988,221 @@ impl SyncScheduler {
                             &local_files,
                         )
                     });
-            if listing_proves_custody {
-                summary.custodied += 1;
-                summary.contacted = true;
-                // end_pass clears cached listings after a delay, forcing refresh before reuse;
-                // this reset cannot be independently observed in integration tests.
-                self.backoff.successful_operation();
-                self.pending_uncustodied_in_sweep =
-                    self.pending_uncustodied_in_sweep.saturating_sub(1);
-                self.facts.pending_segments =
-                    u64::try_from(self.pending_uncustodied_in_sweep).unwrap_or(u64::MAX);
-                if deletion_eligible
-                    && pass_fresh_listing_days.contains(candidate.day())
-                    && let Some(listing) = self.listings_by_day.get(candidate.day())
-                {
-                    match delete_custodied_segment(
-                        &self.captures_root,
-                        &self.stream,
-                        today,
-                        self.retention_days,
-                        &candidate,
-                        candidate.segment(),
-                        listing,
-                    )
-                    .await
-                    {
-                        RetentionOutcome::Retained => {
-                            summary.diagnostic = Some(DiagnosticCode::LocalSegmentInvalid);
+                let should_fetch_preupload_listing = !listings_by_day.contains_key(candidate.day())
+                    || (deletion_eligible
+                        && cached_listing_proves_custody
+                        && !batch_fresh_listing_days.contains(candidate.day()));
+                let mut preupload_listing_failed = false;
+                if should_fetch_preupload_listing {
+                    match cancellable(&mut shutdown, journal.segments(candidate.day())).await {
+                        Err(()) => {
+                            return self.cancelled_sweep_with_activity(summary, activity).await;
                         }
-                        RetentionOutcome::Disabled
-                        | RetentionOutcome::Ineligible
-                        | RetentionOutcome::Deleted => {}
+                        Ok(Ok(listing)) => {
+                            summary.contacted = true;
+                            self.backoff.successful_operation();
+                            listings_by_day.insert(candidate.day().to_owned(), listing);
+                            batch_fresh_listing_days.insert(candidate.day().to_owned());
+                        }
+                        Ok(Err(_)) => preupload_listing_failed = true,
                     }
                 }
-                continue;
-            }
-            self.listings_by_day.remove(candidate.day());
-            pass_fresh_listing_days.remove(candidate.day());
-            let upload = match journal.upload(&candidate, files).await {
-                Ok(upload) => {
+                let listing_proves_custody = !preupload_listing_failed
+                    && listings_by_day.get(candidate.day()).is_some_and(|listing| {
+                        fresh_listing_proves_custody(
+                            listing,
+                            candidate.segment(),
+                            candidate.segment(),
+                            &local_files,
+                        )
+                    });
+                if listing_proves_custody {
+                    summary.custodied += 1;
                     summary.contacted = true;
                     self.backoff.successful_operation();
-                    upload
-                }
-                Err(SyncOperationError::RetainCandidate(code)) => {
-                    summary.diagnostic = Some(code);
+                    self.facts.pending_segments = self.facts.pending_segments.saturating_sub(1);
+                    if deletion_eligible
+                        && batch_fresh_listing_days.contains(candidate.day())
+                        && let Some(listing) = listings_by_day.get(candidate.day())
+                    {
+                        match delete_custodied_segment(
+                            &self.captures_root,
+                            &self.stream,
+                            today,
+                            self.retention_days,
+                            candidate,
+                            candidate.segment(),
+                            listing,
+                            self.instrumentation.clone(),
+                            Arc::clone(&self.retention_fence),
+                        )
+                        .await
+                        {
+                            RetentionOutcome::Retained => {
+                                summary.diagnostic = Some(DiagnosticCode::LocalSegmentInvalid);
+                            }
+                            RetentionOutcome::Deleted => {
+                                self.inventories.remove(candidate);
+                            }
+                            RetentionOutcome::Disabled | RetentionOutcome::Ineligible => {}
+                        }
+                    }
                     continue;
                 }
-                Err(error) => {
-                    summary.more_work = self.remaining_in_sweep > 0;
-                    return self.end_pass(summary, error);
+                listings_by_day.remove(candidate.day());
+                batch_fresh_listing_days.remove(candidate.day());
+                if activity.is_none() {
+                    activity = Some(ActivityGuard::new(self.activity.as_ref()));
                 }
-            };
-            if matches!(upload.status, UploadStatus::Conflict | UploadStatus::Failed) {
-                summary.diagnostic = Some(DiagnosticCode::LocalSegmentInvalid);
-                continue;
-            }
-            let Some(authoritative_key) = upload.authoritative_key else {
-                summary.more_work = self.remaining_in_sweep > 0;
-                return self.end_pass(
-                    summary,
-                    SyncOperationError::EndPass(SyncFailureClass::Contract),
-                );
-            };
-            let listing = match journal.segments(candidate.day()).await {
-                Ok(listing) => {
-                    summary.contacted = true;
-                    self.backoff.successful_operation();
-                    self.listings_by_day
-                        .insert(candidate.day().to_owned(), listing.clone());
-                    pass_fresh_listing_days.insert(candidate.day().to_owned());
-                    listing
-                }
-                Err(error) => {
-                    summary.more_work = self.remaining_in_sweep > 0;
-                    return self.end_pass(summary, error);
-                }
-            };
-            if !fresh_listing_proves_custody(
-                &listing,
-                candidate.segment(),
-                &authoritative_key,
-                &local_files,
-            ) {
-                summary.diagnostic = Some(DiagnosticCode::LocalSegmentInvalid);
-                continue;
-            }
-            summary.custodied += 1;
-            self.pending_uncustodied_in_sweep = self.pending_uncustodied_in_sweep.saturating_sub(1);
-            self.facts.pending_segments =
-                u64::try_from(self.pending_uncustodied_in_sweep).unwrap_or(u64::MAX);
-            match delete_custodied_segment(
-                &self.captures_root,
-                &self.stream,
-                today,
-                self.retention_days,
-                &candidate,
-                &authoritative_key,
-                &listing,
-            )
-            .await
-            {
-                RetentionOutcome::Deleted => {}
-                RetentionOutcome::Retained => {
+                let upload = match cancellable(&mut shutdown, journal.upload(candidate, files))
+                    .await
+                {
+                    Err(()) => return self.cancelled_sweep_with_activity(summary, activity).await,
+                    Ok(Ok(upload)) => {
+                        summary.contacted = true;
+                        self.backoff.successful_operation();
+                        upload
+                    }
+                    Ok(Err(SyncOperationError::RetainCandidate(code))) => {
+                        summary.diagnostic = Some(code);
+                        continue;
+                    }
+                    Ok(Err(error)) => {
+                        drop(activity);
+                        return self.end_sweep(summary, error);
+                    }
+                };
+                if matches!(upload.status, UploadStatus::Conflict | UploadStatus::Failed) {
                     summary.diagnostic = Some(DiagnosticCode::LocalSegmentInvalid);
+                    continue;
                 }
-                RetentionOutcome::Disabled | RetentionOutcome::Ineligible => {}
+                let Some(authoritative_key) = upload.authoritative_key else {
+                    drop(activity);
+                    return self.end_sweep(
+                        summary,
+                        SyncOperationError::EndPass(SyncFailureClass::Contract),
+                    );
+                };
+                let listing = match cancellable(&mut shutdown, journal.segments(candidate.day()))
+                    .await
+                {
+                    Err(()) => return self.cancelled_sweep_with_activity(summary, activity).await,
+                    Ok(Ok(listing)) => {
+                        summary.contacted = true;
+                        self.backoff.successful_operation();
+                        listings_by_day.insert(candidate.day().to_owned(), listing.clone());
+                        batch_fresh_listing_days.insert(candidate.day().to_owned());
+                        listing
+                    }
+                    Ok(Err(error)) => {
+                        drop(activity);
+                        return self.end_sweep(summary, error);
+                    }
+                };
+                if !fresh_listing_proves_custody(
+                    &listing,
+                    candidate.segment(),
+                    &authoritative_key,
+                    &local_files,
+                ) {
+                    summary.diagnostic = Some(DiagnosticCode::LocalSegmentInvalid);
+                    continue;
+                }
+                summary.custodied += 1;
+                self.facts.pending_segments = self.facts.pending_segments.saturating_sub(1);
+                match delete_custodied_segment(
+                    &self.captures_root,
+                    &self.stream,
+                    today,
+                    self.retention_days,
+                    candidate,
+                    &authoritative_key,
+                    &listing,
+                    self.instrumentation.clone(),
+                    Arc::clone(&self.retention_fence),
+                )
+                .await
+                {
+                    RetentionOutcome::Deleted => {
+                        self.inventories.remove(candidate);
+                    }
+                    RetentionOutcome::Retained => {
+                        summary.diagnostic = Some(DiagnosticCode::LocalSegmentInvalid);
+                    }
+                    RetentionOutcome::Disabled | RetentionOutcome::Ineligible => {}
+                }
+            }
+            if batch_index + 1 != candidates.chunks(SEGMENTS_PER_PASS).len() {
+                tokio::task::yield_now().await;
+                if shutdown_requested(&mut shutdown) {
+                    return self.cancelled_sweep_with_activity(summary, activity).await;
+                }
             }
         }
-        summary.more_work = self.remaining_in_sweep > 0;
+        drop(activity);
         summary
     }
 
-    fn update_facts(&mut self, summary: &SyncPassSummary) {
+    async fn inventory_for(
+        &mut self,
+        candidate: &SegmentCandidate,
+        paths: &[PathBuf],
+    ) -> Result<Vec<LocalFile>, ()> {
+        let paths = paths.to_vec();
+        let names = paths
+            .iter()
+            .map(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .map(str::to_owned)
+            })
+            .collect::<Option<Vec<_>>>()
+            .ok_or(())?;
+        let identity_paths = paths.clone();
+        let identities = tokio::task::spawn_blocking(move || file_identities(&identity_paths))
+            .await
+            .ok()
+            .flatten()
+            .ok_or(())?;
+        if let Some(cached) = self.inventories.get(candidate)
+            && cached.names == names
+            && cached.identities == identities
+        {
+            return Ok(cached.inventory.clone());
+        }
+        let inventory = inventory_files(paths, Some(self.instrumentation.clone()))
+            .await
+            .map_err(|_| ())?;
+        // Timestamps are an invalidation heuristic, not byte proof. A missed invalidation can
+        // only skip an upload: retention always re-inventories from disk before deletion.
+        self.inventories.insert(
+            candidate.clone(),
+            CachedInventory {
+                names,
+                identities,
+                inventory: inventory.clone(),
+            },
+        );
+        Ok(inventory)
+    }
+
+    async fn cancelled_sweep(&mut self, summary: SyncSweepSummary) -> SyncSweepSummary {
+        self.cancelled_sweep_with_activity(summary, None).await
+    }
+
+    async fn cancelled_sweep_with_activity(
+        &mut self,
+        mut summary: SyncSweepSummary,
+        activity: Option<ActivityGuard>,
+    ) -> SyncSweepSummary {
+        drop(activity);
+        summary.cancelled = true;
+        self.facts.sync_in_progress = false;
+        self.write_health().await;
+        summary
+    }
+
+    fn update_facts(&mut self, summary: &SyncSweepSummary) {
         let now = self.clock.wall_now().unix_timestamp();
         if summary.custodied > 0 {
             self.facts.successful_sync(now);
@@ -1032,12 +1246,11 @@ impl SyncScheduler {
         }
     }
 
-    fn end_pass(
+    fn end_sweep(
         &mut self,
-        mut summary: SyncPassSummary,
+        mut summary: SyncSweepSummary,
         error: SyncOperationError,
-    ) -> SyncPassSummary {
-        self.listings_by_day.clear();
+    ) -> SyncSweepSummary {
         let failure = match error {
             SyncOperationError::RetainCandidate(code) => {
                 summary.diagnostic = Some(code);
@@ -1224,6 +1437,7 @@ pub struct SyncTask {
     pub wake: SyncWake,
     pub activity: watch::Sender<SyncActivity>,
     pub health: HealthWriter,
+    pub retention_fence: Arc<RetentionFence>,
 }
 
 impl SyncTask {
@@ -1263,10 +1477,11 @@ impl SyncTask {
             self.clock,
             self.wake,
         )
-        .with_observability(self.activity, self.health);
+        .with_observability(self.activity, self.health)
+        .with_retention_fence(self.retention_fence);
         scheduler.facts.paired = true;
         scheduler
-            .run(&mut journal, wait_for_shutdown(&mut shutdown))
+            .run_with_shutdown(&mut journal, shutdown.clone())
             .await;
         if let Some(owner) = journal.owner
             && let Err(code) = owner.shutdown().await
@@ -1284,6 +1499,21 @@ async fn wait_for_shutdown(receiver: &mut watch::Receiver<bool>) {
         if receiver.changed().await.is_err() {
             return;
         }
+    }
+}
+
+fn shutdown_requested(receiver: &mut watch::Receiver<bool>) -> bool {
+    *receiver.borrow_and_update()
+}
+
+async fn cancellable<T>(
+    shutdown: &mut watch::Receiver<bool>,
+    operation: impl Future<Output = T>,
+) -> Result<T, ()> {
+    tokio::select! {
+        biased;
+        () = wait_for_shutdown(shutdown) => Err(()),
+        value = operation => Ok(value),
     }
 }
 
@@ -1313,6 +1543,7 @@ fn map_diagnostic(code: DiagnosticCode) -> SyncOperationError {
             DiagnosticCode::JournalTimeout,
         ),
         DiagnosticCode::JournalContractInvalid
+        | DiagnosticCode::JournalResponseTooLarge
         | DiagnosticCode::ConfiguredStreamMismatch
         | DiagnosticCode::RegistrationNameMismatch
         | DiagnosticCode::PrivateStateInvalid
@@ -1357,6 +1588,7 @@ fn map_journal_error(error: JournalError) -> SyncOperationError {
             ),
         },
         DiagnosticCode::JournalContractInvalid
+        | DiagnosticCode::JournalResponseTooLarge
         | DiagnosticCode::ConfiguredStreamMismatch
         | DiagnosticCode::RegistrationNameMismatch
         | DiagnosticCode::PrivateStateInvalid
@@ -1422,69 +1654,90 @@ fn scan_candidates(
     Ok(candidates)
 }
 
-fn candidates_after_cursor(
-    candidates: Vec<SegmentCandidate>,
-    cursor: Option<&SegmentCandidate>,
-) -> Vec<SegmentCandidate> {
-    let Some(cursor) = cursor else {
-        return candidates;
-    };
-    let start = candidates
-        .iter()
-        .position(|candidate| candidate == cursor)
-        .map(|index| (index + 1) % candidates.len())
-        .or_else(|| candidates.iter().position(|candidate| candidate < cursor))
-        .unwrap_or(0);
-    candidates[start..]
-        .iter()
-        .chain(&candidates[..start])
-        .cloned()
-        .collect()
+enum ResolvedSegmentFiles {
+    Found(Vec<PathBuf>),
+    Missing,
+    Invalid,
 }
 
 fn resolve_segment_files(
     captures_root: &Path,
     candidate: &SegmentCandidate,
-) -> Option<Vec<PathBuf>> {
-    let root_metadata = fs::symlink_metadata(captures_root).ok()?;
+) -> ResolvedSegmentFiles {
+    let Ok(root_metadata) = fs::symlink_metadata(captures_root) else {
+        return ResolvedSegmentFiles::Missing;
+    };
     if !is_plain_directory(&root_metadata) || parse_day(candidate.day()).is_none() {
-        return None;
+        return ResolvedSegmentFiles::Invalid;
     }
-    let day = exact_component(candidate.day())?;
-    let stream = exact_component(candidate.stream())?;
-    let segment = exact_component(candidate.segment())?;
+    let Some(day) = exact_component(candidate.day()) else {
+        return ResolvedSegmentFiles::Invalid;
+    };
+    let Some(stream) = exact_component(candidate.stream()) else {
+        return ResolvedSegmentFiles::Invalid;
+    };
+    let Some(segment) = exact_component(candidate.segment()) else {
+        return ResolvedSegmentFiles::Invalid;
+    };
     if !valid_segment_name(candidate.segment()) {
-        return None;
+        return ResolvedSegmentFiles::Invalid;
     }
-    let day_path = day.join_checked(captures_root).ok()?;
-    let stream_path = stream.join_checked(&day_path).ok()?;
-    let segment_path = segment.join_checked(&stream_path).ok()?;
+    let Ok(day_path) = day.join_checked(captures_root) else {
+        return ResolvedSegmentFiles::Invalid;
+    };
+    let Ok(stream_path) = stream.join_checked(&day_path) else {
+        return ResolvedSegmentFiles::Invalid;
+    };
+    let Ok(segment_path) = segment.join_checked(&stream_path) else {
+        return ResolvedSegmentFiles::Invalid;
+    };
     for directory in [&day_path, &stream_path, &segment_path] {
-        let metadata = fs::symlink_metadata(directory).ok()?;
+        let metadata = match fs::symlink_metadata(directory) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return ResolvedSegmentFiles::Missing;
+            }
+            Err(_) => return ResolvedSegmentFiles::Invalid,
+        };
         if !is_plain_directory(&metadata) {
-            return None;
+            return ResolvedSegmentFiles::Invalid;
         }
     }
 
     let mut files = Vec::new();
-    for entry in fs::read_dir(&segment_path).ok()? {
-        let entry = entry.ok()?;
-        let name = entry.file_name().into_string().ok()?;
-        if !valid_capture_filename(&name) || !plain_regular_entry(&entry) {
-            return None;
+    let entries = match fs::read_dir(&segment_path) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return ResolvedSegmentFiles::Missing;
         }
-        let component = exact_component(&name)?;
-        let path = component.join_checked(&segment_path).ok()?;
+        Err(_) => return ResolvedSegmentFiles::Invalid,
+    };
+    for entry in entries {
+        let Ok(entry) = entry else {
+            return ResolvedSegmentFiles::Invalid;
+        };
+        let Ok(name) = entry.file_name().into_string() else {
+            return ResolvedSegmentFiles::Invalid;
+        };
+        if !valid_capture_filename(&name) || !plain_regular_entry(&entry) {
+            return ResolvedSegmentFiles::Invalid;
+        }
+        let Some(component) = exact_component(&name) else {
+            return ResolvedSegmentFiles::Invalid;
+        };
+        let Ok(path) = component.join_checked(&segment_path) else {
+            return ResolvedSegmentFiles::Invalid;
+        };
         if path != entry.path() {
-            return None;
+            return ResolvedSegmentFiles::Invalid;
         }
         files.push(path);
     }
     if files.is_empty() {
-        return None;
+        return ResolvedSegmentFiles::Invalid;
     }
     files.sort();
-    Some(files)
+    ResolvedSegmentFiles::Found(files)
 }
 
 fn file_identities(paths: &[PathBuf]) -> Option<Vec<FileIdentity>> {
@@ -1498,6 +1751,10 @@ fn file_identities(paths: &[PathBuf]) -> Option<Vec<FileIdentity>> {
                 device: metadata.dev(),
                 inode: metadata.ino(),
                 size: metadata.len(),
+                mtime: metadata.mtime(),
+                mtime_nsec: metadata.mtime_nsec(),
+                ctime: metadata.ctime(),
+                ctime_nsec: metadata.ctime_nsec(),
             })
         })
         .collect()
@@ -1510,7 +1767,7 @@ fn delete_revalidated_segment(
     expected_identities: &[FileIdentity],
     delete_hook: Option<&(dyn Fn(usize) + Send + Sync)>,
 ) -> bool {
-    let Some(paths) = resolve_segment_files(captures_root, candidate) else {
+    let ResolvedSegmentFiles::Found(paths) = resolve_segment_files(captures_root, candidate) else {
         return false;
     };
     if paths != expected_paths || file_identities(&paths).as_deref() != Some(expected_identities) {

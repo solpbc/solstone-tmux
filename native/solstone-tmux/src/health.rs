@@ -28,6 +28,7 @@ pub enum DiagnosticCode {
     BridgeUnavailable,
     JournalUnavailable,
     JournalTimeout,
+    JournalResponseTooLarge,
     RegistrationFailed,
     JournalContractInvalid,
     ConfiguredStreamMismatch,
@@ -38,6 +39,7 @@ pub enum DiagnosticCode {
     SyncTaskExited,
     SyncTaskPanicked,
     SyncTaskCancelled,
+    SyncTaskTimedOut,
     IndicatorUpdateFailed,
 }
 
@@ -53,6 +55,7 @@ impl DiagnosticCode {
             Self::BridgeUnavailable => "bridge_unavailable",
             Self::JournalUnavailable => "journal_unavailable",
             Self::JournalTimeout => "journal_timeout",
+            Self::JournalResponseTooLarge => "journal_response_too_large",
             Self::RegistrationFailed => "registration_failed",
             Self::JournalContractInvalid => "journal_contract_invalid",
             Self::ConfiguredStreamMismatch => "configured_stream_mismatch",
@@ -63,6 +66,7 @@ impl DiagnosticCode {
             Self::SyncTaskExited => "sync_task_exited",
             Self::SyncTaskPanicked => "sync_task_panicked",
             Self::SyncTaskCancelled => "sync_task_cancelled",
+            Self::SyncTaskTimedOut => "sync_task_timed_out",
             Self::IndicatorUpdateFailed => "indicator_update_failed",
         }
     }
@@ -78,6 +82,7 @@ impl DiagnosticCode {
             Self::BridgeUnavailable => "private-link bridge is unavailable",
             Self::JournalUnavailable => "paired journal is unavailable",
             Self::JournalTimeout => "paired journal request timed out",
+            Self::JournalResponseTooLarge => "paired journal response exceeds the supported size",
             Self::RegistrationFailed => "journal registration failed",
             Self::JournalContractInvalid => "journal response did not match the contract",
             Self::ConfiguredStreamMismatch => {
@@ -90,6 +95,7 @@ impl DiagnosticCode {
             Self::SyncTaskExited => "sync task exited unexpectedly",
             Self::SyncTaskPanicked => "sync task failed: panic",
             Self::SyncTaskCancelled => "sync task failed: task was cancelled",
+            Self::SyncTaskTimedOut => "sync task did not stop within the shutdown deadline",
             Self::IndicatorUpdateFailed => "indicator update failed",
         }
     }

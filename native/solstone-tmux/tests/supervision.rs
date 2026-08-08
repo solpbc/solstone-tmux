@@ -19,7 +19,7 @@ use solstone_tmux::observer::{
 };
 use solstone_tmux::paths::ensure_private_directory;
 use solstone_tmux::segment::SegmentState;
-use solstone_tmux::sync::{SyncActivity, SyncWake};
+use solstone_tmux::sync::{RetentionFence, SyncActivity, SyncWake};
 use support::{TestDirectory, golden_capture};
 use time::{Date, Month, PrimitiveDateTime, Time, UtcOffset};
 
@@ -82,6 +82,7 @@ fn authorized_shutdown_joins_sync_before_indicator_and_lock_cleanup() {
             sync_stop,
             observer_stop,
             shutdown_barrier: supervisor_barrier,
+            retention_fence: Arc::new(RetentionFence::new()),
         },
     ));
 
@@ -90,6 +91,48 @@ fn authorized_shutdown_joins_sync_before_indicator_and_lock_cleanup() {
         *log.lock().expect("log poisoned"),
         ["sync", "indicator", "lock"]
     );
+}
+
+#[tokio::test(start_paused = true)]
+async fn uncooperative_sync_times_out_before_indicator_and_lock_cleanup() {
+    let log = Arc::new(Mutex::new(Vec::new()));
+    let (_activity, activity_receiver) = tokio::sync::watch::channel(SyncActivity::Idle);
+    let (sync_stop, _sync_shutdown) = tokio::sync::watch::channel(false);
+    let (observer_stop, _observer_shutdown) =
+        tokio::sync::watch::channel::<Option<ShutdownEvent>>(None);
+    let (observer_barrier, supervisor_barrier) = shutdown_barrier();
+    drop(observer_barrier);
+    let observer = async {
+        ObserverExit {
+            exit_code: 0,
+            shutdown_event: Some(ShutdownEvent::SigTerm),
+            failures: Vec::new(),
+        }
+    };
+    let task = tokio::spawn(supervise_observer(
+        observer,
+        std::future::pending::<Result<(), DiagnosticCode>>(),
+        Box::new(RecordingIndicator(Arc::clone(&log))),
+        Box::new(RecordingLock(Arc::clone(&log))),
+        SupervisionControl {
+            activity: activity_receiver,
+            sync_stop,
+            observer_stop,
+            shutdown_barrier: supervisor_barrier,
+            retention_fence: Arc::new(RetentionFence::new()),
+        },
+    ));
+
+    tokio::task::yield_now().await;
+    tokio::time::advance(Duration::from_secs(15)).await;
+    let exit = task.await.expect("join supervisor");
+
+    assert_eq!(exit.exit_code, 1);
+    assert_eq!(
+        exit.failures,
+        [DiagnosticCode::SyncTaskTimedOut.message().to_owned()]
+    );
+    assert_eq!(*log.lock().expect("log poisoned"), ["indicator", "lock"]);
 }
 
 #[test]
@@ -147,6 +190,7 @@ fn activity_borrow_is_released_before_indicator_update_awaits() {
                     sync_stop,
                     observer_stop,
                     shutdown_barrier: supervisor_barrier,
+                    retention_fence: Arc::new(RetentionFence::new()),
                 },
             ),
         )
@@ -235,6 +279,7 @@ fn shutdown_keeps_the_final_segment_for_a_later_scan() {
             sync_stop,
             observer_stop,
             shutdown_barrier: supervisor_barrier,
+            retention_fence: Arc::new(RetentionFence::new()),
         },
     ));
 
@@ -284,6 +329,7 @@ async fn supervise_fixture(
             sync_stop,
             observer_stop,
             shutdown_barrier: supervisor_barrier,
+            retention_fence: Arc::new(RetentionFence::new()),
         },
     )
     .await

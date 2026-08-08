@@ -18,7 +18,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use solstone_tmux::clock::{Clock, TestClock};
 use solstone_tmux::health::DiagnosticCode;
-use solstone_tmux::journal::{RegistrationDescriptor, UploadStatus, inventory_files};
+use solstone_tmux::journal::{JournalError, RegistrationDescriptor, UploadStatus, inventory_files};
 use solstone_tmux::model::{CaptureResult, PaneInfo, WindowInfo};
 use solstone_tmux::name::derive_component;
 use solstone_tmux::observer::{
@@ -45,6 +45,7 @@ const UPLOAD_DAY: &str = "20260728";
 const UPLOAD_SEGMENT: &str = "120000_300";
 const FIRST_UPLOAD_FILE: &str = "tmux_main_screen.jsonl";
 const SECOND_UPLOAD_FILE: &str = "tmux_work_screen.jsonl";
+const MAX_RESPONSE_BODY_BYTES: usize = 4 * 1024 * 1024;
 
 #[test]
 fn bridge_registration_composes_on_the_production_runtime_shape() {
@@ -162,6 +163,64 @@ fn bridge_registration_composes_on_the_production_runtime_shape() {
 }
 
 #[test]
+fn journal_response_body_limit_applies_to_success_and_error_responses() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_io()
+        .enable_time()
+        .build()
+        .expect("build current-thread runtime");
+    runtime.block_on(async {
+        let peer = PrivateLinkPeer::start().await;
+        let credential = peer.credential();
+        let temporary = TestDirectory::new("bridge-response-limit");
+        ensure_private_directory(temporary.path()).expect("create private config root");
+        peer.enqueue_response(200, registration_response("/app/observer/ingest"));
+        let owner = RegistrationOwner::start(credential, temporary.path().to_path_buf())
+            .await
+            .expect("start registration owner");
+        owner
+            .ensure_registration(&descriptor(), "test-name")
+            .await
+            .expect("register observer");
+
+        peer.enqueue_response(200, vec![b'x'; MAX_RESPONSE_BODY_BYTES + 1]);
+        assert_response_too_large(
+            "declared",
+            owner.journal().ingest_segments(UPLOAD_DAY).await,
+        );
+
+        peer.enqueue_response(200, padded_segments_response(MAX_RESPONSE_BODY_BYTES));
+        assert!(
+            owner
+                .journal()
+                .ingest_segments(UPLOAD_DAY)
+                .await
+                .expect("exact-limit response")
+                .items
+                .is_empty()
+        );
+
+        peer.enqueue_response(500, vec![b'x'; MAX_RESPONSE_BODY_BYTES + 1]);
+        assert_response_too_large("error", owner.journal().ingest_segments(UPLOAD_DAY).await);
+
+        peer.enqueue_raw_response(chunked_response(MAX_RESPONSE_BODY_BYTES + 1));
+        assert_response_too_large("chunked", owner.journal().ingest_segments(UPLOAD_DAY).await);
+
+        peer.enqueue_raw_response(raw_response(
+            "HTTP/1.0 200 OK\r\ncontent-type: application/json\r\n\r\n",
+            vec![b'x'; MAX_RESPONSE_BODY_BYTES + 1],
+        ));
+        assert_response_too_large(
+            "close-delimited",
+            owner.journal().ingest_segments(UPLOAD_DAY).await,
+        );
+
+        owner.shutdown().await.expect("shutdown registration owner");
+        peer.shutdown().await;
+    });
+}
+
+#[test]
 fn registration_rejects_unconfined_ingest_locations() {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_io()
@@ -256,7 +315,7 @@ fn slow_large_multipart_preserves_capture_on_the_production_runtime() {
                 total_file_bytes > INITIAL_WINDOW,
                 "serializer fixture did not exceed the mux window"
             );
-            let inventory = inventory_files(vec![first_path.clone(), second_path.clone()])
+            let inventory = inventory_files(vec![first_path.clone(), second_path.clone()], None)
                 .await
                 .expect("inventory upload fixture");
             assert_eq!(inventory.len(), 2);
@@ -424,6 +483,47 @@ fn registration_response(ingest_url: &str) -> Vec<u8> {
         "protocol_version": 2
     }))
     .expect("serialize registration response")
+}
+
+fn padded_segments_response(length: usize) -> Vec<u8> {
+    let mut body = br#"{"items":[],"total":0,"protocol_version":2}"#.to_vec();
+    body.resize(length, b' ');
+    body
+}
+
+fn raw_response(head: &str, body: Vec<u8>) -> Vec<u8> {
+    let mut response = head.as_bytes().to_vec();
+    response.extend_from_slice(&body);
+    response
+}
+
+fn chunked_response(length: usize) -> Vec<u8> {
+    let mut response =
+        b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ntransfer-encoding: chunked\r\n\r\n"
+            .to_vec();
+    let mut remaining = length;
+    while remaining != 0 {
+        let chunk_length = remaining.min(16 * 1024);
+        response.extend_from_slice(format!("{chunk_length:X}\r\n").as_bytes());
+        response.extend(std::iter::repeat_n(b'x', chunk_length));
+        response.extend_from_slice(b"\r\n");
+        remaining -= chunk_length;
+    }
+    response.extend_from_slice(b"0\r\n\r\n");
+    response
+}
+
+fn assert_response_too_large(
+    context: &str,
+    result: Result<solstone_tmux::journal::SegmentsEnvelope, JournalError>,
+) {
+    assert_eq!(
+        result
+            .expect_err("oversize response was accepted")
+            .diagnostic(),
+        DiagnosticCode::JournalResponseTooLarge,
+        "{context} response"
+    );
 }
 
 fn assert_registration_body(body: &[u8]) {

@@ -27,7 +27,7 @@ use solstone_tmux::segment::SegmentState;
 use solstone_tmux::service::{
     ServiceController, ServiceStatus, current_platform, load_local_observer, status_exit_code,
 };
-use solstone_tmux::sync::{SyncActivity, SyncTask, SyncWake};
+use solstone_tmux::sync::{RetentionFence, SyncActivity, SyncTask, SyncWake};
 use solstone_tmux::tmux::TmuxAdapter;
 use time::UtcOffset;
 
@@ -216,6 +216,7 @@ fn run_native(
     );
     let health = HealthWriter::new(data_root.clone(), &instance_lock);
     let (activity_sender, activity_receiver) = tokio::sync::watch::channel(SyncActivity::Idle);
+    let retention_fence = Arc::new(RetentionFence::new());
     let (sync_stop, sync_shutdown) = tokio::sync::watch::channel(false);
     let (observer_stop, mut observer_shutdown) =
         tokio::sync::watch::channel::<Option<solstone_tmux::observer::ShutdownEvent>>(None);
@@ -256,6 +257,7 @@ fn run_native(
         wake: sync_wake,
         activity: activity_sender,
         health,
+        retention_fence: Arc::clone(&retention_fence),
     }
     .run(sync_shutdown);
     let exit = runtime.block_on(supervise_observer(
@@ -268,6 +270,7 @@ fn run_native(
             sync_stop,
             observer_stop,
             shutdown_barrier: supervisor_shutdown_barrier,
+            retention_fence,
         },
     ));
     for failure in &exit.failures {

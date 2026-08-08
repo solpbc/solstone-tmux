@@ -313,6 +313,7 @@ async fn supervise_test_future(
             sync_stop,
             observer_stop,
             shutdown_barrier,
+            retention_fence: Arc::new(solstone_tmux::sync::RetentionFence::new()),
         },
     )
     .await

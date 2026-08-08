@@ -232,6 +232,9 @@ impl<I: IndicatorIo> IndicatorOwnership<I> {
             self.solstone_owned = false;
             return Ok(false);
         }
+        if value == self.written_solstone {
+            return Ok(true);
+        }
         self.io.write(SOLSTONE_OPTION, &value).await?;
         self.written_solstone = value;
         Ok(true)

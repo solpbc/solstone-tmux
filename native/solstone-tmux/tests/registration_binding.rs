@@ -321,6 +321,7 @@ async fn run_binding_failure(
             wake: SyncWake::default(),
             activity,
             health: HealthWriter::new(fixture.data_root.clone(), &lock),
+            retention_fence: Arc::new(solstone_tmux::sync::RetentionFence::new()),
         }
         .run(sync_shutdown),
     );

@@ -55,9 +55,9 @@ impl PeerRequest {
     }
 }
 
-struct PeerResponse {
-    status: u16,
-    body: Vec<u8>,
+enum PeerResponse {
+    Structured { status: u16, body: Vec<u8> },
+    Raw(Vec<u8>),
 }
 
 struct OutboundResponse {
@@ -120,10 +120,14 @@ impl PrivateLinkPeer {
     }
 
     pub fn enqueue_response(&self, status: u16, body: impl Into<Vec<u8>>) {
-        lock(&self.state.responses).push_back(PeerResponse {
+        lock(&self.state.responses).push_back(PeerResponse::Structured {
             status,
             body: body.into(),
         });
+    }
+
+    pub fn enqueue_raw_response(&self, response: impl Into<Vec<u8>>) {
+        lock(&self.state.responses).push_back(PeerResponse::Raw(response.into()));
     }
 
     pub fn requests(&self) -> Vec<PeerRequest> {
@@ -319,12 +323,17 @@ async fn handle_carrier(
                         let response =
                             lock(&state.responses)
                                 .pop_front()
-                                .unwrap_or(PeerResponse {
-                            status: 500,
-                            body: Vec::new(),
-                        });
+                                .unwrap_or(PeerResponse::Structured {
+                                    status: 500,
+                                    body: Vec::new(),
+                                });
                         let mut output = OutboundResponse {
-                            bytes: encode_response(response),
+                            bytes: match response {
+                                PeerResponse::Structured { status, body } => {
+                                    encode_response(status, body)
+                                }
+                                PeerResponse::Raw(bytes) => bytes,
+                            },
                             offset: 0,
                             credit: INITIAL_WINDOW,
                         };
@@ -398,8 +407,8 @@ async fn write_frame(writer: &mut WriteHalf<TlsStream<TcpStream>>, frame: Frame)
     writer.flush().await
 }
 
-fn encode_response(response: PeerResponse) -> Vec<u8> {
-    let reason = match response.status {
+fn encode_response(status: u16, body: Vec<u8>) -> Vec<u8> {
+    let reason = match status {
         200 => "OK",
         201 => "Created",
         400 => "Bad Request",
@@ -411,12 +420,12 @@ fn encode_response(response: PeerResponse) -> Vec<u8> {
     };
     let head = format!(
         "HTTP/1.1 {} {}\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n",
-        response.status,
+        status,
         reason,
-        response.body.len()
+        body.len()
     );
     let mut bytes = head.into_bytes();
-    bytes.extend_from_slice(&response.body);
+    bytes.extend_from_slice(&body);
     bytes
 }
 

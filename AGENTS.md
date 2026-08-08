@@ -194,15 +194,22 @@ observer state is persisted.
 
 ### Sync and custody
 
-The sync task rescans on startup, segment finalization, and periodic wakeups. It
-processes at most eight candidates sequentially per pass and owns one bounded
-backoff sequence. Before uploading, it may reuse a Journal listing fetched
-during the current sweep to prove existing custody; a failed pre-upload lookup
-falls through to the normal upload path. Listings are reused only for that
-sweep and refreshed after uploads. A listing may authorize local deletion only
-when it was freshly fetched during the current pass. Upload success alone never
-permits deletion: a fresh Journal listing must prove filename, SHA-256 digest,
-and held status for every local file.
+The sync task takes one filesystem snapshot on startup, segment finalization,
+and periodic wakeups, then processes that snapshot in sequential groups of at
+most eight candidates, yielding between groups. It owns one bounded backoff
+sequence. Local file inventories are reused while the sorted member names and
+file identities match; a content rewrite, member addition, removal, or rename
+invalidates that reuse. A Journal listing may be reused for the current sweep
+to skip an upload, while deletion requires a listing fetched in the current
+group. A failed pre-upload lookup falls through to the normal upload path.
+Upload success alone never permits deletion: a fresh Journal listing and a new
+local inventory must prove filename, SHA-256 digest, and held status for every
+local file. Journal responses are limited to 4 MiB.
+
+Supervision gives sync fifteen seconds to stop during an authorized shutdown.
+If an irreversible retention deletion is already running, the instance lock is
+held until it reaches a terminal outcome, then the indicator is restored and
+the lock is released.
 
 ### Service lifecycle
 

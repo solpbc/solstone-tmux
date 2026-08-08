@@ -4,17 +4,25 @@
 mod support;
 
 use std::fs;
+use std::future::Future;
 use std::os::unix::fs::symlink;
 use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::pin::Pin;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use solstone_tmux::journal::{
     ListingFileStatus, SegmentFile, SegmentItem, SegmentsEnvelope, inventory_files,
 };
 use solstone_tmux::name::{DerivedName, derive_component};
+use solstone_tmux::observer::{
+    LifecycleLock, ObserverExit, ObserverOperationError, ShutdownEvent, ShutdownIndicator,
+    SupervisionControl, shutdown_barrier, supervise_observer,
+};
 use solstone_tmux::sync::{
-    RetentionOutcome, SegmentCandidate, delete_custodied_segment,
+    RetentionFence, RetentionOutcome, SegmentCandidate, SyncActivity,
+    delete_custodied_segment as delete_custodied_segment_fenced,
     delete_custodied_segment_with_hook,
 };
 use support::TestDirectory;
@@ -23,6 +31,29 @@ use time::{Date, Month};
 const STREAM: &str = "host.tmux";
 const SEGMENT: &str = "120000_300";
 const FILE: &str = "tmux_main_screen.jsonl";
+
+async fn delete_custodied_segment(
+    captures_root: &Path,
+    configured_stream: &DerivedName,
+    today: Date,
+    retention_days: i64,
+    candidate: &SegmentCandidate,
+    authoritative_key: &str,
+    listing: &SegmentsEnvelope,
+) -> RetentionOutcome {
+    delete_custodied_segment_fenced(
+        captures_root,
+        configured_stream,
+        today,
+        retention_days,
+        candidate,
+        authoritative_key,
+        listing,
+        solstone_tmux::sync::SyncInstrumentation::default(),
+        Arc::new(RetentionFence::new()),
+    )
+    .await
+}
 
 #[test]
 fn negative_retention_returns_before_traversing() {
@@ -161,6 +192,34 @@ fn custody_is_required_before_deletion() {
 
         assert_eq!(outcome, RetentionOutcome::Retained);
         assert!(segment.is_dir());
+    });
+}
+
+#[test]
+fn retention_reinventory_hashes_are_counted() {
+    run(async {
+        let temporary = TestDirectory::new("retention-instrumentation");
+        let captures = temporary.path().join("captures");
+        let segment = create_segment(temporary.path(), "captures", "20260701", STREAM, SEGMENT);
+        let candidate = SegmentCandidate::new("20260701", STREAM, SEGMENT);
+        let listing = listing_for(&segment, &candidate, ListingFileStatus::Present).await;
+        let instrumentation = solstone_tmux::sync::SyncInstrumentation::default();
+
+        let outcome = delete_custodied_segment_fenced(
+            &captures,
+            &stream(),
+            today(),
+            0,
+            &candidate,
+            SEGMENT,
+            &listing,
+            instrumentation.clone(),
+            Arc::new(RetentionFence::new()),
+        )
+        .await;
+
+        assert_eq!(outcome, RetentionOutcome::Deleted);
+        assert!(instrumentation.snapshot().hashed_files >= 2);
     });
 }
 
@@ -320,6 +379,8 @@ fn replacement_between_inspection_and_unlink_is_retained() {
             &candidate,
             (SEGMENT, &listing),
             hook,
+            solstone_tmux::sync::SyncInstrumentation::default(),
+            Arc::new(RetentionFence::new()),
         )
         .await;
 
@@ -364,6 +425,8 @@ fn mid_deletion_failure_restores_every_removed_file() {
             &candidate,
             (SEGMENT, &listing),
             hook,
+            solstone_tmux::sync::SyncInstrumentation::default(),
+            Arc::new(RetentionFence::new()),
         )
         .await;
 
@@ -382,6 +445,101 @@ fn mid_deletion_failure_restores_every_removed_file() {
             b"replacement\n"
         );
     });
+}
+
+#[tokio::test(start_paused = true)]
+async fn retention_fence_keeps_the_lock_until_a_gated_unlink_finishes() {
+    let temporary = TestDirectory::new("retention-fence");
+    let captures = temporary.path().join("captures");
+    let segment = create_segment(temporary.path(), "captures", "20260701", STREAM, SEGMENT);
+    let candidate = SegmentCandidate::new("20260701", STREAM, SEGMENT);
+    let listing = listing_for(&segment, &candidate, ListingFileStatus::Present).await;
+    let fence = Arc::new(RetentionFence::new());
+    let (entered_sender, entered_receiver) = tokio::sync::oneshot::channel();
+    let entered_sender = Arc::new(Mutex::new(Some(entered_sender)));
+    let (release_sender, release_receiver) = std::sync::mpsc::channel();
+    let release_receiver = Arc::new(Mutex::new(Some(release_receiver)));
+    let hook_entered = Arc::clone(&entered_sender);
+    let hook_release = Arc::clone(&release_receiver);
+    let hook = Arc::new(move |index| {
+        if index == 0 {
+            if let Some(sender) = hook_entered.lock().expect("entered lock poisoned").take() {
+                let _ = sender.send(());
+            }
+            if let Some(receiver) = hook_release.lock().expect("release lock poisoned").take() {
+                let _ = receiver.recv();
+            }
+        }
+    });
+    let sync_fence = Arc::clone(&fence);
+    let sync = async move {
+        let _ = delete_custodied_segment_with_hook(
+            &captures,
+            &stream(),
+            today(),
+            0,
+            &candidate,
+            (SEGMENT, &listing),
+            hook,
+            solstone_tmux::sync::SyncInstrumentation::default(),
+            sync_fence,
+        )
+        .await;
+        Ok(())
+    };
+    let (observer_release, observer_wait) = tokio::sync::oneshot::channel();
+    let observer = async move {
+        let _ = observer_wait.await;
+        ObserverExit {
+            exit_code: 0,
+            shutdown_event: Some(ShutdownEvent::SigTerm),
+            failures: Vec::new(),
+        }
+    };
+    let log = Arc::new(Mutex::new(Vec::new()));
+    let (_activity, activity) = tokio::sync::watch::channel(SyncActivity::Idle);
+    let (sync_stop, _sync_shutdown) = tokio::sync::watch::channel(false);
+    let (observer_stop, _observer_shutdown) =
+        tokio::sync::watch::channel::<Option<ShutdownEvent>>(None);
+    let (observer_barrier, supervisor_barrier) = shutdown_barrier();
+    drop(observer_barrier);
+    let supervision = tokio::spawn(supervise_observer(
+        observer,
+        sync,
+        Box::new(RecordingIndicator(Arc::clone(&log))),
+        Box::new(RecordingLock(Arc::clone(&log))),
+        SupervisionControl {
+            activity,
+            sync_stop,
+            observer_stop,
+            shutdown_barrier: supervisor_barrier,
+            retention_fence: Arc::clone(&fence),
+        },
+    ));
+
+    entered_receiver.await.expect("unlink entered hook");
+    observer_release.send(()).expect("request shutdown");
+    tokio::task::yield_now().await;
+    tokio::time::advance(Duration::from_secs(15)).await;
+    tokio::task::yield_now().await;
+    assert!(log.lock().expect("log poisoned").is_empty());
+
+    release_sender.send(()).expect("release unlink");
+    let exit = supervision.await.expect("join supervision");
+    assert_eq!(exit.exit_code, 1);
+    assert_eq!(
+        exit.failures,
+        [solstone_tmux::health::DiagnosticCode::SyncTaskTimedOut
+            .message()
+            .to_owned()]
+    );
+    assert_eq!(*log.lock().expect("log poisoned"), ["indicator", "lock"]);
+    assert!(!segment.exists());
+
+    fs::create_dir_all(&segment).expect("recreate released segment");
+    fs::write(segment.join(FILE), b"replacement after release\n").expect("write replacement");
+    tokio::task::yield_now().await;
+    assert!(segment.join(FILE).is_file());
 }
 
 fn run(future: impl std::future::Future<Output = ()>) {
@@ -410,6 +568,29 @@ fn segment_dir(captures: &Path, day: &str, stream: &str, segment: &str) -> PathB
     captures.join(day).join(stream).join(segment)
 }
 
+struct RecordingIndicator(Arc<Mutex<Vec<&'static str>>>);
+
+impl ShutdownIndicator for RecordingIndicator {
+    fn restore<'a>(
+        &'a mut self,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ObserverOperationError>> + Send + 'a>> {
+        Box::pin(async move {
+            self.0.lock().expect("log poisoned").push("indicator");
+            Ok(())
+        })
+    }
+}
+
+struct RecordingLock(Arc<Mutex<Vec<&'static str>>>);
+
+impl LifecycleLock for RecordingLock {}
+
+impl Drop for RecordingLock {
+    fn drop(&mut self) {
+        self.0.lock().expect("log poisoned").push("lock");
+    }
+}
+
 async fn listing_for(
     segment: &Path,
     candidate: &SegmentCandidate,
@@ -419,7 +600,9 @@ async fn listing_for(
         .expect("read fixture segment")
         .map(|entry| entry.expect("read fixture entry").path())
         .collect::<Vec<_>>();
-    let local = inventory_files(paths).await.expect("inventory fixture");
+    let local = inventory_files(paths, None)
+        .await
+        .expect("inventory fixture");
     let files = local
         .into_iter()
         .map(|file| SegmentFile {

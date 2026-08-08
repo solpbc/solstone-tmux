@@ -28,6 +28,7 @@ use crate::private_link::{
     MAX_REQUEST_BODY_BYTES, ObserverState, PrivateLinkBridge, contains_invalid_header_value,
 };
 use crate::storage::open_regular_readonly;
+use crate::sync::SyncInstrumentation;
 
 const REGISTER_PATH: &str = "/app/observer/register";
 const SEGMENTS_PATH: &str = "/app/observer/ingest/segments";
@@ -35,6 +36,7 @@ const EVENT_PATH: &str = "/app/observer/ingest/event";
 const LOOPBACK_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const FILE_STAGE_CAPACITY: usize = UPLOAD_BODY_STAGE_CAPACITY / RECOMMENDED_CHUNK;
+const MAX_RESPONSE_BODY_BYTES: usize = 4 * 1024 * 1024;
 
 #[derive(Clone)]
 pub struct RegistrationDescriptor {
@@ -429,12 +431,7 @@ impl JournalClient {
                 ))
             })?;
         let status = response.status();
-        let body = response.bytes().await.map_err(|error| {
-            JournalError::local(request_diagnostic(
-                &error,
-                DiagnosticCode::JournalContractInvalid,
-            ))
-        })?;
+        let body = collect_response_body(response).await?;
         if status != StatusCode::OK {
             return Err(classify_error_response(status.as_u16(), &body));
         }
@@ -464,7 +461,7 @@ impl JournalClient {
         if !valid_day(day) || !valid_component(segment) || paths.is_empty() {
             return Err(JournalError::local(DiagnosticCode::LocalSegmentInvalid));
         }
-        let prepared = tokio::task::spawn_blocking(move || prepare_files(paths))
+        let prepared = tokio::task::spawn_blocking(move || prepare_files(paths, None))
             .await
             .map_err(|_| JournalError::local(DiagnosticCode::LocalSegmentInvalid))??;
         let mut producers = Vec::with_capacity(prepared.len());
@@ -516,12 +513,7 @@ impl JournalClient {
         }
         let response = response?;
         let status = response.status();
-        let body = response.bytes().await.map_err(|error| {
-            JournalError::local(request_diagnostic(
-                &error,
-                DiagnosticCode::JournalContractInvalid,
-            ))
-        })?;
+        let body = collect_response_body(response).await?;
         if status != StatusCode::OK {
             return Err(classify_error_response(status.as_u16(), &body));
         }
@@ -544,12 +536,7 @@ impl JournalClient {
                 ))
             })?;
         let status = response.status();
-        let body = response.bytes().await.map_err(|error| {
-            JournalError::local(request_diagnostic(
-                &error,
-                DiagnosticCode::JournalContractInvalid,
-            ))
-        })?;
+        let body = collect_response_body(response).await?;
         if status != StatusCode::OK {
             return Err(classify_error_response(status.as_u16(), &body));
         }
@@ -588,17 +575,41 @@ impl JournalClient {
                 ))
             })?;
         let status = response.status();
-        let body = response.bytes().await.map_err(|error| {
-            JournalError::local(request_diagnostic(
-                &error,
-                DiagnosticCode::JournalContractInvalid,
-            ))
-        })?;
+        let body = collect_response_body(response).await?;
         if status != StatusCode::OK {
             return Err(classify_error_response(status.as_u16(), &body));
         }
         decode_event_response(&body)
     }
+}
+
+async fn collect_response_body(mut response: reqwest::Response) -> Result<Vec<u8>, JournalError> {
+    let declared_length = response.content_length().or_else(|| {
+        response
+            .headers()
+            .get(CONTENT_LENGTH)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<u64>().ok())
+    });
+    if declared_length.is_some_and(|length| length > MAX_RESPONSE_BODY_BYTES as u64) {
+        return Err(JournalError::local(DiagnosticCode::JournalResponseTooLarge));
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|error| {
+        JournalError::local(request_diagnostic(
+            &error,
+            DiagnosticCode::JournalContractInvalid,
+        ))
+    })? {
+        let Some(length) = body.len().checked_add(chunk.len()) else {
+            return Err(JournalError::local(DiagnosticCode::JournalResponseTooLarge));
+        };
+        if length > MAX_RESPONSE_BODY_BYTES {
+            return Err(JournalError::local(DiagnosticCode::JournalResponseTooLarge));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
 }
 
 pub fn decode_registration_response(
@@ -679,10 +690,14 @@ pub fn classify_error_response(status: u16, body: &[u8]) -> JournalError {
     }
 }
 
-pub async fn inventory_files(paths: Vec<PathBuf>) -> Result<Vec<LocalFile>, JournalError> {
-    let prepared = tokio::task::spawn_blocking(move || prepare_files(paths))
-        .await
-        .map_err(|_| JournalError::local(DiagnosticCode::LocalSegmentInvalid))??;
+pub async fn inventory_files(
+    paths: Vec<PathBuf>,
+    instrumentation: Option<SyncInstrumentation>,
+) -> Result<Vec<LocalFile>, JournalError> {
+    let prepared =
+        tokio::task::spawn_blocking(move || prepare_files(paths, instrumentation.as_ref()))
+            .await
+            .map_err(|_| JournalError::local(DiagnosticCode::LocalSegmentInvalid))??;
     Ok(prepared
         .into_iter()
         .map(|prepared| prepared.descriptor)
@@ -735,14 +750,23 @@ fn confine_path(origin: &Url, path: &str) -> Result<Url, DiagnosticCode> {
     Ok(url)
 }
 
-fn prepare_files(paths: Vec<PathBuf>) -> Result<Vec<PreparedFile>, JournalError> {
+fn prepare_files(
+    paths: Vec<PathBuf>,
+    instrumentation: Option<&SyncInstrumentation>,
+) -> Result<Vec<PreparedFile>, JournalError> {
     if paths.is_empty() {
         return Err(JournalError::local(DiagnosticCode::LocalSegmentInvalid));
     }
-    paths.into_iter().map(|path| prepare_file(&path)).collect()
+    paths
+        .into_iter()
+        .map(|path| prepare_file(&path, instrumentation))
+        .collect()
 }
 
-fn prepare_file(path: &Path) -> Result<PreparedFile, JournalError> {
+fn prepare_file(
+    path: &Path,
+    instrumentation: Option<&SyncInstrumentation>,
+) -> Result<PreparedFile, JournalError> {
     let parent = path
         .parent()
         .ok_or_else(|| JournalError::local(DiagnosticCode::LocalSegmentInvalid))?;
@@ -779,6 +803,9 @@ fn prepare_file(path: &Path) -> Result<PreparedFile, JournalError> {
     }
     file.seek(SeekFrom::Start(0))
         .map_err(|_| JournalError::local(DiagnosticCode::LocalSegmentInvalid))?;
+    if let Some(instrumentation) = instrumentation {
+        instrumentation.hashed_file(size);
+    }
     Ok(PreparedFile {
         descriptor: LocalFile {
             name: name.to_owned(),

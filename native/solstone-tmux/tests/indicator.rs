@@ -153,6 +153,39 @@ async fn activity_seam_sets_yellow_only_while_working() {
 }
 
 #[tokio::test]
+async fn owned_activity_updates_are_idempotent_but_real_changes_write_once() {
+    let io = MemoryIndicator::with([
+        (STATUS_LEFT, OptionValue::Present("owner status".to_owned())),
+        (SOLSTONE_OPTION, OptionValue::Absent),
+    ]);
+    let mut ownership = install(io.clone()).await;
+    io.clear_log();
+
+    assert!(
+        ownership
+            .update_solstone("observer".to_owned())
+            .await
+            .expect("repeat owned value")
+    );
+    assert_eq!(io.log(), vec![format!("read:{SOLSTONE_OPTION}")]);
+
+    io.clear_log();
+    assert!(
+        ownership
+            .update_solstone("observer-new".to_owned())
+            .await
+            .expect("change owned value")
+    );
+    assert_eq!(
+        io.log(),
+        vec![
+            format!("read:{SOLSTONE_OPTION}"),
+            format!("write:{SOLSTONE_OPTION}"),
+        ]
+    );
+}
+
+#[tokio::test]
 async fn matching_owned_status_left_is_restored() {
     let io = MemoryIndicator::with([
         (STATUS_LEFT, OptionValue::Present("owner status".to_owned())),
@@ -263,6 +296,42 @@ async fn ownership_is_relinquished_after_external_change() {
 }
 
 #[tokio::test]
+async fn externally_changed_cached_value_relinquishes_without_writing() {
+    let io = MemoryIndicator::with([
+        (STATUS_LEFT, OptionValue::Present("owner status".to_owned())),
+        (SOLSTONE_OPTION, OptionValue::Absent),
+    ]);
+    let mut ownership = install(io.clone()).await;
+    io.set_external(SOLSTONE_OPTION, OptionValue::Present("external".to_owned()));
+    io.clear_log();
+
+    assert!(
+        !ownership
+            .update_solstone("observer".to_owned())
+            .await
+            .expect("relinquish cached value")
+    );
+    assert_eq!(io.log(), vec![format!("read:{SOLSTONE_OPTION}")]);
+
+    io.clear_log();
+    assert!(
+        !ownership
+            .update_solstone("observer".to_owned())
+            .await
+            .expect("remain relinquished")
+    );
+    ownership
+        .restore()
+        .await
+        .expect("restore relinquished ownership");
+    assert!(
+        io.log()
+            .iter()
+            .all(|entry| entry != &format!("write:{SOLSTONE_OPTION}"))
+    );
+}
+
+#[tokio::test]
 async fn sun_to_underscore_status_left_is_preserved() {
     // Pin that these constants model only the observed sun-to-underscore substitution,
     // so the preservation assertion below specifically exercises that normalization.
@@ -367,6 +436,7 @@ async fn install(io: MemoryIndicator) -> IndicatorOwnership<MemoryIndicator> {
 #[derive(Clone, Default)]
 struct MemoryIndicator {
     values: Arc<Mutex<HashMap<String, OptionValue>>>,
+    log: Arc<Mutex<Vec<String>>>,
 }
 
 impl MemoryIndicator {
@@ -378,6 +448,7 @@ impl MemoryIndicator {
                     .map(|(name, value)| (name.to_owned(), value))
                     .collect(),
             )),
+            log: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -396,6 +467,14 @@ impl MemoryIndicator {
             .expect("indicator state poisoned")
             .insert(name.to_owned(), value);
     }
+
+    fn clear_log(&self) {
+        self.log.lock().expect("indicator log poisoned").clear();
+    }
+
+    fn log(&self) -> Vec<String> {
+        self.log.lock().expect("indicator log poisoned").clone()
+    }
 }
 
 impl IndicatorIo for MemoryIndicator {
@@ -403,7 +482,13 @@ impl IndicatorIo for MemoryIndicator {
         &'a self,
         name: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<OptionValue, IndicatorError>> + Send + 'a>> {
-        Box::pin(async move { Ok(self.value(name)) })
+        Box::pin(async move {
+            self.log
+                .lock()
+                .expect("indicator log poisoned")
+                .push(format!("read:{name}"));
+            Ok(self.value(name))
+        })
     }
 
     fn write<'a>(
@@ -412,6 +497,10 @@ impl IndicatorIo for MemoryIndicator {
         value: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<(), IndicatorError>> + Send + 'a>> {
         Box::pin(async move {
+            self.log
+                .lock()
+                .expect("indicator log poisoned")
+                .push(format!("write:{name}"));
             self.values
                 .lock()
                 .expect("indicator state poisoned")

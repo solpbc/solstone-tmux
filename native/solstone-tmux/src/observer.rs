@@ -20,7 +20,7 @@ use crate::instance_lock::InstanceLock;
 use crate::model::CaptureResult;
 use crate::name::DerivedName;
 use crate::segment::{SegmentClose, SegmentError, SegmentState};
-use crate::sync::{SyncActivity, SyncWake};
+use crate::sync::{RetentionFence, SyncActivity, SyncWake};
 use crate::tmux::{TmuxAdapter, WarningSink};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -260,6 +260,7 @@ pub struct SupervisionControl {
     pub sync_stop: watch::Sender<bool>,
     pub observer_stop: watch::Sender<Option<ShutdownEvent>>,
     pub shutdown_barrier: SupervisorShutdownBarrier,
+    pub retention_fence: Arc<RetentionFence>,
 }
 
 pub async fn run_observer(
@@ -383,6 +384,7 @@ where
         sync_stop,
         observer_stop,
         mut shutdown_barrier,
+        retention_fence,
     } = control;
     let mut observer_task = tokio::spawn(observer);
     let mut sync_task = tokio::spawn(sync);
@@ -418,19 +420,17 @@ where
 
     let mut exit = match trigger {
         SupervisionTrigger::Observer(result) => {
-            sync_stop.send_replace(true);
-            let sync_result = sync_task.await;
+            let sync_result = stop_sync_with_deadline(&sync_stop, &mut sync_task).await;
             release_observer(&mut shutdown_barrier);
             let mut exit = observer_join_result(result);
-            append_authorized_sync_failure(&mut exit, sync_result);
+            append_authorized_sync_outcome(&mut exit, sync_result);
             exit
         }
         SupervisionTrigger::ObserverShutdown => {
-            sync_stop.send_replace(true);
-            let sync_result = sync_task.await;
+            let sync_result = stop_sync_with_deadline(&sync_stop, &mut sync_task).await;
             release_observer(&mut shutdown_barrier);
             let mut exit = observer_join_result(observer_task.await);
-            append_authorized_sync_failure(&mut exit, sync_result);
+            append_authorized_sync_outcome(&mut exit, sync_result);
             exit
         }
         SupervisionTrigger::Sync(result) => {
@@ -445,16 +445,15 @@ where
             exit
         }
         SupervisionTrigger::IndicatorFailed => {
-            sync_stop.send_replace(true);
             observer_stop.send_replace(Some(ShutdownEvent::Injected));
-            let sync_result = sync_task.await;
+            let sync_result = stop_sync_with_deadline(&sync_stop, &mut sync_task).await;
             release_observer(&mut shutdown_barrier);
             let mut exit = ObserverExit {
                 exit_code: 1,
                 shutdown_event: None,
                 failures: vec![DiagnosticCode::IndicatorUpdateFailed.message().to_owned()],
             };
-            append_authorized_sync_failure(&mut exit, sync_result);
+            append_authorized_sync_outcome(&mut exit, sync_result);
             merge_observer_result(&mut exit, observer_task.await);
             exit
         }
@@ -462,7 +461,7 @@ where
     if !exit.failures.is_empty() {
         exit.exit_code = 1;
     }
-    finish_supervision(exit, indicator, instance_lock).await
+    finish_supervision(exit, indicator, instance_lock, retention_fence).await
 }
 
 enum SupervisionTrigger {
@@ -498,21 +497,43 @@ fn merge_observer_result(exit: &mut ObserverExit, result: Result<ObserverExit, J
     exit.shutdown_event = observer_exit.shutdown_event;
 }
 
-fn append_authorized_sync_failure(
-    exit: &mut ObserverExit,
-    result: Result<Result<(), DiagnosticCode>, JoinError>,
-) {
-    match result {
-        Ok(Ok(())) => {}
-        Ok(Err(code)) => exit
+enum SyncStopOutcome {
+    Joined(Result<Result<(), DiagnosticCode>, JoinError>),
+    TimedOut,
+}
+
+async fn stop_sync_with_deadline(
+    sync_stop: &watch::Sender<bool>,
+    sync_task: &mut tokio::task::JoinHandle<Result<(), DiagnosticCode>>,
+) -> SyncStopOutcome {
+    sync_stop.send_replace(true);
+    match tokio::time::timeout(Duration::from_secs(15), &mut *sync_task).await {
+        Ok(result) => SyncStopOutcome::Joined(result),
+        Err(_) => {
+            sync_task.abort();
+            let _ = sync_task.await;
+            SyncStopOutcome::TimedOut
+        }
+    }
+}
+
+fn append_authorized_sync_outcome(exit: &mut ObserverExit, outcome: SyncStopOutcome) {
+    match outcome {
+        SyncStopOutcome::TimedOut => exit
             .failures
-            .push(format!("sync task failed: {}", code.message())),
-        Err(error) if error.is_panic() => exit
-            .failures
-            .push(DiagnosticCode::SyncTaskPanicked.message().to_owned()),
-        Err(_) => exit
-            .failures
-            .push(DiagnosticCode::SyncTaskCancelled.message().to_owned()),
+            .push(DiagnosticCode::SyncTaskTimedOut.message().to_owned()),
+        SyncStopOutcome::Joined(result) => match result {
+            Ok(Ok(())) => {}
+            Ok(Err(code)) => exit
+                .failures
+                .push(format!("sync task failed: {}", code.message())),
+            Err(error) if error.is_panic() => exit
+                .failures
+                .push(DiagnosticCode::SyncTaskPanicked.message().to_owned()),
+            Err(_) => exit
+                .failures
+                .push(DiagnosticCode::SyncTaskCancelled.message().to_owned()),
+        },
     }
 }
 
@@ -529,7 +550,9 @@ async fn finish_supervision(
     mut exit: ObserverExit,
     mut indicator: Box<dyn ShutdownIndicator>,
     instance_lock: Box<dyn LifecycleLock>,
+    retention_fence: Arc<RetentionFence>,
 ) -> ObserverExit {
+    retention_fence.close_and_drain().await;
     if let Err(error) = indicator.restore().await {
         exit.failures
             .push(format!("indicator shutdown failed: {error}"));
