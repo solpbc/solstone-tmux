@@ -162,11 +162,58 @@ operator_exec xcrun notarytool history \
     --keychain "$notary_keychain" \
     >/dev/null
 
+# Both resolved before the scratch root exists, so a failure here cannot leak a
+# scratch directory: the cleanup trap is not installed until further down.
+# See the DANGER block below for why unsetting TMUX is load-bearing.
+unset TMUX TMUX_PANE
+user_id="$(operator_exec id -u)"
+
 scratch_root="$(operator_exec mktemp -d "$output_parent/.solstone-tmux-macos.XXXXXX")"
 candidate_root="$scratch_root/candidate"
 stage_root="$scratch_root/stage"
 scratch_home="$scratch_root/home"
 scratch_tmux="$scratch_root/tmux"
+
+###############################################################################
+# !!!  DANGER  —  READ THIS BEFORE TOUCHING ANY tmux CALL IN THIS SCRIPT  !!!
+#
+# Every tmux invocation in this script MUST carry an explicit
+# -S "$scratch_tmux_socket". Not TMUX_TMPDIR. Not a bare `tmux`. -S.
+#
+# TMUX_TMPDIR IS NOT ISOLATION. When $TMUX is set in the environment — which it
+# is any time this script runs inside a tmux pane, and it always does: the
+# release playbook drives it as
+#     ssh -tt pro5e.local 'tmux-run hopper:solstone-tmux-NNN ... build-candidate.sh ...'
+# and `tmux-run` executes it inside a tmux session — tmux reads its socket path
+# out of $TMUX and ignores TMUX_TMPDIR completely. In that context
+#
+#     TMUX_TMPDIR=/some/scratch tmux kill-server
+#
+# is a plain `tmux kill-server` against the scratch host's REAL server —
+# including the very `tmux-run` session this script is running inside.
+#
+# The Linux twin of this bug (packaging/linux/build-release-lane.sh, same
+# TMUX_TMPDIR-as-isolation mistake) killed the extro box's live tmux server
+# twice on 2026-08-08, taking down every pane, the hub daemon and every running
+# lane. That script's DANGER block carries the full incident. This file had the
+# identical defect at five call sites; do not reintroduce it.
+#
+# -S (and -L) are the ONLY forms that override $TMUX. Both halves below are
+# load-bearing; removing either one re-arms the failure:
+#
+#   1. -S pins every tmux CLI call in this script to the scratch socket.
+#   2. TMUX is unset so the observer binary lands on the scratch server too.
+#      The observer deliberately passes no socket flag — asserted by
+#      native/solstone-tmux/tests/tmux_adapter.rs — so it resolves
+#      $TMUX -> TMUX_TMPDIR -> /tmp. TMUX_TMPDIR stays exported for the
+#      solstone-tmux binary invocations for exactly that reason; it is the
+#      observer's resolution root, never the tmux CLI's isolation.
+###############################################################################
+# The path tmux itself derives from TMUX_TMPDIR, pinned explicitly so the CLI
+# calls and the observer's own resolution agree on one server. TMUX is unset and
+# user_id resolved above, before the scratch root is created.
+scratch_tmux_socket="$scratch_tmux/tmux-$user_id/default"
+
 client_pid_file="$scratch_root/tmux-client.pid"
 client_pid=""
 observer_pid=""
@@ -192,9 +239,9 @@ cleanup() {
     if [[ -n "$client_pid" ]]; then
         SOLSTONE_TMUX_OPERATOR_CLEANUP=1 operator_exec kill -TERM "$client_pid" >/dev/null 2>&1
     fi
+    # -S, always. See the DANGER block above.
     SOLSTONE_TMUX_OPERATOR_CLEANUP=1 \
-        TMUX_TMPDIR="$scratch_tmux" \
-        operator_exec tmux kill-server >/dev/null 2>&1
+        operator_exec tmux -S "$scratch_tmux_socket" kill-server >/dev/null 2>&1
     if $package_installed; then
         SOLSTONE_TMUX_OPERATOR_CLEANUP=1 \
             operator_exec sudo rm -f /usr/local/bin/solstone-tmux >/dev/null 2>&1
@@ -210,6 +257,10 @@ operator_exec mkdir -m 0700 \
     "$stage_root" \
     "$scratch_home" \
     "$scratch_tmux"
+# tmux creates this directory itself under default resolution, but -S binds the
+# socket at a literal path and creates no parents. The observer reaches the same
+# socket the other way, through TMUX_TMPDIR, so the layout has to match.
+operator_exec mkdir -m 0700 "$scratch_tmux/tmux-$user_id"
 if operator_exec test -e /usr/local/bin/solstone-tmux; then
     echo "scratch host already has /usr/local/bin/solstone-tmux" >&2
     exit 1
@@ -220,7 +271,6 @@ else
         exit 1
     fi
 fi
-user_id="$(operator_exec id -u)"
 if operator_exec launchctl print "gui/$user_id/com.solstone.tmux" >/dev/null 2>&1; then
     echo "scratch host already has com.solstone.tmux loaded" >&2
     exit 1
@@ -231,9 +281,11 @@ else
         exit 1
     fi
 fi
-TMUX_TMPDIR="$scratch_tmux" \
-    operator_exec tmux -f /dev/null new-session -d -s preflight
-TMUX_TMPDIR="$scratch_tmux" operator_exec tmux kill-server
+# -S, always. See the DANGER block above. Without it this preflight pair would
+# create a session on, and then kill, the scratch host's live tmux server —
+# including the tmux-run session this script is executing inside.
+operator_exec tmux -S "$scratch_tmux_socket" -f /dev/null new-session -d -s preflight
+operator_exec tmux -S "$scratch_tmux_socket" kill-server
 
 operator_exec bash "$repo_root/scripts/check-rust-guards.sh"
 operator_exec cargo fetch --locked
@@ -443,14 +495,14 @@ operator_exec grep -Fx "solstone-tmux $product_version (source $source_commit)" 
     <<<"$installed_version"
 
 export TERM=xterm-256color
-TMUX_TMPDIR="$scratch_tmux" \
-    operator_exec tmux -f /dev/null new-session -d -s candidate \
+# -S, always. See the DANGER block above.
+operator_exec tmux -S "$scratch_tmux_socket" -f /dev/null new-session -d -s candidate \
     "while :; do printf 'durable candidate observation\\n'; sleep 1; done"
-# $1, $2, and $! belong to the dispatched shell.
+# $1, $2, $3, and $! belong to the dispatched shell.
 # shellcheck disable=SC2016
-TMUX_TMPDIR="$scratch_tmux" operator_exec sh -c \
-    'nohup script -q /dev/null tmux attach-session -t candidate >"$1" 2>&1 </dev/null & echo $! >"$2"' \
-    sh "$scratch_root/tmux-client.log" "$client_pid_file"
+operator_exec sh -c \
+    'nohup script -q /dev/null tmux -S "$3" attach-session -t candidate >"$1" 2>&1 </dev/null & echo $! >"$2"' \
+    sh "$scratch_root/tmux-client.log" "$client_pid_file" "$scratch_tmux_socket"
 client_pid="$(<"$client_pid_file")"
 if [[ ! "$client_pid" =~ ^[1-9][0-9]*$ ]]; then
     echo "scratch tmux client did not report a valid pid" >&2
@@ -508,7 +560,8 @@ fi
 service_installed=false
 operator_exec kill -TERM "$client_pid"
 client_pid=""
-TMUX_TMPDIR="$scratch_tmux" operator_exec tmux kill-server
+# -S, always. See the DANGER block above.
+operator_exec tmux -S "$scratch_tmux_socket" kill-server
 operator_exec sudo rm -f /usr/local/bin/solstone-tmux
 operator_exec sudo pkgutil --forget com.solstone.tmux
 package_installed=false

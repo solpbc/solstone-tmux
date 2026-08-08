@@ -71,6 +71,45 @@ if [[ ! -d "$output_parent" ]]; then
     exit 1
 fi
 work_root="$(mktemp -d "$output_parent/.solstone-tmux-release.XXXXXX")"
+
+###############################################################################
+# !!!  DANGER  —  READ THIS BEFORE TOUCHING ANY tmux CALL IN THIS SCRIPT  !!!
+#
+# Every tmux invocation in this lane MUST carry an explicit
+# -S "$lane_tmux_socket". Not TMUX_TMPDIR. Not a bare `tmux`. -S.
+#
+# TMUX_TMPDIR IS NOT ISOLATION. When $TMUX is set in the environment — which it
+# is any time this lane runs inside a tmux pane, i.e. every hopper lane, every
+# `tmux-run`, every operator shell — tmux reads its socket path out of $TMUX and
+# ignores TMUX_TMPDIR completely. In that context
+#
+#     TMUX_TMPDIR=/some/scratch tmux kill-server
+#
+# is a plain `tmux kill-server` against the operator's REAL server.
+#
+# This is not hypothetical. That exact line, in this exact cleanup function,
+# killed the extro box's live tmux server twice on 2026-08-08 (13:49 and 14:51
+# MDT), each time ~75s after `make release-linux` started, taking down every
+# pane, the hub daemon, and every running lane with it. The same script run over
+# `ssh spark` on the same afternoon was harmless — because ssh does not carry
+# $TMUX. That asymmetry is exactly how the bug stayed hidden.
+#
+# -S (and -L) are the ONLY forms that override $TMUX. Both halves below are
+# load-bearing; removing either one re-arms the failure:
+#
+#   1. -S pins every tmux CLI call in this script to the scratch socket.
+#   2. TMUX is unset so the observer binary lands on the scratch server too.
+#      The observer deliberately passes no socket flag — asserted by
+#      native/solstone-tmux/tests/tmux_adapter.rs — so it resolves
+#      $TMUX -> TMUX_TMPDIR -> /tmp. With $TMUX still set it would observe the
+#      operator's live session instead of the candidate session below, and the
+#      lane's "durable local output" proof would pass for the wrong reason.
+###############################################################################
+unset TMUX TMUX_PANE
+# The path tmux itself derives from TMUX_TMPDIR, pinned explicitly so the CLI
+# calls and the observer's own resolution agree on one server.
+lane_tmux_socket="$work_root/tmux/tmux-$(id -u)/default"
+
 observer_pid=""
 client_pid=""
 cleanup() {
@@ -83,9 +122,10 @@ cleanup() {
         kill -TERM "$client_pid" >/dev/null 2>&1
         wait "$client_pid" >/dev/null 2>&1
     fi
-    if [[ -d "$work_root/tmux" ]]; then
-        HOME="$work_root/home" TMUX_TMPDIR="$work_root/tmux" \
-            tmux kill-server >/dev/null 2>&1
+    # -S, always. See the DANGER block above. The guard is a socket test on our
+    # own scratch path, so this cannot fire against a server we did not create.
+    if [[ -S "$lane_tmux_socket" ]]; then
+        HOME="$work_root/home" tmux -S "$lane_tmux_socket" kill-server >/dev/null 2>&1
     fi
     rm -rf -- "$work_root"
 }
@@ -120,11 +160,15 @@ mkdir -m 0700 \
     "$XDG_CONFIG_HOME" \
     "$XDG_DATA_HOME" \
     "$TMUX_TMPDIR"
+# tmux creates this directory itself under default resolution, but -S binds the
+# socket at a literal path and creates no parents. The observer reaches the same
+# socket the other way, through TMUX_TMPDIR, so the layout has to match.
+mkdir -m 0700 "$(dirname "$lane_tmux_socket")"
 mkdir -m 0700 "$XDG_CONFIG_HOME/solstone-tmux"
 tmux_path="$(command -v tmux)"
-tmux -f /dev/null new-session -d -s candidate \
+tmux -S "$lane_tmux_socket" -f /dev/null new-session -d -s candidate \
     "while :; do printf 'durable candidate observation\\n'; sleep 1; done"
-script -q -c "tmux attach-session -t candidate" /dev/null \
+script -q -c "tmux -S '$lane_tmux_socket' attach-session -t candidate" /dev/null \
     >"$work_root/tmux-client.log" 2>&1 &
 client_pid="$!"
 printf '{"tmux_path":"%s"}\n' "$tmux_path" \
