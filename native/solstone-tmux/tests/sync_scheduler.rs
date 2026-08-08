@@ -1496,16 +1496,20 @@ async fn assert_no_listing(listings: &mut mpsc::UnboundedReceiver<()>) {
 }
 
 async fn wait_for_idle_snapshot(root: &Path) -> serde_json::Value {
-    for _ in 0..SCHEDULER_TURNS {
-        if let Ok(bytes) = std::fs::read(root.join(HEALTH_FILENAME))
-            && let Ok(snapshot) = serde_json::from_slice::<serde_json::Value>(&bytes)
-            && snapshot["sync_in_progress"] == false
-        {
-            return snapshot;
+    let path = root.join(HEALTH_FILENAME);
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if let Ok(bytes) = std::fs::read(&path)
+                && let Ok(snapshot) = serde_json::from_slice::<serde_json::Value>(&bytes)
+                && snapshot["sync_in_progress"] == false
+            {
+                return snapshot;
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
         }
-        tokio::task::yield_now().await;
-    }
-    panic!("scheduler did not publish its idle health snapshot");
+    })
+    .await
+    .expect("scheduler did not publish its idle health snapshot within 10 seconds")
 }
 
 fn scheduler(temporary: &TestDirectory, wake: SyncWake) -> SyncScheduler {
