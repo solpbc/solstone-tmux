@@ -33,6 +33,7 @@ const NOTES: &str = concat!(
 // A version the crate will never carry, so manifest/lockfile disagreement stays a
 // real disagreement no matter what the crate version becomes.
 const MISMATCHED_VERSION: &str = "9.9.9";
+const ORIGIN_PUSH_URL: &str = "git@github.com:solpbc/solstone-tmux.git";
 type RefusalSetup = for<'a> fn(&'a PublisherFixture) -> RunRequest<'a>;
 
 #[test]
@@ -45,6 +46,16 @@ fn state_none_creates_exact_release() {
         fixture.mutation_kinds().first().map(String::as_str),
         Some("tag")
     );
+    assert!(
+        fixture.log().contains("git push"),
+        "annotated tag object was not transferred through Git:\n{}",
+        fixture.log()
+    );
+    assert!(
+        !fixture.log().contains("git/refs"),
+        "publisher tried to create a ref for a local-only tag object:\n{}",
+        fixture.log()
+    );
 }
 
 #[test]
@@ -56,6 +67,60 @@ fn state_exact_tag_without_release_reuses_tag() {
     assert_success(&fixture.run());
     fixture.assert_exact_published();
     assert!(!fixture.mutation_kinds().iter().any(|kind| kind == "tag"));
+}
+
+#[test]
+fn origin_push_url_must_match_the_api_repository_before_tag_mutation() {
+    let fixture = PublisherFixture::new();
+    fixture.set_origin_push_url("git@example.invalid:someone-else/repository.git");
+    fixture.clear_log();
+
+    assert_failure(&fixture.run());
+    assert_no_mutations(&fixture);
+    assert_eq!(fixture.state()["remote_tag"], Value::Null);
+}
+
+#[test]
+fn origin_repoint_after_validation_cannot_redirect_the_tag_push() {
+    let fixture = PublisherFixture::new();
+    let output = fixture.request().remote_mutation("origin-repoint").run();
+
+    assert_success(&output);
+    fixture.assert_exact_published();
+    assert_eq!(
+        command_stdout(
+            Command::new("git")
+                .current_dir(&fixture.repo)
+                .args(["remote", "get-url", "--push", "origin"]),
+        ),
+        "git@example.invalid:redirected/repository.git"
+    );
+    assert!(
+        fixture.log().contains(ORIGIN_PUSH_URL),
+        "push did not use the captured verified destination:\n{}",
+        fixture.log()
+    );
+}
+
+#[test]
+fn local_tag_repoint_before_push_cannot_change_the_captured_source_object() {
+    let fixture = PublisherFixture::new();
+    let output = fixture.request().remote_mutation("local-tag-repoint").run();
+
+    assert_success(&output);
+    let state = fixture.state();
+    assert_eq!(state["remote_tag"]["type"], "tag");
+    assert_eq!(state["remote_tag"]["commit"], fixture.head());
+    assert_eq!(state["releases"][0]["draft"], false);
+    let current_local_tag = command_stdout(Command::new("git").current_dir(&fixture.repo).args([
+        "rev-parse",
+        "--verify",
+        &format!("refs/tags/{TAG}"),
+    ]));
+    assert_ne!(
+        state["remote_tag"]["object_sha"], current_local_tag,
+        "fixture did not repoint the mutable local tag"
+    );
 }
 
 #[test]
@@ -180,7 +245,13 @@ fn interrupted_exact_states_resume_without_replacement() {
 
 #[test]
 fn concurrent_remote_drift_is_rejected_before_publication() {
-    for mutation in ["wrong-title", "wrong-notes", "wrong-target", "tag-target"] {
+    for mutation in [
+        "wrong-title",
+        "wrong-notes",
+        "wrong-target",
+        "tag-target",
+        "tag-object",
+    ] {
         let fixture = PublisherFixture::new();
         let output = fixture.request().remote_mutation(mutation).run();
         assert_failure(&output);
@@ -192,8 +263,34 @@ fn concurrent_remote_drift_is_rejected_before_publication() {
             "concurrent drift {mutation:?} reached publication:\n{}",
             fixture.log()
         );
-        assert_eq!(fixture.state()["releases"][0]["draft"], true);
+        if mutation == "tag-target" || mutation == "tag-object" {
+            assert_eq!(
+                fixture.state()["releases"].as_array().map(Vec::len),
+                Some(0),
+                "tag drift should stop before a draft exists"
+            );
+        } else {
+            assert_eq!(fixture.state()["releases"][0]["draft"], true);
+        }
     }
+}
+
+#[test]
+fn concurrent_tag_creation_rejects_the_non_force_push_without_overwrite() {
+    let fixture = PublisherFixture::new();
+    let output = fixture.request().remote_mutation("tag-collision").run();
+
+    assert_failure(&output);
+    assert_eq!(
+        fixture.state()["releases"].as_array().map(Vec::len),
+        Some(0)
+    );
+    assert_eq!(fixture.state()["remote_tag"]["object_sha"], "d".repeat(40));
+    assert!(
+        !fixture.mutation_kinds().iter().any(|kind| kind == "tag"),
+        "rejected non-force push was recorded as our tag mutation:\n{}",
+        fixture.log()
+    );
 }
 
 #[test]
@@ -368,6 +465,7 @@ struct PublisherFixture {
     remote: PathBuf,
     log_path: PathBuf,
     cargo_count: PathBuf,
+    real_git: PathBuf,
     publisher: PathBuf,
 }
 
@@ -471,6 +569,12 @@ impl PublisherFixture {
                 .current_dir(&repo)
                 .args(["commit", "-q", "-m", "fixture"]),
         );
+        run_checked(Command::new("git").current_dir(&repo).args([
+            "remote",
+            "add",
+            "origin",
+            "git@github.com:solpbc/solstone-tmux.git",
+        ]));
 
         let state = remote.join("state.json");
         fs::write(
@@ -491,10 +595,14 @@ impl PublisherFixture {
         let log_path = remote.join("gh.log");
         fs::write(&log_path, b"").expect("write gh log");
         let cargo_count = remote.join("cargo.count");
+        let real_git = PathBuf::from(command_stdout(
+            Command::new("sh").args(["-c", "command -v git"]),
+        ));
 
         fs::write(fake_bin.join("gh"), fake_gh()).expect("write fake gh");
         fs::write(fake_bin.join("cargo"), fake_cargo()).expect("write fake cargo");
-        for name in ["gh", "cargo"] {
+        fs::write(fake_bin.join("git"), fake_git()).expect("write fake git");
+        for name in ["gh", "cargo", "git"] {
             fs::set_permissions(fake_bin.join(name), fs::Permissions::from_mode(0o755))
                 .expect("chmod fake tool");
         }
@@ -510,6 +618,7 @@ impl PublisherFixture {
             remote,
             log_path,
             cargo_count,
+            real_git,
             publisher,
         };
         fixture.rebuild_candidate();
@@ -544,6 +653,10 @@ impl PublisherFixture {
 
     fn git(&self, args: &[&str]) {
         run_checked(Command::new("git").current_dir(&self.repo).args(args));
+    }
+
+    fn set_origin_push_url(&self, url: &str) {
+        self.git(&["remote", "set-url", "--push", "origin", url]);
     }
 
     fn rebuild_candidate(&self) {
@@ -755,6 +868,25 @@ impl PublisherFixture {
         let state = self.state();
         assert_eq!(state["remote_tag"]["type"], "tag");
         assert_eq!(state["remote_tag"]["commit"], self.head());
+        let local_tag = Command::new("git")
+            .current_dir(&self.repo)
+            .args([
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                &format!("refs/tags/{TAG}"),
+            ])
+            .output()
+            .expect("inspect optional local tag");
+        if local_tag.status.success() {
+            let object = String::from_utf8(local_tag.stdout)
+                .expect("UTF-8 local tag object")
+                .trim()
+                .to_owned();
+            assert_eq!(state["remote_tag"]["object_sha"], object);
+        } else {
+            assert_eq!(local_tag.status.code(), Some(1));
+        }
         let releases = state["releases"].as_array().expect("release array");
         assert_eq!(releases.len(), 1);
         assert_eq!(releases[0]["tag_name"], TAG);
@@ -843,7 +975,10 @@ impl RunRequest<'_> {
                 self.remote_mutation.unwrap_or_default(),
             )
             .env("FAKE_CARGO_COUNT", &fixture.cargo_count)
-            .env("FAKE_CARGO_FAIL_AT", self.cargo_fail_at.to_string());
+            .env("FAKE_CARGO_FAIL_AT", self.cargo_fail_at.to_string())
+            .env("FAKE_REAL_GIT", &fixture.real_git)
+            .env("FAKE_REPO", &fixture.repo)
+            .env("FAKE_EXPECTED_PUSH_URL", ORIGIN_PUSH_URL);
         fs::create_dir_all(fixture.root.path().join("home")).expect("create fake home");
         fs::create_dir_all(fixture.root.path().join("tmp")).expect("create fake tmp");
         command.output().expect("run real publisher script")
@@ -910,6 +1045,75 @@ fi
 "#
 }
 
+fn fake_git() -> &'static str {
+    r#"#!/usr/bin/env bash
+set -euo pipefail
+
+original=("$@")
+repo=""
+if [[ "${1:-}" == "-C" ]]; then
+    repo="$2"
+    shift 2
+fi
+
+if [[ "${1:-}" != "push" ]]; then
+    exec "$FAKE_REAL_GIT" "${original[@]}"
+fi
+shift
+remote="${1:-}"
+refspec="${2:-}"
+[[ -n "$repo" && "$remote" == "$FAKE_EXPECTED_PUSH_URL" ]] || exit 9
+[[ "$refspec" == *:refs/tags/* ]] || exit 9
+source_ref="${refspec%%:*}"
+target_ref="${refspec#*:}"
+[[ "$source_ref" =~ ^[0-9a-f]{40}$ ]] || exit 9
+
+if [[ "${FAKE_GH_REMOTE_MUTATION:-}" == "local-tag-repoint" ]]; then
+    "$FAKE_REAL_GIT" -C "$repo" tag -f -a "${target_ref#refs/tags/}" \
+        "$FAKE_GH_EXPECTED_COMMIT" -m "concurrent competing annotation"
+fi
+
+tag_object="$source_ref"
+[[ "$("$FAKE_REAL_GIT" -C "$repo" cat-file -t "$tag_object")" == "tag" ]] || exit 9
+commit="$("$FAKE_REAL_GIT" -C "$repo" rev-parse "$source_ref^{commit}")"
+if [[ "${FAKE_GH_REMOTE_MUTATION:-}" == "tag-collision" ]]; then
+    temporary="$FAKE_GH_STATE.tmp"
+    jq \
+        --arg ref "$target_ref" \
+        --arg object "$(printf 'd%.0s' {1..40})" \
+        --arg commit "$commit" \
+        '.remote_tag = {
+            ref: $ref,
+            type: "tag",
+            object_sha: $object,
+            commit: $commit
+        }' "$FAKE_GH_STATE" >"$temporary"
+    mv "$temporary" "$FAKE_GH_STATE"
+    exit 1
+fi
+{
+    printf 'MUTATE\ttag\tgit push\t'
+    printf '%q\t' "${original[@]}"
+    printf '\n'
+} >>"$FAKE_GH_LOG"
+temporary="$FAKE_GH_STATE.tmp"
+jq \
+    --arg ref "$target_ref" \
+    --arg object "$tag_object" \
+    --arg commit "$commit" \
+    '.remote_tag = {
+        ref: $ref,
+        type: "tag",
+        object_sha: $object,
+        commit: $commit
+    }' "$FAKE_GH_STATE" >"$temporary"
+mv "$temporary" "$FAKE_GH_STATE"
+if [[ "${FAKE_GH_INTERRUPT:-}" == "tag" ]]; then
+    exit 97
+fi
+"#
+}
+
 fn fake_gh() -> &'static str {
     r#"#!/usr/bin/env bash
 set -euo pipefail
@@ -939,7 +1143,11 @@ interrupt_after() {
 
 if [[ "$1" == "repo" && "$2" == "view" ]]; then
     log_call READ "$@"
-    jq -r '.repo' "$FAKE_GH_STATE"
+    jq -c '{
+        nameWithOwner: .repo,
+        url: ("https://github.com/" + .repo),
+        sshUrl: ("git@github.com:" + .repo + ".git")
+    }' "$FAKE_GH_STATE"
     exit 0
 fi
 
@@ -1021,8 +1229,15 @@ case "$method:$endpoint" in
     GET:*/git/matching-refs/tags/*)
         write_state '.tag_reads += 1'
         tag_reads="$(jq -r '.tag_reads' "$FAKE_GH_STATE")"
+        if [[ "$tag_reads" == "1" && "${FAKE_GH_REMOTE_MUTATION:-}" == "origin-repoint" ]]; then
+            "$FAKE_REAL_GIT" -C "$FAKE_REPO" remote set-url --push origin \
+                git@example.invalid:redirected/repository.git
+        fi
         if [[ "$tag_reads" == "2" && "${FAKE_GH_REMOTE_MUTATION:-}" == "tag-target" ]]; then
             write_state '.remote_tag.commit = ("b" * 40)'
+        fi
+        if [[ "$tag_reads" == "2" && "${FAKE_GH_REMOTE_MUTATION:-}" == "tag-object" ]]; then
+            write_state '.remote_tag.object_sha = ("d" * 40)'
         fi
         jq -c '
             if .remote_tag == null then []

@@ -247,13 +247,28 @@ assert_exact_files "$publishable" "${publishable_names[@]}"
         validates_real_complete_set_when_requested -- --exact
 ) || die "complete aggregate candidate validation failed"
 
-repo="$(gh repo view --json nameWithOwner --jq .nameWithOwner)" ||
+repo_json="$(gh repo view --json nameWithOwner,url,sshUrl)" ||
     die "could not resolve the GitHub repository"
+repo="$(jq -er '.nameWithOwner' <<<"$repo_json")" ||
+    die "GitHub repository identity is ambiguous"
 [[ "$repo" =~ ^[^/]+/[^/]+$ ]] ||
     die "GitHub repository identity is ambiguous"
+repo_https_url="$(jq -er '.url' <<<"$repo_json")" ||
+    die "GitHub repository HTTPS URL is unavailable"
+repo_ssh_url="$(jq -er '.sshUrl' <<<"$repo_json")" ||
+    die "GitHub repository SSH URL is unavailable"
+mapfile -t origin_push_urls < <(git -C "$repo_root" remote get-url --push --all origin)
+((${#origin_push_urls[@]} == 1)) ||
+    die "origin must have exactly one push URL"
+origin_push_url="${origin_push_urls[0]}"
+[[ "$origin_push_url" == "$repo_ssh_url" ||
+    "$origin_push_url" == "$repo_https_url" ||
+    "$origin_push_url" == "$repo_https_url.git" ]] ||
+    die "origin push URL does not match the GitHub repository"
 
 inspect_remote_tag() {
     local require_present="$1"
+    local expected_object="$2"
     local remote_refs remote_ref_count remote_tag_type remote_tag_object remote_tag
     remote_refs="$(
         gh api "repos/$repo/git/matching-refs/tags/$tag"
@@ -276,6 +291,9 @@ inspect_remote_tag() {
         )"
         [[ "$remote_tag_type" == "tag" && "$remote_tag_object" =~ ^[0-9a-f]{40}$ ]] ||
             die "remote release tag is not annotated"
+        if [[ -n "$expected_object" && "$remote_tag_object" != "$expected_object" ]]; then
+            die "remote release tag object differs from the exact local tag"
+        fi
         remote_tag="$(
             gh api "repos/$repo/git/tags/$remote_tag_object"
         )" || die "could not peel the remote release tag"
@@ -287,7 +305,11 @@ inspect_remote_tag() {
     fi
 }
 
-inspect_remote_tag false
+expected_remote_tag_object=""
+if $local_tag_present; then
+    expected_remote_tag_object="$(git -C "$repo_root" rev-parse "refs/tags/$tag")"
+fi
+inspect_remote_tag false "$expected_remote_tag_object"
 
 release_pages="$(
     gh api --paginate --slurp "repos/$repo/releases?per_page=100"
@@ -384,12 +406,21 @@ if ! $remote_tag_present; then
             die "could not create the exact annotated local tag"
     fi
     tag_object="$(git -C "$repo_root" rev-parse "refs/tags/$tag")"
+    expected_remote_tag_object="$tag_object"
     [[ "$(git -C "$repo_root" cat-file -t "$tag_object")" == "tag" ]] ||
         die "local release tag object is not annotated"
-    gh api -X POST "repos/$repo/git/refs" \
-        -f "ref=refs/tags/$tag" \
-        -f "sha=$tag_object" >/dev/null ||
+    # A GitHub ref can point only at an object already present in the remote
+    # repository. The annotated tag object above exists only in the local
+    # object database until Git uploads it; POST /git/refs with its local SHA
+    # therefore fails with HTTP 422 even when the peeled commit is on main.
+    # A non-force Git push transfers that exact object and also fails closed if
+    # a concurrent publisher created the ref after our initial inspection. The
+    # captured object ID, rather than the mutable local ref, also closes a local
+    # tag-repoint race between validation and transfer.
+    git -C "$repo_root" push "$origin_push_url" \
+        "$tag_object:refs/tags/$tag" >/dev/null ||
         die "could not push the exact annotated release tag"
+    inspect_remote_tag true "$expected_remote_tag_object"
 fi
 
 if ! $release_present; then
@@ -441,7 +472,7 @@ relevant_releases="$(
     "$(jq -r '.[0].body' <<<"$relevant_releases")" == "$notes" ]] ||
     die "completed draft metadata or state changed"
 verify_remote_assets "$relevant_releases" true
-inspect_remote_tag true
+inspect_remote_tag true "$expected_remote_tag_object"
 prepublish_release="$(
     gh api "repos/$repo/releases/$release_id"
 )" || die "could not perform the final draft recheck"
