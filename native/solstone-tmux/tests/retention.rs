@@ -3,15 +3,17 @@
 
 mod support;
 
-use std::fs;
+use std::fs::{self, OpenOptions};
 use std::future::Future;
-use std::os::unix::fs::symlink;
+use std::io::Write;
+use std::os::unix::fs::{MetadataExt, symlink};
 use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use sha2::{Digest, Sha256};
 use solstone_tmux::journal::{
     ListingFileStatus, SegmentFile, SegmentItem, SegmentsEnvelope, inventory_files,
 };
@@ -447,6 +449,144 @@ fn mid_deletion_failure_restores_every_removed_file() {
     });
 }
 
+#[test]
+fn in_place_mutation_before_unlink_is_retained() {
+    run(async {
+        let temporary = TestDirectory::new("retention-in-place-mutation");
+        let captures = temporary.path().join("captures");
+        let segment = create_segment(temporary.path(), "captures", "20260701", STREAM, SEGMENT);
+        let candidate = SegmentCandidate::new("20260701", STREAM, SEGMENT);
+        let listing = listing_for(&segment, &candidate, ListingFileStatus::Present).await;
+        let target = sorted_segment_files(&segment)
+            .into_iter()
+            .next()
+            .expect("fixture file");
+        let original = fs::read(&target).expect("read original fixture");
+        let original_metadata = fs::metadata(&target).expect("inspect original fixture");
+        let original_digest = sha256_hex(&original);
+        let mutated = b"mutated fixture\n".to_vec();
+        assert_eq!(mutated.len(), original.len());
+        assert_ne!(mutated, original);
+        let timestamps = timestamps(&original_metadata);
+        let hook_target = target.clone();
+        let hook_mutated = mutated.clone();
+        let hook = Arc::new(move |index| {
+            if index == 0 {
+                write_in_place_and_restore_timestamps(&hook_target, &hook_mutated, timestamps);
+            }
+        });
+
+        let outcome = delete_custodied_segment_with_hook(
+            &captures,
+            &stream(),
+            today(),
+            0,
+            &candidate,
+            (SEGMENT, &listing),
+            hook,
+            solstone_tmux::sync::SyncInstrumentation::default(),
+            Arc::new(RetentionFence::new()),
+        )
+        .await;
+
+        assert_eq!(outcome, RetentionOutcome::Retained);
+        let mutated_metadata = fs::metadata(&target).expect("inspect mutated fixture");
+        let mutated_on_disk = fs::read(&target).expect("read mutated fixture");
+        assert_eq!(
+            (
+                original_metadata.dev(),
+                original_metadata.ino(),
+                original_metadata.len()
+            ),
+            (
+                mutated_metadata.dev(),
+                mutated_metadata.ino(),
+                mutated_metadata.len()
+            )
+        );
+        assert_ne!(sha256_hex(&mutated_on_disk), original_digest);
+        assert_eq!(mutated_on_disk, mutated);
+        assert!(segment.is_dir());
+    });
+}
+
+#[test]
+fn late_byte_mismatch_rolls_back_prior_unlinks() {
+    run(async {
+        let temporary = TestDirectory::new("retention-late-byte-mismatch");
+        let captures = temporary.path().join("captures");
+        let segment = create_segment(temporary.path(), "captures", "20260701", STREAM, SEGMENT);
+        fs::write(
+            segment.join("tmux_aux_screen.jsonl"),
+            b"auxiliary fixture\n",
+        )
+        .expect("write auxiliary fixture");
+        let candidate = SegmentCandidate::new("20260701", STREAM, SEGMENT);
+        let listing = listing_for(&segment, &candidate, ListingFileStatus::Processed).await;
+        let sorted_paths = sorted_segment_files(&segment);
+        assert_eq!(sorted_paths.len(), 2);
+        let first = sorted_paths[0].clone();
+        let second = sorted_paths[1].clone();
+        let original_first = fs::read(&first).expect("read first fixture");
+        let original_second = fs::read(&second).expect("read second fixture");
+        let original_second_metadata = fs::metadata(&second).expect("inspect second fixture");
+        let original_second_digest = sha256_hex(&original_second);
+        let mut mutated_second = original_second.clone();
+        mutated_second[0] ^= 1;
+        let timestamps = timestamps(&original_second_metadata);
+        let hook_first = first.clone();
+        let hook_second = second.clone();
+        let hook_mutated_second = mutated_second.clone();
+        let hook = Arc::new(move |index| {
+            if index == 1 {
+                assert!(!hook_first.exists(), "first sorted file should be unlinked");
+                write_in_place_and_restore_timestamps(
+                    &hook_second,
+                    &hook_mutated_second,
+                    timestamps,
+                );
+            }
+        });
+
+        let outcome = delete_custodied_segment_with_hook(
+            &captures,
+            &stream(),
+            today(),
+            0,
+            &candidate,
+            (SEGMENT, &listing),
+            hook,
+            solstone_tmux::sync::SyncInstrumentation::default(),
+            Arc::new(RetentionFence::new()),
+        )
+        .await;
+
+        assert_eq!(outcome, RetentionOutcome::Retained);
+        assert_eq!(
+            fs::read(&first).expect("read restored first fixture"),
+            original_first
+        );
+        let mutated_second_metadata =
+            fs::metadata(&second).expect("inspect mutated second fixture");
+        let mutated_second_on_disk = fs::read(&second).expect("read mutated second fixture");
+        assert_eq!(
+            (
+                original_second_metadata.dev(),
+                original_second_metadata.ino(),
+                original_second_metadata.len()
+            ),
+            (
+                mutated_second_metadata.dev(),
+                mutated_second_metadata.ino(),
+                mutated_second_metadata.len()
+            )
+        );
+        assert_ne!(sha256_hex(&mutated_second_on_disk), original_second_digest);
+        assert_eq!(mutated_second_on_disk, mutated_second);
+        assert!(segment.is_dir());
+    });
+}
+
 #[tokio::test(start_paused = true)]
 async fn retention_fence_keeps_the_lock_until_a_gated_unlink_finishes() {
     let temporary = TestDirectory::new("retention-fence");
@@ -623,4 +763,67 @@ async fn listing_for(
         total: 1,
         protocol_version: 2,
     }
+}
+
+fn sorted_segment_files(segment: &Path) -> Vec<PathBuf> {
+    let mut paths = fs::read_dir(segment)
+        .expect("read fixture segment")
+        .map(|entry| entry.expect("read fixture entry").path())
+        .collect::<Vec<_>>();
+    paths.sort();
+    paths
+}
+
+fn timestamps(metadata: &fs::Metadata) -> (i64, i64, i64, i64) {
+    (
+        metadata.atime(),
+        metadata.atime_nsec(),
+        metadata.mtime(),
+        metadata.mtime_nsec(),
+    )
+}
+
+fn write_in_place_and_restore_timestamps(
+    path: &Path,
+    bytes: &[u8],
+    (atime, atime_nsec, mtime, mtime_nsec): (i64, i64, i64, i64),
+) {
+    assert_eq!(
+        fs::metadata(path)
+            .expect("inspect fixture before mutation")
+            .len(),
+        u64::try_from(bytes.len()).expect("fixture length")
+    );
+    {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .open(path)
+            .expect("open fixture for mutation");
+        file.write_all(bytes).expect("mutate fixture");
+        file.sync_all().expect("sync fixture mutation");
+    }
+    rustix::fs::utimensat(
+        rustix::fs::CWD,
+        path,
+        &rustix::fs::Timestamps {
+            last_access: rustix::fs::Timespec {
+                tv_sec: atime,
+                tv_nsec: atime_nsec,
+            },
+            last_modification: rustix::fs::Timespec {
+                tv_sec: mtime,
+                tv_nsec: mtime_nsec,
+            },
+        },
+        rustix::fs::AtFlags::empty(),
+    )
+    .expect("restore fixture timestamps");
+    assert_eq!(
+        timestamps(&fs::metadata(path).expect("inspect restored fixture timestamps")),
+        (atime, atime_nsec, mtime, mtime_nsec)
+    );
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
 }

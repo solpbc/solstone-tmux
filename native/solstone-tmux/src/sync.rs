@@ -25,6 +25,7 @@ use crate::health::{DiagnosticCode, HealthWriter, SyncFacts};
 use crate::journal::{
     JournalClient, JournalError, JournalReasonCode, ListingFileStatus, LocalFile,
     RegistrationDescriptor, SegmentsEnvelope, UploadResult, UploadStatus, inventory_files,
+    stream_sha256_hex,
 };
 use crate::name::{DerivedName, derive_component};
 use crate::paths::PlatformKind;
@@ -583,6 +584,7 @@ async fn delete_custodied_segment_with_hook_inner(
             &target,
             &second_paths,
             &second_identities,
+            &second_inventory,
             delete_hook.as_deref(),
         )
     })
@@ -1780,11 +1782,22 @@ fn file_identities(paths: &[PathBuf]) -> Option<Vec<FileIdentity>> {
         .collect()
 }
 
+fn custodied_digest<'a>(inventory: &'a [LocalFile], name: &str) -> Option<&'a str> {
+    let mut matches = inventory.iter().filter(|file| file.name == name);
+    let file = matches.next()?;
+    if matches.next().is_some() {
+        None
+    } else {
+        Some(file.sha256.as_str())
+    }
+}
+
 fn delete_revalidated_segment(
     captures_root: &Path,
     candidate: &SegmentCandidate,
     expected_paths: &[PathBuf],
     expected_identities: &[FileIdentity],
+    expected_inventory: &[LocalFile],
     delete_hook: Option<&(dyn Fn(usize) + Send + Sync)>,
 ) -> bool {
     let ResolvedSegmentFiles::Found(paths) = resolve_segment_files(captures_root, candidate) else {
@@ -1822,13 +1835,21 @@ fn delete_revalidated_segment(
         if let Some(hook) = delete_hook {
             hook(index);
         }
-        let current = open_regular_readonly_at(&segment_directory, &expected.name, path);
+        let mut current = open_regular_readonly_at(&segment_directory, &expected.name, path);
         let current_matches = current
             .as_ref()
             .ok()
             .and_then(|file| file.metadata().ok())
             .is_some_and(|metadata| metadata_matches(&metadata, expected));
-        if !current_matches
+        let current_proves_custody = current_matches
+            && custodied_digest(expected_inventory, &expected.name).is_some_and(
+                |expected_digest| {
+                    current.as_mut().ok().is_some_and(|file| {
+                        stream_sha256_hex(file).is_ok_and(|digest| digest == expected_digest)
+                    })
+                },
+            );
+        if !current_proves_custody
             || rustix::fs::unlinkat(
                 &segment_directory,
                 expected.name.as_str(),

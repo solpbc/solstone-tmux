@@ -204,7 +204,9 @@ to skip an upload, while deletion requires a listing fetched in the current
 batch. A failed pre-upload lookup falls through to the normal upload path.
 Upload success alone never permits deletion: a fresh Journal listing and a new
 local inventory must prove filename, SHA-256 digest, and held status for every
-local file. Journal responses are limited to 4 MiB.
+local file. Immediately before each irreversible unlink, the deletion path
+re-reads bytes through its open descriptor and matches the custodied SHA-256.
+Journal responses are limited to 4 MiB.
 
 Supervision gives sync fifteen seconds to stop during an authorized shutdown.
 If an irreversible retention deletion is already running, the instance lock is

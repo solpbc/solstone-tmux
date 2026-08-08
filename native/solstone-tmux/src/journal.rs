@@ -763,6 +763,20 @@ fn prepare_files(
         .collect()
 }
 
+pub(crate) fn stream_sha256_hex(file: &mut File) -> io::Result<String> {
+    file.seek(SeekFrom::Start(0))?;
+    let mut digest = Sha256::new();
+    let mut buffer = [0u8; RECOMMENDED_CHUNK];
+    loop {
+        let count = file.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        digest.update(&buffer[..count]);
+    }
+    Ok(format!("{:x}", digest.finalize()))
+}
+
 fn prepare_file(
     path: &Path,
     instrumentation: Option<&SyncInstrumentation>,
@@ -790,17 +804,8 @@ fn prepare_file(
         .metadata()
         .map_err(|_| JournalError::local(DiagnosticCode::LocalSegmentInvalid))?
         .len();
-    let mut digest = Sha256::new();
-    let mut buffer = [0u8; RECOMMENDED_CHUNK];
-    loop {
-        let count = file
-            .read(&mut buffer)
-            .map_err(|_| JournalError::local(DiagnosticCode::LocalSegmentInvalid))?;
-        if count == 0 {
-            break;
-        }
-        digest.update(&buffer[..count]);
-    }
+    let sha256 = stream_sha256_hex(&mut file)
+        .map_err(|_| JournalError::local(DiagnosticCode::LocalSegmentInvalid))?;
     file.seek(SeekFrom::Start(0))
         .map_err(|_| JournalError::local(DiagnosticCode::LocalSegmentInvalid))?;
     if let Some(instrumentation) = instrumentation {
@@ -810,7 +815,7 @@ fn prepare_file(
         descriptor: LocalFile {
             name: name.to_owned(),
             size,
-            sha256: format!("{:x}", digest.finalize()),
+            sha256,
         },
         file,
     })
