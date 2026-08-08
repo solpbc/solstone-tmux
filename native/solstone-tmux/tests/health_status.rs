@@ -263,7 +263,7 @@ fn production_failure_paths_redact_secrets_and_owner_content() {
             ]
             .len()
         );
-        let sync_failure = SyncOperationError::EndPassDiagnostic(
+        let sync_failure = SyncOperationError::EndSweepDiagnostic(
             SyncFailureClass::Contract,
             response_error.diagnostic(),
         );

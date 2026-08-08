@@ -45,7 +45,7 @@ const RETRY_DELAYS: [Duration; 4] = [
     Duration::from_secs(300),
 ];
 const PERIODIC_SYNC_INTERVAL: Duration = Duration::from_secs(60);
-const SEGMENTS_PER_PASS: usize = 8;
+const CANDIDATES_PER_BATCH: usize = 8;
 const STATUS_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -57,6 +57,8 @@ pub enum SyncActivity {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct SyncInstrumentationSnapshot {
     pub candidate_scans: usize,
+    pub batches: usize,
+    pub batch_yields: usize,
     pub hashed_files: usize,
     pub hashed_bytes: u64,
 }
@@ -64,6 +66,8 @@ pub struct SyncInstrumentationSnapshot {
 #[derive(Clone, Default)]
 pub struct SyncInstrumentation {
     candidate_scans: Arc<AtomicUsize>,
+    batches: Arc<AtomicUsize>,
+    batch_yields: Arc<AtomicUsize>,
     hashed_files: Arc<AtomicUsize>,
     hashed_bytes: Arc<AtomicUsize>,
 }
@@ -72,6 +76,8 @@ impl SyncInstrumentation {
     pub fn snapshot(&self) -> SyncInstrumentationSnapshot {
         SyncInstrumentationSnapshot {
             candidate_scans: self.candidate_scans.load(Ordering::Relaxed),
+            batches: self.batches.load(Ordering::Relaxed),
+            batch_yields: self.batch_yields.load(Ordering::Relaxed),
             hashed_files: self.hashed_files.load(Ordering::Relaxed),
             hashed_bytes: self.hashed_bytes.load(Ordering::Relaxed) as u64,
         }
@@ -79,6 +85,14 @@ impl SyncInstrumentation {
 
     pub(crate) fn candidate_scan(&self) {
         self.candidate_scans.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn batch(&self) {
+        self.batches.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn batch_yield(&self) {
+        self.batch_yields.fetch_add(1, Ordering::Relaxed);
     }
 
     pub(crate) fn hashed_file(&self, bytes: u64) {
@@ -591,15 +605,15 @@ pub enum SyncFailureClass {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SyncOperationError {
     RetainCandidate(DiagnosticCode),
-    EndPass(SyncFailureClass),
-    EndPassDiagnostic(SyncFailureClass, DiagnosticCode),
+    EndSweep(SyncFailureClass),
+    EndSweepDiagnostic(SyncFailureClass, DiagnosticCode),
 }
 
 impl fmt::Display for SyncOperationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let diagnostic = match self {
-            Self::RetainCandidate(code) | Self::EndPassDiagnostic(_, code) => *code,
-            Self::EndPass(failure) => diagnostic_for_failure(*failure),
+            Self::RetainCandidate(code) | Self::EndSweepDiagnostic(_, code) => *code,
+            Self::EndSweep(failure) => diagnostic_for_failure(*failure),
         };
         formatter.write_str(diagnostic.message())
     }
@@ -916,7 +930,7 @@ impl SyncScheduler {
                 self.facts.pending_segments = 0;
                 return self.end_sweep(
                     summary,
-                    SyncOperationError::EndPassDiagnostic(
+                    SyncOperationError::EndSweepDiagnostic(
                         SyncFailureClass::Contract,
                         DiagnosticCode::LocalSegmentInvalid,
                     ),
@@ -945,7 +959,8 @@ impl SyncScheduler {
         self.facts.sync_in_progress = true;
         self.write_health().await;
         let mut activity = None;
-        for (batch_index, batch) in candidates.chunks(SEGMENTS_PER_PASS).enumerate() {
+        for (batch_index, batch) in candidates.chunks(CANDIDATES_PER_BATCH).enumerate() {
+            self.instrumentation.batch();
             let mut batch_fresh_listing_days = HashSet::new();
             for candidate in batch {
                 if shutdown_requested(&mut shutdown) {
@@ -1080,7 +1095,7 @@ impl SyncScheduler {
                     drop(activity);
                     return self.end_sweep(
                         summary,
-                        SyncOperationError::EndPass(SyncFailureClass::Contract),
+                        SyncOperationError::EndSweep(SyncFailureClass::Contract),
                     );
                 };
                 let listing = match cancellable(&mut shutdown, journal.segments(candidate.day()))
@@ -1132,8 +1147,8 @@ impl SyncScheduler {
                     RetentionOutcome::Disabled | RetentionOutcome::Ineligible => {}
                 }
             }
-            if batch_index + 1 != candidates.chunks(SEGMENTS_PER_PASS).len() {
-                tokio::task::yield_now().await;
+            if batch_index + 1 != candidates.chunks(CANDIDATES_PER_BATCH).len() {
+                self.yield_between_batches().await;
                 if shutdown_requested(&mut shutdown) {
                     return self.cancelled_sweep_with_activity(summary, activity).await;
                 }
@@ -1141,6 +1156,11 @@ impl SyncScheduler {
         }
         drop(activity);
         summary
+    }
+
+    async fn yield_between_batches(&self) {
+        tokio::task::yield_now().await;
+        self.instrumentation.batch_yield();
     }
 
     async fn inventory_for(
@@ -1256,8 +1276,8 @@ impl SyncScheduler {
                 summary.diagnostic = Some(code);
                 SyncFailureClass::Contract
             }
-            SyncOperationError::EndPass(failure) => failure,
-            SyncOperationError::EndPassDiagnostic(failure, code) => {
+            SyncOperationError::EndSweep(failure) => failure,
+            SyncOperationError::EndSweepDiagnostic(failure, code) => {
                 summary.diagnostic = Some(code);
                 failure
             }
@@ -1339,12 +1359,12 @@ impl SyncJournal for ProductionJournal {
             let expected_name = default_stream(&self.descriptor.hostname)
                 .ok()
                 .and_then(|stream| derive_component(&stream).ok())
-                .ok_or(SyncOperationError::EndPassDiagnostic(
+                .ok_or(SyncOperationError::EndSweepDiagnostic(
                     SyncFailureClass::Contract,
                     DiagnosticCode::ConfiguredStreamMismatch,
                 ))?;
             if self.configured_stream != expected_name {
-                return Err(SyncOperationError::EndPassDiagnostic(
+                return Err(SyncOperationError::EndSweepDiagnostic(
                     SyncFailureClass::Contract,
                     DiagnosticCode::ConfiguredStreamMismatch,
                 ));
@@ -1359,7 +1379,7 @@ impl SyncJournal for ProductionJournal {
             let (observer, contacted) = self
                 .owner
                 .as_ref()
-                .ok_or(SyncOperationError::EndPass(SyncFailureClass::Contract))?
+                .ok_or(SyncOperationError::EndSweep(SyncFailureClass::Contract))?
                 .ensure_registration(&self.descriptor, expected_name.as_str())
                 .await
                 .map_err(map_journal_error)?;
@@ -1377,11 +1397,11 @@ impl SyncJournal for ProductionJournal {
             let owner = self
                 .owner
                 .as_ref()
-                .ok_or(SyncOperationError::EndPass(SyncFailureClass::Contract))?;
+                .ok_or(SyncOperationError::EndSweep(SyncFailureClass::Contract))?;
             let observer = self
                 .observer
                 .as_ref()
-                .ok_or(SyncOperationError::EndPass(SyncFailureClass::Contract))?;
+                .ok_or(SyncOperationError::EndSweep(SyncFailureClass::Contract))?;
             owner
                 .journal()
                 .ingest_upload(
@@ -1403,7 +1423,7 @@ impl SyncJournal for ProductionJournal {
         Box::pin(async move {
             self.owner
                 .as_ref()
-                .ok_or(SyncOperationError::EndPass(SyncFailureClass::Contract))?
+                .ok_or(SyncOperationError::EndSweep(SyncFailureClass::Contract))?
                 .journal()
                 .ingest_segments(day)
                 .await
@@ -1418,7 +1438,7 @@ impl SyncJournal for ProductionJournal {
         Box::pin(async move {
             self.owner
                 .as_ref()
-                .ok_or(SyncOperationError::EndPass(SyncFailureClass::Contract))?
+                .ok_or(SyncOperationError::EndSweep(SyncFailureClass::Contract))?
                 .journal()
                 .ingest_event("observe", "status", beacon.fields())
                 .await
@@ -1538,7 +1558,7 @@ async fn refresh_waiting_health(
 
 fn map_diagnostic(code: DiagnosticCode) -> SyncOperationError {
     match code {
-        DiagnosticCode::JournalTimeout => SyncOperationError::EndPassDiagnostic(
+        DiagnosticCode::JournalTimeout => SyncOperationError::EndSweepDiagnostic(
             SyncFailureClass::Timeout,
             DiagnosticCode::JournalTimeout,
         ),
@@ -1548,9 +1568,9 @@ fn map_diagnostic(code: DiagnosticCode) -> SyncOperationError {
         | DiagnosticCode::RegistrationNameMismatch
         | DiagnosticCode::PrivateStateInvalid
         | DiagnosticCode::PrivateStateIo => {
-            SyncOperationError::EndPassDiagnostic(SyncFailureClass::Contract, code)
+            SyncOperationError::EndSweepDiagnostic(SyncFailureClass::Contract, code)
         }
-        _ => SyncOperationError::EndPassDiagnostic(SyncFailureClass::Direct, code),
+        _ => SyncOperationError::EndSweepDiagnostic(SyncFailureClass::Direct, code),
     }
 }
 
@@ -1560,7 +1580,7 @@ fn map_journal_error(error: JournalError) -> SyncOperationError {
         DiagnosticCode::RequestTooLarge | DiagnosticCode::LocalSegmentInvalid => {
             SyncOperationError::RetainCandidate(diagnostic)
         }
-        DiagnosticCode::JournalTimeout => SyncOperationError::EndPassDiagnostic(
+        DiagnosticCode::JournalTimeout => SyncOperationError::EndSweepDiagnostic(
             SyncFailureClass::Timeout,
             DiagnosticCode::JournalTimeout,
         ),
@@ -1569,7 +1589,7 @@ fn map_journal_error(error: JournalError) -> SyncOperationError {
                 JournalReasonCode::AuthKeyInvalid
                 | JournalReasonCode::AuthRequired
                 | JournalReasonCode::PlRevoked,
-            ) => SyncOperationError::EndPassDiagnostic(
+            ) => SyncOperationError::EndSweepDiagnostic(
                 SyncFailureClass::Auth,
                 DiagnosticCode::JournalRejected,
             ),
@@ -1578,11 +1598,11 @@ fn map_journal_error(error: JournalError) -> SyncOperationError {
                 | JournalReasonCode::IngestNoFiles
                 | JournalReasonCode::IngestSidecarConflict,
             ) => SyncOperationError::RetainCandidate(DiagnosticCode::LocalSegmentInvalid),
-            Some(JournalReasonCode::IngestStorageFailed) => SyncOperationError::EndPassDiagnostic(
+            Some(JournalReasonCode::IngestStorageFailed) => SyncOperationError::EndSweepDiagnostic(
                 SyncFailureClass::Direct,
                 DiagnosticCode::JournalRejected,
             ),
-            _ => SyncOperationError::EndPassDiagnostic(
+            _ => SyncOperationError::EndSweepDiagnostic(
                 SyncFailureClass::Contract,
                 DiagnosticCode::JournalRejected,
             ),
@@ -1593,9 +1613,9 @@ fn map_journal_error(error: JournalError) -> SyncOperationError {
         | DiagnosticCode::RegistrationNameMismatch
         | DiagnosticCode::PrivateStateInvalid
         | DiagnosticCode::PrivateStateIo => {
-            SyncOperationError::EndPassDiagnostic(SyncFailureClass::Contract, diagnostic)
+            SyncOperationError::EndSweepDiagnostic(SyncFailureClass::Contract, diagnostic)
         }
-        _ => SyncOperationError::EndPassDiagnostic(SyncFailureClass::Direct, diagnostic),
+        _ => SyncOperationError::EndSweepDiagnostic(SyncFailureClass::Direct, diagnostic),
     }
 }
 
@@ -2073,7 +2093,7 @@ mod tests {
                     .expect_err("invalid credential target was accepted");
                 assert!(matches!(
                     map_diagnostic(code),
-                    SyncOperationError::EndPassDiagnostic(
+                    SyncOperationError::EndSweepDiagnostic(
                         SyncFailureClass::Contract,
                         DiagnosticCode::PrivateStateInvalid
                     )

@@ -195,13 +195,13 @@ observer state is persisted.
 ### Sync and custody
 
 The sync task takes one filesystem snapshot on startup, segment finalization,
-and periodic wakeups, then processes that snapshot in sequential groups of at
-most eight candidates, yielding between groups. It owns one bounded backoff
+and periodic wakeups, then processes that snapshot in sequential batches of at
+most eight candidates, yielding between batches. It owns one bounded backoff
 sequence. Local file inventories are reused while the sorted member names and
 file identities match; a content rewrite, member addition, removal, or rename
 invalidates that reuse. A Journal listing may be reused for the current sweep
 to skip an upload, while deletion requires a listing fetched in the current
-group. A failed pre-upload lookup falls through to the normal upload path.
+batch. A failed pre-upload lookup falls through to the normal upload path.
 Upload success alone never permits deletion: a fresh Journal listing and a new
 local inventory must prove filename, SHA-256 digest, and held status for every
 local file. Journal responses are limited to 4 MiB.
