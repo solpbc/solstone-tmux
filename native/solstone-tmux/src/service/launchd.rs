@@ -30,9 +30,24 @@ pub fn artifact_path(home: &Path) -> PathBuf {
         .join(format!("{LABEL}.plist"))
 }
 
-pub fn render(binary: &Path, service_path: &OsStr) -> Result<Vec<u8>, ServiceError> {
+pub fn render(
+    binary: &Path,
+    service_path: &OsStr,
+    home: &Path,
+    tmux_tmpdir: Option<&OsStr>,
+) -> Result<Vec<u8>, ServiceError> {
     let binary = xml_escape(utf8_path(binary)?);
     let service_path = xml_escape(utf8_os(service_path)?);
+    let home = xml_escape(utf8_path(home)?);
+    let tmux_tmpdir_entry = if let Some(tmux_tmpdir) = tmux_tmpdir {
+        let tmux_tmpdir = xml_escape(utf8_os(tmux_tmpdir)?);
+        format!(
+            "    <key>TMUX_TMPDIR</key>\n\
+    <string>{tmux_tmpdir}</string>\n"
+        )
+    } else {
+        String::new()
+    };
     Ok(format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
 <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \
@@ -48,8 +63,11 @@ pub fn render(binary: &Path, service_path: &OsStr) -> Result<Vec<u8>, ServiceErr
   </array>\n\
   <key>EnvironmentVariables</key>\n\
   <dict>\n\
+    <key>HOME</key>\n\
+    <string>{home}</string>\n\
     <key>PATH</key>\n\
     <string>{service_path}</string>\n\
+{tmux_tmpdir_entry}\
     <key>LC_ALL</key>\n\
     <string>UTF-8</string>\n\
   </dict>\n\
@@ -81,9 +99,10 @@ pub async fn prepare_install(
     user_id: u32,
     binary: &Path,
     service_path: &OsStr,
+    tmux_tmpdir: Option<&OsStr>,
 ) -> Result<PreparedInstall, ServiceError> {
     let path = artifact_path(home);
-    let bytes = render(binary, service_path)?;
+    let bytes = render(binary, service_path, home, tmux_tmpdir)?;
     let marker = ownership_marker();
     let present = validate_regular_file(&path, Some(&marker))?;
     let unchanged = present

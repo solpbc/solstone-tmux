@@ -37,8 +37,16 @@ const LOCALE_VALUE: &str = "UTF-8";
 fn launchd_plist_has_required_structure_and_locale() {
     let binary = "/Applications/Solstone/solstone-tmux";
     let service_path = "/opt/homebrew/bin:/usr/bin:/bin";
+    let home = "/Users/owner";
+    let tmux_tmpdir = "/private/var/owner-tmux";
     let plist = read_rendered_launchd_plist(
-        &render(Path::new(binary), OsStr::new(service_path)).expect("render plist"),
+        &render(
+            Path::new(binary),
+            OsStr::new(service_path),
+            Path::new(home),
+            Some(OsStr::new(tmux_tmpdir)),
+        )
+        .expect("render plist"),
     );
 
     assert_eq!(plist.label, LABEL);
@@ -48,7 +56,7 @@ fn launchd_plist_has_required_structure_and_locale() {
     // that tmux returns the indicator's UTF-8 bytes unchanged.
     assert_eq!(
         plist.environment_variables,
-        expected_environment_variables(service_path)
+        expected_environment_variables(home, service_path, Some(tmux_tmpdir))
     );
     assert!(plist.run_at_load);
     assert_eq!(plist.keep_alive, [("SuccessfulExit".to_owned(), false)]);
@@ -62,6 +70,8 @@ fn launchd_xml_and_arguments_handle_spaces_and_metacharacters() {
         render(
             Path::new("/Owner/a b/$bin;&<>'\"/solstone-tmux"),
             OsStr::new("/Owner/a b/$PATH;&<>'\":/usr/bin"),
+            Path::new("/Owner/a b/$HOME;&<>'\""),
+            Some(OsStr::new("/Owner/a b/$TMUX;&<>'\"")),
         )
         .expect("render escaped plist"),
     )
@@ -70,6 +80,8 @@ fn launchd_xml_and_arguments_handle_spaces_and_metacharacters() {
         plist.contains("<string>/Owner/a b/$bin;&amp;&lt;&gt;&apos;&quot;/solstone-tmux</string>")
     );
     assert!(plist.contains("<string>/Owner/a b/$PATH;&amp;&lt;&gt;&apos;&quot;:/usr/bin</string>"));
+    assert!(plist.contains("<string>/Owner/a b/$HOME;&amp;&lt;&gt;&apos;&quot;</string>"));
+    assert!(plist.contains("<string>/Owner/a b/$TMUX;&amp;&lt;&gt;&apos;&quot;</string>"));
     let arguments = plist
         .find("<key>ProgramArguments</key>")
         .expect("arguments key");
@@ -215,12 +227,14 @@ fn launchd_locale_free_owned_plist_is_replaced_through_graceful_stop() {
     let desired_bytes = expected_plist_bytes(&fixture);
     let (_, service_path) = expected_plist_inputs(&fixture);
     let service_path = service_path.to_str().expect("UTF-8 service PATH");
+    let home = fixture.home.to_str().expect("UTF-8 home");
+    let tmux_tmpdir = fixture.tmux_tmpdir.to_str().expect("UTF-8 tmux tmpdir");
     let locale_entry =
         format!("<key>{LOCALE_KEY}</key>\n<string>{LOCALE_VALUE}</string>\n").into_bytes();
 
     // Derive the pre-fix artifact from render instead of hand-authoring a second plist,
     // so the old and desired artifacts provably differ only by the locale entry. This
-    // deliberately depends on that entry remaining contiguous immediately after PATH.
+    // deliberately depends on that entry remaining contiguous in the environment dictionary.
     let occurrences = desired_bytes
         .windows(locale_entry.len())
         .filter(|window| *window == locale_entry)
@@ -251,10 +265,12 @@ fn launchd_locale_free_owned_plist_is_replaced_through_graceful_stop() {
     let desired_plist = read_rendered_launchd_plist(&desired_bytes);
     assert_eq!(
         desired_plist.environment_variables,
-        expected_environment_variables(service_path)
+        expected_environment_variables(home, service_path, Some(tmux_tmpdir))
     );
     let mut expected_old_plist = desired_plist.clone();
-    expected_old_plist.environment_variables = vec![("PATH".to_owned(), service_path.to_owned())];
+    expected_old_plist
+        .environment_variables
+        .retain(|(key, _)| key != LOCALE_KEY);
     assert_eq!(
         read_rendered_launchd_plist(&old_bytes),
         expected_old_plist,
@@ -775,7 +791,11 @@ fn unchanged_running_job_is_enabled_and_rechecked_without_restart_or_rewrite() {
     let (_, service_path) = expected_plist_inputs(&fixture);
     assert_eq!(
         read_rendered_launchd_plist(&fs::read(&artifact).expect("plist")).environment_variables,
-        expected_environment_variables(service_path.to_str().expect("UTF-8 service PATH"))
+        expected_environment_variables(
+            fixture.home.to_str().expect("UTF-8 home"),
+            service_path.to_str().expect("UTF-8 service PATH"),
+            Some(fixture.tmux_tmpdir.to_str().expect("UTF-8 tmux tmpdir")),
+        )
     );
     let desired = expected_plist_bytes(&fixture);
     let inode = fs::metadata(&artifact).expect("plist").ino();
@@ -1338,8 +1358,13 @@ fn launchd_install_and_uninstall_reject_invalid_or_unowned_artifacts_before_muta
             let artifact = artifact_path(&fixture.home);
             fs::create_dir_all(artifact.parent().expect("plist parent")).expect("plist parent");
             let preserved = b"preserved owner bytes\n";
-            let owned =
-                render(Path::new("/owned/observer"), OsStr::new("/owned")).expect("owned plist");
+            let owned = render(
+                Path::new("/owned/observer"),
+                OsStr::new("/owned"),
+                Path::new("/owned/home"),
+                None,
+            )
+            .expect("owned plist");
             let referent = fixture.root.join("owned referent.plist");
             let dangling = fixture.root.join("missing referent.plist");
             let sentinel = artifact.join("sentinel");
@@ -1637,11 +1662,20 @@ fn decode_xml_text(value: &str) -> String {
         .replace("&amp;", "&")
 }
 
-fn expected_environment_variables(service_path: &str) -> Vec<(String, String)> {
-    vec![
+fn expected_environment_variables(
+    home: &str,
+    service_path: &str,
+    tmux_tmpdir: Option<&str>,
+) -> Vec<(String, String)> {
+    let mut values = vec![
+        ("HOME".to_owned(), home.to_owned()),
         ("PATH".to_owned(), service_path.to_owned()),
-        (LOCALE_KEY.to_owned(), LOCALE_VALUE.to_owned()),
-    ]
+    ];
+    if let Some(tmux_tmpdir) = tmux_tmpdir {
+        values.push(("TMUX_TMPDIR".to_owned(), tmux_tmpdir.to_owned()));
+    }
+    values.push((LOCALE_KEY.to_owned(), LOCALE_VALUE.to_owned()));
+    values
 }
 
 struct ServiceFixture {
@@ -1650,6 +1684,7 @@ struct ServiceFixture {
     root: PathBuf,
     binary: PathBuf,
     tmux: PathBuf,
+    tmux_tmpdir: PathBuf,
     path_entry: PathBuf,
     environment: FakeEnvironment,
 }
@@ -1661,6 +1696,7 @@ impl ServiceFixture {
         let home = root.join("owner home;$&");
         let bin = root.join("tmux bin");
         let tmux = bin.join("tmux");
+        let tmux_tmpdir = root.join("tmux tmp;$&");
         let binary = root.join("observer bin;$&/solstone-tmux");
         create_executable(&binary);
         if with_tmux {
@@ -1671,6 +1707,7 @@ impl ServiceFixture {
         let environment = FakeEnvironment::from_paths([
             ("HOME", home.as_os_str().to_owned()),
             ("PATH", bin.as_os_str().to_owned()),
+            ("TMUX_TMPDIR", tmux_tmpdir.as_os_str().to_owned()),
             (
                 "XDG_CONFIG_HOME",
                 root.join("ignored config").into_os_string(),
@@ -1683,6 +1720,7 @@ impl ServiceFixture {
             root,
             binary,
             tmux,
+            tmux_tmpdir,
             path_entry: bin,
             environment,
         }
@@ -1709,7 +1747,13 @@ impl ServiceFixture {
 
 fn expected_plist_bytes(fixture: &ServiceFixture) -> Vec<u8> {
     let (binary, service_path) = expected_plist_inputs(fixture);
-    render(&binary, &service_path).expect("desired plist")
+    render(
+        &binary,
+        &service_path,
+        &fixture.home,
+        Some(fixture.tmux_tmpdir.as_os_str()),
+    )
+    .expect("desired plist")
 }
 
 fn expected_plist_inputs(fixture: &ServiceFixture) -> (PathBuf, OsString) {
@@ -1727,7 +1771,13 @@ fn expected_plist_inputs(fixture: &ServiceFixture) -> (PathBuf, OsString) {
 fn write_old_plist(fixture: &ServiceFixture) -> (Vec<u8>, u64) {
     let artifact = artifact_path(&fixture.home);
     fs::create_dir_all(artifact.parent().expect("plist parent")).expect("plist parent");
-    let bytes = render(Path::new("/old/solstone-tmux"), OsStr::new("/old")).expect("old plist");
+    let bytes = render(
+        Path::new("/old/solstone-tmux"),
+        OsStr::new("/old"),
+        Path::new("/old/home"),
+        None,
+    )
+    .expect("old plist");
     fs::write(&artifact, &bytes).expect("old plist");
     let inode = fs::metadata(&artifact).expect("old plist").ino();
     (bytes, inode)

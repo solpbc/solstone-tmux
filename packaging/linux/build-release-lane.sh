@@ -108,7 +108,7 @@ work_root="$(mktemp -d "$output_parent/.solstone-tmux-release.XXXXXX")"
 unset TMUX TMUX_PANE
 # The path tmux itself derives from TMUX_TMPDIR, pinned explicitly so the CLI
 # calls and the observer's own resolution agree on one server.
-lane_tmux_socket="$work_root/tmux/tmux-$(id -u)/default"
+lane_tmux_socket="$work_root/tmux/tmux-$UID/default"
 
 observer_pid=""
 client_pid=""
@@ -168,7 +168,8 @@ mkdir -m 0700 "$XDG_CONFIG_HOME/solstone-tmux"
 tmux_path="$(command -v tmux)"
 tmux -S "$lane_tmux_socket" -f /dev/null new-session -d -s candidate \
     "while :; do printf 'durable candidate observation\\n'; sleep 1; done"
-script -q -c "tmux -S '$lane_tmux_socket' attach-session -t candidate" /dev/null \
+SOLSTONE_TMUX_LANE_SOCKET="$lane_tmux_socket" \
+    script -q -c 'tmux -S "$SOLSTONE_TMUX_LANE_SOCKET" attach-session -t candidate' /dev/null \
     >"$work_root/tmux-client.log" 2>&1 &
 client_pid="$!"
 printf '{"tmux_path":"%s"}\n' "$tmux_path" \

@@ -96,6 +96,8 @@ fn launchd_loaded_and_not_loaded_statuses_use_same_taxonomy() {
         launchd::render(
             std::path::Path::new("/opt/solstone-tmux"),
             OsStr::new("/usr/bin:/bin"),
+            &home,
+            None,
         )
         .expect("plist bytes"),
     )
@@ -145,6 +147,8 @@ fn launchd_default_user_id_comes_from_os_not_environment() {
         launchd::render(
             std::path::Path::new("/opt/solstone-tmux"),
             OsStr::new("/usr/bin:/bin"),
+            &home,
+            None,
         )
         .expect("plist bytes"),
     )

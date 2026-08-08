@@ -207,6 +207,10 @@ impl<'a> ServiceController<'a> {
         let search_directories = search_directories(self.environment, &self.standard_directories);
         let tmux_path = resolve_tmux(&search_directories)?;
         let service_path = assembled_service_path(&tmux_path, &search_directories)?;
+        let tmux_tmpdir = self
+            .environment
+            .var_os("TMUX_TMPDIR")
+            .filter(|value| !value.is_empty());
         let state = LocalObserver { tmux_path };
         let previous_state = read_local_observer_state(&paths.config_root)?;
 
@@ -228,6 +232,7 @@ impl<'a> ServiceController<'a> {
                     self.user_id,
                     &binary,
                     &service_path,
+                    tmux_tmpdir.as_deref(),
                 )
                 .await?;
                 persist_local_observer(&paths.config_root, &state)?;

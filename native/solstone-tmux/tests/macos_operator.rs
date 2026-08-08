@@ -55,6 +55,29 @@ fn operator_flow_has_one_exact_ordered_command_path() {
     assert!(commands.contains("/usr/local/bin/solstone-tmux install-service"));
     assert!(commands.contains("launchctl print gui/501/com.solstone.tmux"));
     assert!(commands.contains("/usr/local/bin/solstone-tmux uninstall-service"));
+    let tmux_commands = run
+        .workflow_commands
+        .iter()
+        .chain(&run.cleanup_commands)
+        .filter(|command| command_name(command) == "tmux")
+        .collect::<Vec<_>>();
+    assert!(!tmux_commands.is_empty());
+    assert!(
+        tmux_commands
+            .iter()
+            .all(|command| command.starts_with("tmux -S ")),
+        "every dispatched tmux command must pin the scratch socket: {tmux_commands:?}"
+    );
+    assert!(run.workflow_commands.iter().any(|command| {
+        command_name(command) == "sh"
+            && command.contains("nohup\\ script")
+            && command.contains("tmux\\ -S")
+    }));
+    assert!(run.workflow_commands.iter().any(|command| {
+        command_name(command) == "sh"
+            && command.contains("grep -Fq")
+            && command.contains("solstone-tmux-release-isolation-")
+    }));
     assert!(!commands.contains(" gh "));
     assert!(!commands.contains(" publish"));
     assert!(!commands.contains(" release"));
@@ -90,6 +113,14 @@ fn every_operator_command_failure_stops_before_later_work() {
                 .all(|command| command_name(command) != "mv"),
             "position {failure_position} finalized a candidate during cleanup"
         );
+        assert!(
+            run.cleanup_commands
+                .iter()
+                .filter(|command| command_name(command) == "tmux")
+                .all(|command| command.starts_with("tmux -S ")),
+            "position {failure_position} dispatched an unpinned cleanup tmux command: {:?}",
+            run.cleanup_commands
+        );
     }
 }
 
@@ -110,10 +141,11 @@ fn expected_command_names() -> Vec<&'static str> {
         "security",
         "grep",
         "xcrun",
+        "id",
         "mktemp",
         "mkdir",
+        "mkdir",
         "test",
-        "id",
         "launchctl",
         "tmux",
         "tmux",
@@ -181,11 +213,13 @@ fn expected_command_names() -> Vec<&'static str> {
         "solstone-tmux",
         "launchctl",
         "grep",
+        "sed",
         "sh",
-        "kill",
-        "find",
+        "launchctl",
+        "sed",
         "solstone-tmux",
         "launchctl",
+        "find",
         "kill",
         "tmux",
         "sudo",
@@ -368,10 +402,12 @@ case "$command_name" in
             exit 0
         fi
         if [[ "${1:-}" == "-c" && "${2:-}" == *"nohup script"* ]]; then
-            printf '%s\n' 4242 >"${*: -1}"
+            printf '%s\n' 4242 >"${5:?missing client pid path}"
             exit 0
         fi
         if [[ "${1:-}" == "-c" && "${2:-}" == *"for ignored"* ]]; then
+            [[ "$2" == *'-exec grep -Fq -- "$2"'* ]]
+            [[ "${5:-}" == "solstone-tmux-release-isolation-$FAKE_SOURCE_COMMIT" ]]
             /bin/sleep 1
             exit 0
         fi
@@ -442,7 +478,7 @@ case "$command_name" in
         case "${1:-}" in
             print)
                 if [[ -f "$FAKE_OPERATOR_STATE" ]]; then
-                    echo "    pid = 4321"
+                    printf '\tpid = 4321\n\t\tpid = 9999\n'
                 else
                     exit 113
                 fi

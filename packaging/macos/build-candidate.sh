@@ -216,17 +216,11 @@ scratch_tmux_socket="$scratch_tmux/tmux-$user_id/default"
 
 client_pid_file="$scratch_root/tmux-client.pid"
 client_pid=""
-observer_pid=""
 service_installed=false
 package_installed=false
 
 cleanup() {
     set +e
-    if [[ -n "$observer_pid" ]]; then
-        SOLSTONE_TMUX_OPERATOR_CLEANUP=1 \
-            operator_exec kill -TERM "$observer_pid" >/dev/null 2>&1
-        wait "$observer_pid" >/dev/null 2>&1
-    fi
     if $service_installed; then
         SOLSTONE_TMUX_OPERATOR_CLEANUP=1 \
             HOME="$scratch_home" \
@@ -495,9 +489,10 @@ operator_exec grep -Fx "solstone-tmux $product_version (source $source_commit)" 
     <<<"$installed_version"
 
 export TERM=xterm-256color
+isolation_marker="solstone-tmux-release-isolation-$source_commit"
 # -S, always. See the DANGER block above.
 operator_exec tmux -S "$scratch_tmux_socket" -f /dev/null new-session -d -s candidate \
-    "while :; do printf 'durable candidate observation\\n'; sleep 1; done"
+    "while :; do printf '$isolation_marker\\n'; sleep 1; done"
 # $1, $2, $3, and $! belong to the dispatched shell.
 # shellcheck disable=SC2016
 operator_exec sh -c \
@@ -513,18 +508,22 @@ HOME="$scratch_home" \
 TMUX_TMPDIR="$scratch_tmux" \
     operator_exec /usr/local/bin/solstone-tmux install-service
 operator_exec launchctl print "gui/$user_id/com.solstone.tmux" >"$scratch_root/launchd-print.txt"
-operator_exec grep -Eq '^[[:space:]]*pid = [1-9][0-9]*$' "$scratch_root/launchd-print.txt"
-HOME="$scratch_home" \
-TMUX_TMPDIR="$scratch_tmux" \
-    "$signed_executable" run \
-    >"$scratch_root/observer.stdout" 2>"$scratch_root/observer.stderr" &
-observer_pid="$!"
-# Loop variables and $1 belong to the dispatched shell.
+operator_exec grep -Eq $'^\tpid = [1-9][0-9]*$' "$scratch_root/launchd-print.txt"
+service_pid="$(
+    operator_exec sed -n $'s/^\tpid = \([1-9][0-9]*\)$/\\1/p' \
+        "$scratch_root/launchd-print.txt"
+)"
+if [[ ! "$service_pid" =~ ^[1-9][0-9]*$ ]]; then
+    echo "launchd service did not report one root pid" >&2
+    exit 1
+fi
+# Loop variables, $1, and $2 belong to the dispatched shell.
 # shellcheck disable=SC2016
 operator_exec sh -c \
     'for ignored in $(seq 1 45); do
         if find "$1/Library/Application Support/solstone-tmux/captures" \
-            -type f -name "*.jsonl" -size +0c -print -quit 2>/dev/null |
+            -type f -name "*.jsonl" -size +0c \
+            -exec grep -Fq -- "$2" {} \; -print -quit 2>/dev/null |
             grep -q .
         then
             exit 0
@@ -532,16 +531,15 @@ operator_exec sh -c \
         sleep 1
      done
      exit 1' \
-    sh "$scratch_home"
-operator_exec kill -TERM "$observer_pid"
-wait "$observer_pid"
-observer_pid=""
-incomplete_output="$(
-    operator_exec find "$scratch_home/Library/Application Support/solstone-tmux/captures" \
-        \( -name '*.incomplete' -o -name '*.incomplete.meta' \) -print -quit
+    sh "$scratch_home" "$isolation_marker"
+operator_exec launchctl print "gui/$user_id/com.solstone.tmux" \
+    >"$scratch_root/launchd-print-after-capture.txt"
+stable_service_pid="$(
+    operator_exec sed -n $'s/^\tpid = \([1-9][0-9]*\)$/\\1/p' \
+        "$scratch_root/launchd-print-after-capture.txt"
 )"
-if [[ -n "$incomplete_output" ]]; then
-    echo "foreground macOS observer did not shut down cleanly" >&2
+if [[ "$stable_service_pid" != "$service_pid" ]]; then
+    echo "launchd service restarted while producing scratch output" >&2
     exit 1
 fi
 HOME="$scratch_home" \
@@ -558,6 +556,14 @@ else
     fi
 fi
 service_installed=false
+incomplete_output="$(
+    operator_exec find "$scratch_home/Library/Application Support/solstone-tmux/captures" \
+        \( -name '*.incomplete' -o -name '*.incomplete.meta' \) -print -quit
+)"
+if [[ -n "$incomplete_output" ]]; then
+    echo "launchd service did not shut down cleanly" >&2
+    exit 1
+fi
 operator_exec kill -TERM "$client_pid"
 client_pid=""
 # -S, always. See the DANGER block above.
