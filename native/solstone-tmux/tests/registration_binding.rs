@@ -31,7 +31,7 @@ use solstone_tmux::private_link::{
 use solstone_tmux::segment::SegmentState;
 use solstone_tmux::sync::{RegistrationOwner, SyncActivity, SyncTask, SyncWake};
 use support::private_link_peer::PrivateLinkPeer;
-use support::{TestDirectory, golden_capture};
+use support::{TestDirectory, golden_capture, observer_wire_fixture};
 use time::{Date, Month, PrimitiveDateTime, Time, UtcOffset};
 use tokio::sync::oneshot;
 
@@ -92,7 +92,7 @@ async fn returned_name_mismatch_is_not_persisted_and_capture_continues() {
 
     let requests = peer.requests();
     assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0].path(), "/app/observer/register");
+    assert_eq!(requests[0].path(), "/app/devices/register");
     assert!(!fixture.config_root.join(OBSERVER_FILENAME).exists());
     evidence.assert_capture_continued();
     assert_eq!(
@@ -168,7 +168,15 @@ async fn normal_prior_install_migrates_and_reuses_checked_registration() {
         .await
         .expect("reuse registration");
     assert!(!contacted);
-    assert!(reused == persisted, "cached registration changed");
+    assert_eq!(reused.ingest_url, "/app/devices/ingest");
+    assert_eq!(
+        reused.credential_instance_id,
+        persisted.credential_instance_id
+    );
+    assert_eq!(reused.key, persisted.key);
+    assert_eq!(reused.prefix, persisted.prefix);
+    assert_eq!(reused.name, persisted.name);
+    assert_eq!(reused.protocol_version, persisted.protocol_version);
     peer.enqueue_response(
         200,
         br#"{"protocol_version":2,"items":[],"total":0}"#.to_vec(),
@@ -180,7 +188,7 @@ async fn normal_prior_install_migrates_and_reuses_checked_registration() {
         .expect("authenticated listing");
     let requests = peer.requests();
     assert_eq!(requests.len(), 2);
-    assert_eq!(requests[0].path(), "/app/observer/register");
+    assert_eq!(requests[0].path(), "/app/devices/register");
     assert_eq!(
         requests[1].header("authorization"),
         Some("Bearer journal-returned-observer-key")
@@ -224,7 +232,7 @@ async fn stale_cached_observer_name_forces_reregistration() {
     assert_eq!(observer.name, "host.tmux");
     assert_eq!(observer.key, RETURNED_KEY);
     assert_eq!(peer.requests().len(), 1);
-    assert_eq!(peer.requests()[0].path(), "/app/observer/register");
+    assert_eq!(peer.requests()[0].path(), "/app/devices/register");
     assert!(
         load_observer(&fixture.config_root, &credential.instance_id, "host.tmux")
             .expect("load refreshed observer")
@@ -232,6 +240,124 @@ async fn stale_cached_observer_name_forces_reregistration() {
             == observer,
         "refreshed observer state differs"
     );
+    owner.shutdown().await.expect("owner shutdown");
+    peer.shutdown().await;
+}
+
+#[tokio::test]
+async fn reused_predecessor_ingest_url_is_rewritten_and_upload_targets_devices() {
+    let fixture = BindingFixture::new("binding-predecessor-ingest-rewrite");
+    let peer = PrivateLinkPeer::start().await;
+    let credential = peer.credential();
+    persist_credential(&fixture.config_root, &credential).expect("pairing state");
+    persist_observer(
+        &fixture.config_root,
+        &ObserverState {
+            credential_instance_id: credential.instance_id.clone(),
+            key: "observer-key".to_owned(),
+            prefix: "observer-prefix".to_owned(),
+            name: "host.tmux".to_owned(),
+            ingest_url: "/app/observer/ingest".to_owned(),
+            protocol_version: 2,
+        },
+    )
+    .expect("persist predecessor observer");
+
+    let owner = RegistrationOwner::start(credential.clone(), fixture.config_root.clone())
+        .await
+        .expect("start registration owner");
+    let (observer, contacted) = owner
+        .ensure_registration(&descriptor("host.example"), "host.tmux")
+        .await
+        .expect("reuse predecessor registration");
+
+    assert!(!contacted);
+    assert!(peer.requests().is_empty());
+    assert_eq!(observer.ingest_url, "/app/devices/ingest");
+
+    peer.enqueue_response(200, upload_success_body());
+    let upload_path = fixture.config_root.join("segment.jsonl");
+    fs::write(&upload_path, b"upload fixture\n").expect("write upload file");
+    owner
+        .journal()
+        .ingest_upload(
+            &observer.ingest_url,
+            "20260729",
+            "110000_300",
+            vec![upload_path],
+        )
+        .await
+        .expect("upload after predecessor rewrite");
+
+    let requests = peer.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].path(), "/app/devices/ingest");
+    assert_eq!(
+        load_observer(&fixture.config_root, &credential.instance_id, "host.tmux")
+            .expect("load rewritten observer")
+            .expect("rewritten observer")
+            .ingest_url,
+        "/app/devices/ingest"
+    );
+
+    owner.shutdown().await.expect("owner shutdown");
+    peer.shutdown().await;
+}
+
+#[tokio::test]
+async fn already_devices_ingest_url_is_left_unchanged_and_upload_targets_devices() {
+    let fixture = BindingFixture::new("binding-devices-ingest-unchanged");
+    let peer = PrivateLinkPeer::start().await;
+    let credential = peer.credential();
+    persist_credential(&fixture.config_root, &credential).expect("pairing state");
+    persist_observer(
+        &fixture.config_root,
+        &ObserverState {
+            credential_instance_id: credential.instance_id.clone(),
+            key: "observer-key".to_owned(),
+            prefix: "observer-prefix".to_owned(),
+            name: "host.tmux".to_owned(),
+            ingest_url: "/app/devices/ingest".to_owned(),
+            protocol_version: 2,
+        },
+    )
+    .expect("persist devices observer");
+    let observer_path = fixture.config_root.join(OBSERVER_FILENAME);
+    let original = fs::read(&observer_path).expect("read devices observer");
+
+    let owner = RegistrationOwner::start(credential, fixture.config_root.clone())
+        .await
+        .expect("start registration owner");
+    let (observer, contacted) = owner
+        .ensure_registration(&descriptor("host.example"), "host.tmux")
+        .await
+        .expect("reuse devices registration");
+
+    assert!(!contacted);
+    assert!(peer.requests().is_empty());
+    assert_eq!(
+        fs::read(&observer_path).expect("reread devices observer"),
+        original
+    );
+
+    peer.enqueue_response(200, upload_success_body());
+    let upload_path = fixture.config_root.join("segment.jsonl");
+    fs::write(&upload_path, b"upload fixture\n").expect("write upload file");
+    owner
+        .journal()
+        .ingest_upload(
+            &observer.ingest_url,
+            "20260729",
+            "110000_300",
+            vec![upload_path],
+        )
+        .await
+        .expect("upload already-devices ingest");
+
+    let requests = peer.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].path(), "/app/devices/ingest");
+
     owner.shutdown().await.expect("owner shutdown");
     peer.shutdown().await;
 }
@@ -445,6 +571,16 @@ fn empty_stream_fixture() -> Vec<u8> {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/legacy/config-empty-stream.json"),
     )
     .expect("empty-stream legacy fixture")
+}
+
+fn upload_success_body() -> Vec<u8> {
+    serde_json::to_vec(
+        &observer_wire_fixture(
+            "example.observer.ingestUpload.response.200.application-json.normal",
+        )
+        .payload,
+    )
+    .expect("serialize upload fixture")
 }
 
 fn registration_response(name: &str, key: &str) -> Vec<u8> {

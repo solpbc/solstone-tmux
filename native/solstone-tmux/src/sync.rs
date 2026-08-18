@@ -23,9 +23,9 @@ use crate::clock::Clock;
 use crate::config::{RuntimeConfig, default_stream};
 use crate::health::{DiagnosticCode, HealthWriter, SyncFacts};
 use crate::journal::{
-    JournalClient, JournalError, JournalReasonCode, ListingFileStatus, LocalFile,
-    RegistrationDescriptor, SegmentsEnvelope, UploadResult, UploadStatus, inventory_files,
-    stream_sha256_hex,
+    INGEST_PATH, JournalClient, JournalError, JournalReasonCode, ListingFileStatus, LocalFile,
+    PREDECESSOR_INGEST_PATH, RegistrationDescriptor, SegmentsEnvelope, UploadResult, UploadStatus,
+    inventory_files, stream_sha256_hex,
 };
 use crate::name::{DerivedName, derive_component};
 use crate::paths::PlatformKind;
@@ -274,7 +274,16 @@ impl RegistrationOwner {
         })
         .await
         .map_err(|_| DiagnosticCode::PrivateStateIo)??;
-        if let Some(observer) = existing {
+        if let Some(mut observer) = existing {
+            if observer.ingest_url == PREDECESSOR_INGEST_PATH {
+                observer.ingest_url = INGEST_PATH.to_owned();
+                let config_root = self.config_root.clone();
+                let persisted = observer.clone();
+                // Rewrite is idempotent and re-runs on the next reuse while the file still holds the predecessor.
+                let _ =
+                    tokio::task::spawn_blocking(move || persist_observer(&config_root, &persisted))
+                        .await;
+            }
             self.journal.validate_observer(&observer)?;
             self.bridge.opener().set_registered(&observer)?;
             return Ok((observer, false));

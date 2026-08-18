@@ -30,9 +30,11 @@ use crate::private_link::{
 use crate::storage::open_regular_readonly;
 use crate::sync::SyncInstrumentation;
 
-const REGISTER_PATH: &str = "/app/observer/register";
-const SEGMENTS_PATH: &str = "/app/observer/ingest/segments";
-const EVENT_PATH: &str = "/app/observer/ingest/event";
+const REGISTER_PATH: &str = "/app/devices/register";
+const SEGMENTS_PATH: &str = "/app/devices/ingest/segments";
+const EVENT_PATH: &str = "/app/devices/ingest/event";
+pub(crate) const INGEST_PATH: &str = "/app/devices/ingest";
+pub(crate) const PREDECESSOR_INGEST_PATH: &str = "/app/observer/ingest";
 const LOOPBACK_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const FILE_STAGE_CAPACITY: usize = UPLOAD_BODY_STAGE_CAPACITY / RECOMMENDED_CHUNK;

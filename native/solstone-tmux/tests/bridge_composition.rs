@@ -91,7 +91,7 @@ fn bridge_registration_composes_on_the_production_runtime_shape() {
             assert_eq!(registration_requests.len(), 1);
             let registration = &registration_requests[0];
             assert_eq!(registration.method(), "POST");
-            assert_eq!(registration.path(), "/app/observer/register");
+            assert_eq!(registration.path(), "/app/devices/register");
             assert_eq!(registration.header(PROTOCOL_VERSION_HEADER_NAME), Some("2"));
             assert!(registration.header(OBSERVER_HEADER_NAME).is_none());
             assert!(registration.header("authorization").is_none());

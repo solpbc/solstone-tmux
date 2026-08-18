@@ -251,7 +251,7 @@ fn journal_operations_use_authority_fixtures_and_exact_streaming_multipart() {
             assert_eq!(requests.len(), 4);
             assert_registration_request(&requests[0]);
             assert_exact_multipart(&requests[1], day, segment, screen, audio);
-            assert_eq!(requests[2].path(), "/app/observer/ingest/segments/20260618");
+            assert_eq!(requests[2].path(), "/app/devices/ingest/segments/20260618");
             assert_event_request(&requests[3], &event);
             assert_eq!(peer.accepted_carriers(), 1);
 
@@ -358,7 +358,7 @@ fn assert_contract_error<T>(result: Result<T, solstone_tmux::journal::JournalErr
 
 fn assert_registration_request(request: &PeerRequest) {
     assert_eq!(request.method(), "POST");
-    assert_eq!(request.path(), "/app/observer/register");
+    assert_eq!(request.path(), "/app/devices/register");
     let body = serde_json::from_slice::<Value>(request.body()).expect("parse registration request");
     let fields = body
         .as_object()
@@ -451,7 +451,7 @@ fn assert_exact_body(actual: &[u8], expected: &[u8]) {
 
 fn assert_event_request(request: &PeerRequest, fixture: &Value) {
     assert_eq!(request.method(), "POST");
-    assert_eq!(request.path(), "/app/observer/ingest/event");
+    assert_eq!(request.path(), "/app/devices/ingest/event");
     let body =
         serde_json::from_slice::<Map<String, Value>>(request.body()).expect("parse event request");
     assert_eq!(body, *fixture.as_object().expect("event fixture object"));
