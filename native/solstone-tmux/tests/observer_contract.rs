@@ -9,8 +9,8 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
 const AUTHORITY_REPOSITORY: &str = "https://github.com/solpbc/solstone-journal";
-const AUTHORITY_COMMIT: &str = "c5cc2fbce0867e821916045b50716a6c0ed4e57e";
-const BUNDLE_VERSION: &str = "2.1.9";
+const AUTHORITY_COMMIT: &str = "766021cd44d4a0a7ce471d2affb461bf3ce0fc39";
+const BUNDLE_VERSION: &str = "8.0.0";
 const MANIFEST_PATH: &str = "manifest.json";
 const VENDORED_ROOT: &str = "native/solstone-tmux/vendor/observer-client-contract";
 const IMPORT_PATH: &str = "contracts/observer-client-import.json";

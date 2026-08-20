@@ -14,7 +14,7 @@
     }
   ],
   "bundle_schema_identity": "solstone.observer-client-contract-bundle.schema.v1",
-  "bundle_semver": "2.1.9",
+  "bundle_semver": "8.0.0",
   "component_closure": [
     "CallosumEvent",
     "Error",
@@ -34,19 +34,19 @@
   "files": [
     {
       "path": "consumer-audit.json",
-      "sha256": "f3562062aeb971c9dc95ae5d14333566b28431758bcd232c33c093757df7bc18"
+      "sha256": "3f9938b38994ea2a3a19ea154152e5dc8b3f24843e53eb1f14b6fb33d58e6ac9"
     },
     {
       "path": "fixtures/wire-behavior.json",
-      "sha256": "9749a50daba9b4a270da045d350bc5edb7a42c9723fa0bf420c8fb8a4a0415f8"
+      "sha256": "b9ed72f3c3de4a890978079fcf286ddad212c6ac99bd32d3e080afdd5a787dc4"
     },
     {
       "path": "projection.openapi.json",
-      "sha256": "28c055279ab7d80c809a43c5f710ccebc4da643fec3f8e6beae48823c17c46c5"
+      "sha256": "46eb05e6889f9176446fb315585a0e15a57600aead9ed1aaf948a93eee596c35"
     },
     {
       "path": "vectors.json",
-      "sha256": "7a5132c57b61e2a615a22719abc77e40b708d4a6636c45690cc522dc26c36dec"
+      "sha256": "a4cb9712bf5a6679a2fefc6b94f1618dfbd8e7f227364103d70095a8dd6bce1f"
     }
   ],
   "generator_identity": "solstone.convey.contract.observer_bundle.v1",
@@ -55,43 +55,31 @@
       "id": "bundle.projection_builder",
       "path": "solstone/convey/contract/observer_bundle.py",
       "role": "projection_builder",
-      "sha256": "2b13cdd12bedb9fc976d37a3470498ed79eab844bd8f851f01e4a1768846dbe5"
+      "sha256": "908e77f6eabfd1dbe951dcc9e0b523d3db2e8563c1a61c3a5dbfce8162fa671b"
     },
     {
       "id": "bundle.recording",
       "path": "solstone/convey/contract/observer_bundle_recording.py",
       "role": "fixture_vector_builder",
-      "sha256": "a41f0209cfd7a2d8ce5b1f6a8230a8d71d0813082894cd5c079c2b47599ef9f7"
+      "sha256": "37b44cf50b8e8fd791be330d86282f2fa59a93367925e9abd6d06683deaa78a3"
     },
     {
       "id": "extension.observer_sse_error_frame",
       "path": "solstone/apps/observer/contract.py",
       "role": "code_adjacent_extension",
-      "sha256": "bf4813fbb2623a9dcb12e06534481b5c8fbeb5ba9f0e63ca089ac7a991c4e5a9"
-    },
-    {
-      "id": "extension.root_chat_native_subset",
-      "path": "solstone/convey/root_contract.py",
-      "role": "code_adjacent_extension",
-      "sha256": "26e7fe79cf78aa0a3c09e5074ce51136ccfb86b7aa0e33a16c18c69c746e99aa"
-    },
-    {
-      "id": "fragment.chat",
-      "path": "solstone/convey/chat_contract.py",
-      "role": "code_adjacent_fragment",
-      "sha256": "435aa16a37c8e58af281e5e312997588705eb076c0b0075be6a0ac1079895483"
+      "sha256": "acfca9d0843a4c53b9db11c36d03c3a340d62f149fa50f6a3c934007c2a736f2"
     },
     {
       "id": "fragment.link",
       "path": "solstone/apps/network/contract.py",
       "role": "code_adjacent_fragment",
-      "sha256": "d5c11897d4690cbf591b71a99ddaa4bbfd6631f154974d3f71090cb695626b80"
+      "sha256": "e8be782b5e8333dfd796c5812bd5d61a645d9c8d09f25bd3d1893fc3ac0cd5ab"
     },
     {
       "id": "fragment.observer",
       "path": "solstone/apps/observer/contract.py",
       "role": "code_adjacent_fragment",
-      "sha256": "bf4813fbb2623a9dcb12e06534481b5c8fbeb5ba9f0e63ca089ac7a991c4e5a9"
+      "sha256": "acfca9d0843a4c53b9db11c36d03c3a340d62f149fa50f6a3c934007c2a736f2"
     },
     {
       "id": "fragment.root",
@@ -103,43 +91,19 @@
       "id": "openapi.assembler",
       "path": "solstone/convey/contract/assemble.py",
       "role": "openapi_source",
-      "sha256": "51d81a69009f4b7d4da43877874d00fcfa7a07a195655ef820551f0e0f94f8d8"
-    },
-    {
-      "id": "producer.chat_routes",
-      "path": "solstone/convey/chat.py",
-      "role": "producer",
-      "sha256": "0a0ffd2952fddd1ef22abf8a1d2effd91ee7b4ccd7124b78f4632b3d6a21f785"
-    },
-    {
-      "id": "producer.chat_sol_initiated_copy",
-      "path": "solstone/convey/sol_initiated/copy.py",
-      "role": "producer",
-      "sha256": "ca08d309b3582343159b5342dbb6603b21345fd0093034a90daec53eef5cb4cb"
-    },
-    {
-      "id": "producer.chat_sol_initiated_events",
-      "path": "solstone/convey/sol_initiated/events.py",
-      "role": "producer",
-      "sha256": "9ec36a36baa53ec631700cdb9a6989d41ce57e9d092e49f4e85c965b24bfc6e8"
-    },
-    {
-      "id": "producer.chat_stream",
-      "path": "solstone/convey/chat_stream.py",
-      "role": "producer",
-      "sha256": "a94a810a1a64f080e7632165fe864a084a3e2d725f90e870c3ed277b4ccdf45b"
+      "sha256": "03f547c2d14d282f4ecf1c30ae754b241adbcf6ace0aae3298bd3ea27f9624a6"
     },
     {
       "id": "producer.observer_routes",
       "path": "solstone/apps/observer/routes.py",
       "role": "producer",
-      "sha256": "35990d95ea388a8f650dbb7cbfcb081d5b1c31ab88b8a2caba69e1d0be82799d"
+      "sha256": "c3685b7fba0fc039c3a6a4ad9047dd87598574f47f3bbd086715a33f50861fd8"
     },
     {
       "id": "producer.observer_utils",
       "path": "solstone/apps/observer/utils.py",
       "role": "producer",
-      "sha256": "940a30cf76693d9a2c76beb88d4505951de6e7f30c992f79342fbc656a1ad875"
+      "sha256": "937aa9669c5b95bbc3c400a337f68e52bd0b783ed6579898ba75efb657b27e77"
     },
     {
       "id": "producer.protocol",
@@ -151,13 +115,13 @@
       "id": "producer.root_sse",
       "path": "solstone/convey/root.py",
       "role": "producer",
-      "sha256": "5d3f18c7fd43354412c3402cf19d348beb1437cfea5e00f3bc53f28a908246cd"
+      "sha256": "7286e8836eec5c957f137e8173e314deabda0f71f453fa27a34432a33cd4128f"
     },
     {
       "id": "reason_codes",
       "path": "solstone/convey/reasons.py",
       "role": "vocabulary_source",
-      "sha256": "69564b0ce7a9a202ef14d7e7c2aecc63bb48a901176313fcc6fd519a8f604946"
+      "sha256": "3ca67b324d3993d8fe0eedb05dcb0f88716deaff80b5a68611dae3ebc37b7a13"
     }
   ],
   "observer_protocol_version": 2,
@@ -165,7 +129,6 @@
   "openapi_spec_version": "3.1.0",
   "operation_ids": [
     "callosum.rootEvents",
-    "chat.openSolChatRequest",
     "link.pair",
     "observer.callosumStream",
     "observer.ingestEvent",
@@ -232,24 +195,6 @@
           "live",
           "recorded"
         ],
-        "chat": [
-          "owner_message",
-          "sol_message",
-          "talent_queued",
-          "talent_spawned",
-          "talent_finished",
-          "talent_errored",
-          "reflection_ready",
-          "chat_queue_depth",
-          "chat_error",
-          "sol_chat_request",
-          "sol_chat_request_superseded",
-          "owner_chat_open",
-          "owner_chat_dismissed",
-          "support_draft",
-          "result",
-          "support_submit_claim"
-        ],
         "cortex": [
           "request",
           "start",
@@ -260,13 +205,26 @@
           "error",
           "talent_updated",
           "info",
-          "status"
+          "status",
+          "cancel",
+          "dry_run",
+          "progress",
+          "text_delta",
+          "tool_budget_exhausted",
+          "budget_escalation"
         ],
         "importer": [
           "started",
           "status",
           "completed",
-          "error"
+          "error",
+          "file_imported",
+          "enrichment_ready"
+        ],
+        "link": [
+          "pair_complete",
+          "last_seen",
+          "stream_reset"
         ],
         "logs": [
           "exec",
@@ -285,17 +243,29 @@
           "detected",
           "described",
           "transcribed",
-          "observed"
+          "observed",
+          "memory_throttle_started",
+          "memory_throttle_completed"
+        ],
+        "storage": [
+          "warning"
         ],
         "supervisor": [
           "started",
           "stopped",
           "restarting",
           "status",
-          "queue"
+          "queue",
+          "scheduled",
+          "provider_runtime",
+          "request",
+          "restart",
+          "drain",
+          "skipped",
+          "sync_conflict"
         ],
-        "sync": [
-          "status"
+        "support": [
+          "proactive_suggestion"
         ],
         "think": [
           "started",
@@ -306,7 +276,20 @@
           "talent_completed",
           "completed",
           "segments_started",
-          "segments_completed"
+          "segments_completed",
+          "memory_throttle_started",
+          "memory_throttle_completed",
+          "daily_complete"
+        ],
+        "work": [
+          "talent_queued",
+          "talent_spawned",
+          "talent_finished",
+          "talent_errored",
+          "result",
+          "reflection_ready",
+          "support_draft",
+          "support_submit_claim"
         ]
       },
       "source_pointer": "/",
@@ -314,24 +297,18 @@
     },
     {
       "classification": "closed",
-      "id": "chat.openSolChatRequest.responses.400.reason_code",
-      "method": "POST",
-      "path": "/api/chat/sol_chat_request/open",
-      "source_pointer": "/paths/~1api~1chat~1sol_chat_request~1open/post/responses/400",
+      "id": "callosum.work.event",
+      "source_pointer": "/x-callosum-registry/work",
       "unknown_value_behavior": "reject",
       "values": [
-        "missing_required_field"
-      ]
-    },
-    {
-      "classification": "closed",
-      "id": "chat.openSolChatRequest.responses.403.reason_code",
-      "method": "POST",
-      "path": "/api/chat/sol_chat_request/open",
-      "source_pointer": "/paths/~1api~1chat~1sol_chat_request~1open/post/responses/403",
-      "unknown_value_behavior": "reject",
-      "values": [
-        "pl_revoked"
+        "talent_queued",
+        "talent_spawned",
+        "talent_finished",
+        "talent_errored",
+        "result",
+        "reflection_ready",
+        "support_draft",
+        "support_submit_claim"
       ]
     },
     {
@@ -614,33 +591,11 @@
       "values": [
         "ok"
       ]
-    },
-    {
-      "classification": "extensible",
-      "description": "Native-client-interest subset of CallosumEvent kinds on tract 'chat'. This is not an exhaustive stream vocabulary; root SSE can carry other tracts and events. Payloads remain open (CallosumEvent.additionalProperties).",
-      "id": "root.chat.native_interest_kinds",
-      "native_client_interest_subset": [
-        "owner_message",
-        "sol_message",
-        "talent_queued",
-        "talent_spawned",
-        "talent_finished",
-        "talent_errored",
-        "chat_queue_depth",
-        "result",
-        "chat_error"
-      ],
-      "source_pointer": "/paths/~1sse~1events/get/responses/200",
-      "stream_exhaustive": false,
-      "unknown_value_behavior": "preserve"
     }
   ],
   "windows_linux_rollout_targets": [
     {
-      "adoption_blocker_ids": [
-        "linux.sol_voice.path",
-        "linux.sol_voice.linux_notify_send"
-      ],
+      "adoption_blocker_ids": [],
       "consumer_identifier": "solstone-linux"
     },
     {
