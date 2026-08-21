@@ -1,6 +1,6 @@
 {
   "authority_repository": "https://github.com/solpbc/solstone-journal",
-  "authority_commit": "dd76c42a21a7892fccc1b0cfa790ce1ad31bf78b",
+  "authority_commit": "809a851c0605a5c1508631844384e83e138e30f2",
   "bundle_version": "9.0.0",
   "manifest_path": "manifest.json",
   "manifest_sha256": "93b2a5a1604f1ba6fad30624c00cac98ea3d04a80cb1718886cf665c16f58834",

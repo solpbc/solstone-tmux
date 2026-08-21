@@ -13,7 +13,7 @@ use solstone_tmux::journal::{
 };
 
 const AUTHORITY_REPOSITORY: &str = "https://github.com/solpbc/solstone-journal";
-const AUTHORITY_COMMIT: &str = "dd76c42a21a7892fccc1b0cfa790ce1ad31bf78b";
+const AUTHORITY_COMMIT: &str = "809a851c0605a5c1508631844384e83e138e30f2";
 const BUNDLE_VERSION: &str = "9.0.0";
 const MANIFEST_PATH: &str = "manifest.json";
 const VENDORED_ROOT: &str = "native/solstone-tmux/vendor/observer-client-contract";
