@@ -184,13 +184,11 @@ case-folding, and Unicode-normalization aliases.
 ### Pairing and registration
 
 `setup` reads one pairing link from stdin and persists only the SPL credential.
-`run` performs Journal registration as best-effort sync work. Observer state is
-bound to both the credential instance and expected stream name; either mismatch
-causes idempotent re-registration.
-
-Before any network action, registration requires the configured stream to equal
-the descriptor-derived name. The returned Journal name is checked again before
-observer state is persisted.
+`run` verifies the configured stream equals the hostname-derived stream before
+it opens the linked-device bridge. The paired mTLS credential is the Journal
+identity; sync does not register an observer, select a server-issued ingest URL,
+or read `observer.json`. The preserved registration decoder remains outside the
+live sync path for its existing callers.
 
 ### Sync and custody
 
@@ -199,14 +197,14 @@ and periodic wakeups, then processes that snapshot in sequential batches of at
 most eight candidates, yielding between batches. It owns one bounded backoff
 sequence. Local file inventories are reused while the sorted member names and
 file identities match; a content rewrite, member addition, removal, or rename
-invalidates that reuse. A Journal listing may be reused for the current sweep
-to skip an upload, while deletion requires a listing fetched in the current
-batch. A failed pre-upload lookup falls through to the normal upload path.
-Upload success alone never permits deletion: a fresh Journal listing and a new
-local inventory must prove filename, SHA-256 digest, and held status for every
-local file. Immediately before each irreversible unlink, the deletion path
-re-reads bytes through its open descriptor and matches the custodied SHA-256.
-Journal responses are limited to 4 MiB.
+invalidates that reuse. An uncached candidate uploads first, then reconciliation
+fetches the root manifest, its day manifest, and that day's segment listing.
+The complete three-response proof may be reused only within its sweep. Deletion
+requires all three responses fetched in the current batch and a new local
+inventory proving submitted filename, SHA-256 digest, byte size, and held status
+for every local file. Immediately before each irreversible unlink, the deletion
+path re-reads bytes through its open descriptor and matches the custodied
+SHA-256. Journal responses are limited to 4 MiB.
 
 Supervision gives sync fifteen seconds to stop during an authorized shutdown.
 If an irreversible retention deletion is already running, the instance lock is

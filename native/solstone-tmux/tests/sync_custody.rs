@@ -3,98 +3,76 @@
 
 mod support;
 
+use std::fs;
+
+use serde_json::Value;
 use solstone_tmux::journal::{
-    ListingFileStatus, LocalFile, SegmentFile, SegmentItem, SegmentsEnvelope,
-    decode_segments_response,
+    LocalFile, SegmentFile, SegmentItem, SegmentsEnvelope, decode_segments_response,
 };
 use solstone_tmux::sync::fresh_listing_proves_custody;
-use support::observer_wire_fixture;
 
 #[test]
-fn authority_custody_statuses_accept_only_held_files() {
-    let listing = fixture_listing("recorded.segments.custody_statuses");
+fn v3_projection_listing_requires_matching_name_digest_size_and_held_status() {
+    let listing = projection_listing();
     let entry = &listing.items[0];
-
+    let remote = &entry.files[0];
+    let local = local_from_remote(remote);
     assert!(fresh_listing_proves_custody(
         &listing,
         &entry.key,
         &entry.key,
-        &[local_from_remote(&entry.files[0])],
+        std::slice::from_ref(&local),
     ));
-    assert!(fresh_listing_proves_custody(
-        &listing,
-        &entry.key,
-        &entry.key,
-        &[local_from_remote(&entry.files[2])],
-    ));
-    assert!(!fresh_listing_proves_custody(
-        &listing,
-        &entry.key,
-        &entry.key,
-        &[local_from_remote(&entry.files[1])],
-    ));
-}
 
-#[test]
-fn authority_submitted_name_omission_falls_back_to_remote_name() {
-    let listing = fixture_listing("recorded.segments.submitted_name_omitted");
-    let entry = &listing.items[0];
-    assert!(entry.files[0].submitted_name.is_none());
-    assert!(fresh_listing_proves_custody(
-        &listing,
-        &entry.key,
-        &entry.key,
-        &[local_from_remote(&entry.files[0])],
-    ));
-}
-
-#[test]
-fn authority_unknown_status_cannot_prove_custody() {
-    let fixture =
-        observer_wire_fixture("declared.observer.ingestSegments.custody_unknown_rejected");
-    let bytes = serde_json::to_vec(&fixture.payload).expect("serialize custody fixture");
-    assert!(
-        decode_segments_response(&bytes).is_err(),
-        "unknown custody status was accepted"
-    );
-}
-
-#[test]
-fn partial_and_ambiguous_file_evidence_retain_the_segment() {
-    let listing = fixture_listing("recorded.segments.custody_statuses");
-    let entry = &listing.items[0];
-    let held = local_from_remote(&entry.files[0]);
-    let partial = LocalFile {
-        name: "unlisted.jsonl".to_owned(),
-        size: 1,
-        sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
+    let wrong_size = LocalFile {
+        size: local.size + 1,
+        ..local.clone()
     };
     assert!(!fresh_listing_proves_custody(
         &listing,
         &entry.key,
         &entry.key,
-        &[held.clone(), partial],
+        &[wrong_size],
     ));
-
-    let mut ambiguous = listing.clone();
-    let duplicate = ambiguous.items[0].files[0].clone();
-    ambiguous.items[0].files.push(duplicate);
+    let wrong_digest = LocalFile {
+        sha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_owned(),
+        ..local
+    };
     assert!(!fresh_listing_proves_custody(
-        &ambiguous,
+        &listing,
         &entry.key,
         &entry.key,
-        &[held],
+        &[wrong_digest],
     ));
 }
 
 #[test]
-fn ambiguous_listing_entries_retain_the_segment() {
-    let mut listing = fixture_listing("recorded.segments.custody_statuses");
+fn malformed_unknown_status_never_becomes_custody_evidence() {
+    let payload = serde_json::json!({
+        "protocol_version": 3,
+        "total": 1,
+        "items": [{
+            "key": "143000_1",
+            "observed": true,
+            "files": [{
+                "name": "capture.jsonl",
+                "size": 1,
+                "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "status": "unknown"
+            }]
+        }]
+    });
+    assert!(decode_segments_response(&serde_json::to_vec(&payload).expect("bytes")).is_err());
+}
+
+#[test]
+fn duplicate_remote_evidence_and_original_key_ambiguity_retain_the_segment() {
+    let mut listing = projection_listing();
     let entry = listing.items[0].clone();
     let local = local_from_remote(&entry.files[0]);
     listing.items.push(SegmentItem {
-        key: "120000_301".to_owned(),
-        observed: false,
+        key: "143001_1".to_owned(),
+        observed: true,
         files: entry.files.clone(),
         original_key: Some(entry.key.clone()),
     });
@@ -108,63 +86,86 @@ fn ambiguous_listing_entries_retain_the_segment() {
 }
 
 #[test]
-fn local_case_collision_custody_can_match_original_key() {
-    let hash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    let listing = SegmentsEnvelope {
-        items: vec![SegmentItem {
-            key: "120000_301".to_owned(),
-            observed: false,
-            files: vec![SegmentFile {
-                name: "stored-screen.jsonl".to_owned(),
-                size: 7,
-                sha256: hash.to_owned(),
-                status: ListingFileStatus::Present,
-                submitted_name: Some("screen.jsonl".to_owned()),
-            }],
-            original_key: Some("120000_300".to_owned()),
-        }],
-        total: 1,
-        protocol_version: 2,
-    };
+fn authority_submitted_name_omission_falls_back_to_remote_name() {
+    let mut listing = projection_listing();
+    let entry = &mut listing.items[0];
+    entry.files[0].submitted_name = None;
     let local = LocalFile {
-        name: "screen.jsonl".to_owned(),
-        size: 7,
-        sha256: hash.to_owned(),
+        name: entry.files[0].name.clone(),
+        size: entry.files[0].size,
+        sha256: entry.files[0].sha256.clone(),
     };
+    let key = entry.key.clone();
+    assert!(fresh_listing_proves_custody(&listing, &key, &key, &[local]));
+}
+
+#[test]
+fn partial_and_ambiguous_file_evidence_retain_the_segment() {
+    let mut listing = projection_listing();
+    let key = listing.items[0].key.clone();
+    let local = local_from_remote(&listing.items[0].files[0]);
+    listing.items[0].files.clear();
+    assert!(!fresh_listing_proves_custody(
+        &listing,
+        &key,
+        &key,
+        &[local]
+    ));
+}
+
+#[test]
+fn local_case_collision_custody_can_match_original_key() {
+    let mut listing = projection_listing();
+    let mut entry = listing.items.remove(0);
+    let submitted = entry.key.clone();
+    entry.key = "143001_1".to_owned();
+    entry.original_key = Some(submitted.clone());
+    let local = local_from_remote(&entry.files[0]);
+    listing.items.push(entry);
     assert!(fresh_listing_proves_custody(
         &listing,
-        "120000_300",
-        "120000_301",
-        &[local],
+        &submitted,
+        "143001_1",
+        &[local]
     ));
 }
 
 #[test]
 fn malformed_hash_or_duplicate_local_name_retain_the_segment() {
-    let listing = fixture_listing("recorded.segments.custody_statuses");
+    let listing = projection_listing();
     let entry = &listing.items[0];
-    let mut malformed = local_from_remote(&entry.files[0]);
-    malformed.sha256.make_ascii_uppercase();
+    let local = local_from_remote(&entry.files[0]);
+    let bad_hash = LocalFile {
+        sha256: "not-a-sha256".to_owned(),
+        ..local.clone()
+    };
     assert!(!fresh_listing_proves_custody(
         &listing,
         &entry.key,
         &entry.key,
-        &[malformed],
+        &[bad_hash]
     ));
-
-    let held = local_from_remote(&entry.files[0]);
     assert!(!fresh_listing_proves_custody(
         &listing,
         &entry.key,
         &entry.key,
-        &[held.clone(), held],
+        &[local.clone(), local],
     ));
 }
 
-fn fixture_listing(id: &str) -> SegmentsEnvelope {
-    let fixture = observer_wire_fixture(id);
-    let bytes = serde_json::to_vec(&fixture.payload).expect("serialize listing fixture");
-    decode_segments_response(&bytes).expect("decode listing fixture")
+fn projection_listing() -> SegmentsEnvelope {
+    let projection: Value = serde_json::from_slice(
+        &fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("vendor/observer-client-contract/projection.openapi.json"),
+        )
+        .expect("projection"),
+    )
+    .expect("projection JSON");
+    let value = &projection["paths"]["/app/devices/ingest/segments/{day}"]["get"]["responses"]["200"]
+        ["content"]["application/json"]["example"];
+    decode_segments_response(&serde_json::to_vec(value).expect("listing bytes"))
+        .expect("v3 listing")
 }
 
 fn local_from_remote(remote: &SegmentFile) -> LocalFile {

@@ -22,6 +22,7 @@ use solstone_tmux::observer::{
     LifecycleLock, ObserverExit, ObserverOperationError, ShutdownEvent, ShutdownIndicator,
     SupervisionControl, shutdown_barrier, supervise_observer,
 };
+use solstone_tmux::private_link::PROTOCOL_VERSION_NUMBER;
 use solstone_tmux::sync::{
     RetentionFence, RetentionOutcome, SegmentCandidate, SyncActivity,
     delete_custodied_segment as delete_custodied_segment_fenced,
@@ -241,7 +242,7 @@ fn traversal_candidate_cannot_escape_its_stream() {
         let listing = SegmentsEnvelope {
             items: Vec::new(),
             total: 0,
-            protocol_version: 2,
+            protocol_version: PROTOCOL_VERSION_NUMBER,
         };
 
         let outcome = delete_custodied_segment(
@@ -286,7 +287,7 @@ fn symlink_and_special_file_retain_the_whole_segment() {
             let listing = SegmentsEnvelope {
                 items: Vec::new(),
                 total: 0,
-                protocol_version: 2,
+                protocol_version: PROTOCOL_VERSION_NUMBER,
             };
             assert_eq!(
                 delete_custodied_segment(
@@ -761,7 +762,7 @@ async fn listing_for(
             original_key: None,
         }],
         total: 1,
-        protocol_version: 2,
+        protocol_version: PROTOCOL_VERSION_NUMBER,
     }
 }
 

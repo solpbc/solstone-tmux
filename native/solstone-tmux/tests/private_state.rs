@@ -15,8 +15,7 @@ use solstone_tmux::health::DiagnosticCode;
 use solstone_tmux::instance_lock::LOCK_FILENAME;
 use solstone_tmux::paths::ensure_private_directory;
 use solstone_tmux::private_link::{
-    CREDENTIALS_FILENAME, OBSERVER_FILENAME, ObserverState, load_credential, load_observer,
-    persist_credential, persist_observer,
+    CREDENTIALS_FILENAME, OBSERVER_FILENAME, load_credential, persist_credential,
 };
 use spl_transport::credential::{Credential, EndpointAddr};
 use support::{IsolatedRoots, TestDirectory};
@@ -62,45 +61,6 @@ fn private_state_targets_refuse_symlinks_without_changing_referents() {
         Err(DiagnosticCode::PrivateStateInvalid)
     ));
     assert_eq!(fs::read(referent).expect("read referent"), original);
-}
-
-#[test]
-fn observer_state_is_bound_to_credential_instance_and_expected_name() {
-    let temporary = TestDirectory::new("observer-instance-binding");
-    ensure_private_directory(temporary.path()).expect("private config root");
-    let observer = ObserverState {
-        credential_instance_id: "instance-one".to_owned(),
-        key: "observer-secret".to_owned(),
-        prefix: "observer-prefix".to_owned(),
-        name: "observer-name".to_owned(),
-        ingest_url: "/app/observer/ingest".to_owned(),
-        protocol_version: 2,
-    };
-    persist_observer(temporary.path(), &observer).expect("persist observer");
-    let observer_path = temporary.path().join(OBSERVER_FILENAME);
-    let original = fs::read(&observer_path).expect("read observer state");
-
-    let matching = load_observer(temporary.path(), "instance-one", "observer-name")
-        .expect("load matching observer")
-        .expect("matching observer exists");
-    assert!(
-        matching.credential_instance_id == "instance-one",
-        "observer binding differs"
-    );
-    assert!(
-        load_observer(temporary.path(), "instance-two", "observer-name")
-            .expect("load stale observer")
-            .is_none()
-    );
-    assert!(
-        load_observer(temporary.path(), "instance-one", "stale-name")
-            .expect("load stale observer name")
-            .is_none()
-    );
-    assert!(
-        fs::read(observer_path).expect("read retained stale observer") == original,
-        "stale observer state changed"
-    );
 }
 
 #[test]

@@ -6,11 +6,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 const AUTHORITY_REPOSITORY: &str = "https://github.com/solpbc/solstone-journal";
-const AUTHORITY_COMMIT: &str = "766021cd44d4a0a7ce471d2affb461bf3ce0fc39";
-const BUNDLE_VERSION: &str = "8.0.0";
+const AUTHORITY_COMMIT: &str = "dd76c42a21a7892fccc1b0cfa790ce1ad31bf78b";
+const BUNDLE_VERSION: &str = "9.0.0";
 const MANIFEST_PATH: &str = "manifest.json";
 const VENDORED_ROOT: &str = "native/solstone-tmux/vendor/observer-client-contract";
 const IMPORT_PATH: &str = "contracts/observer-client-import.json";
@@ -108,6 +109,64 @@ fn vendored_contract_matches_provenance() {
     );
 }
 
+#[test]
+fn projection_has_only_v3_ingest_operations_and_no_v2_write_route() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let repository_root = manifest_dir
+        .parent()
+        .and_then(Path::parent)
+        .expect("native crate has repository root");
+    let projection: Value = serde_json::from_slice(
+        &fs::read(
+            repository_root
+                .join(VENDORED_ROOT)
+                .join("projection.openapi.json"),
+        )
+        .expect("read vendored projection"),
+    )
+    .expect("parse vendored projection");
+
+    let mut actual = BTreeSet::new();
+    for (path, path_item) in projection["paths"]
+        .as_object()
+        .expect("projection paths are an object")
+    {
+        for (method, operation) in path_item.as_object().expect("path item is an object") {
+            if let Some(operation_id) = operation["operationId"].as_str() {
+                actual.insert((method.as_str(), path.as_str(), operation_id));
+            }
+        }
+    }
+    let expected = BTreeSet::from([
+        ("post", "/app/devices/ingest", "observer.ingestUpload"),
+        (
+            "get",
+            "/app/devices/ingest/manifest",
+            "observer.ingestManifest",
+        ),
+        (
+            "get",
+            "/app/devices/ingest/manifest/{day}",
+            "observer.ingestManifestDay",
+        ),
+        (
+            "get",
+            "/app/devices/ingest/segments/{day}",
+            "observer.ingestSegments",
+        ),
+    ]);
+    assert_eq!(actual, expected, "projection operation set differs from v3");
+
+    for source in collect_rust_files(&manifest_dir.join("src")) {
+        let contents = fs::read_to_string(&source).expect("read shipping source");
+        assert!(
+            !contents.contains("/app/observer/ingest"),
+            "shipping source retains v2 observer-ingest write route: {}",
+            source.display()
+        );
+    }
+}
+
 fn sha256_hex(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
@@ -136,4 +195,18 @@ fn collect_vendored_files(root: &Path, directory: &Path, files: &mut BTreeSet<St
             );
         }
     }
+}
+
+fn collect_rust_files(directory: &Path) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    for entry in fs::read_dir(directory).expect("read source directory") {
+        let entry = entry.expect("read source directory entry");
+        let file_type = entry.file_type().expect("inspect source entry");
+        if file_type.is_dir() {
+            files.extend(collect_rust_files(&entry.path()));
+        } else if file_type.is_file() && entry.path().extension().is_some_and(|ext| ext == "rs") {
+            files.push(entry.path());
+        }
+    }
+    files
 }

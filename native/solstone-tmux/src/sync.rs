@@ -23,16 +23,13 @@ use crate::clock::Clock;
 use crate::config::{RuntimeConfig, default_stream};
 use crate::health::{DiagnosticCode, HealthWriter, SyncFacts};
 use crate::journal::{
-    INGEST_PATH, JournalClient, JournalError, JournalReasonCode, ListingFileStatus, LocalFile,
-    PREDECESSOR_INGEST_PATH, RegistrationDescriptor, SegmentsEnvelope, UploadResult, UploadStatus,
-    inventory_files, stream_sha256_hex,
+    IngestDayManifest, IngestManifest, JournalClient, JournalError, JournalReasonCode,
+    ListingFileStatus, LocalFile, SegmentsEnvelope, UploadResult, UploadStatus, inventory_files,
+    stream_sha256_hex,
 };
 use crate::name::{DerivedName, derive_component};
 use crate::paths::PlatformKind;
-use crate::private_link::{
-    ObserverState, PrivateLinkBridge, load_credential, load_observer, persist_credential,
-    persist_observer,
-};
+use crate::private_link::{PrivateLinkBridge, load_credential, persist_credential};
 use crate::segment::SegmentClose;
 use crate::storage::{
     atomic_write_bytes, open_directory_readonly, open_regular_readonly, open_regular_readonly_at,
@@ -223,20 +220,17 @@ impl TokenPersistence {
     }
 }
 
-pub struct RegistrationOwner {
+pub struct JournalSession {
     bridge: PrivateLinkBridge,
     journal: JournalClient,
-    config_root: PathBuf,
-    credential_instance_id: String,
     token_persistence: TokenPersistence,
 }
 
-impl RegistrationOwner {
+impl JournalSession {
     pub async fn start(
         credential: Credential,
         config_root: PathBuf,
     ) -> Result<Self, DiagnosticCode> {
-        let credential_instance_id = credential.instance_id.clone();
         let (token_persistence, hook) =
             TokenPersistence::new(config_root.clone(), credential.clone());
         let bridge = PrivateLinkBridge::start(credential, Some(hook)).await?;
@@ -250,56 +244,12 @@ impl RegistrationOwner {
         Ok(Self {
             bridge,
             journal,
-            config_root,
-            credential_instance_id,
             token_persistence,
         })
     }
 
     pub fn journal(&self) -> &JournalClient {
         &self.journal
-    }
-
-    pub async fn ensure_registration(
-        &self,
-        descriptor: &RegistrationDescriptor,
-        expected_name: &str,
-    ) -> Result<(ObserverState, bool), JournalError> {
-        self.token_persistence.persist_pending().await?;
-        let config_root = self.config_root.clone();
-        let instance_id = self.credential_instance_id.clone();
-        let expected = expected_name.to_owned();
-        let existing = tokio::task::spawn_blocking(move || {
-            load_observer(&config_root, &instance_id, &expected)
-        })
-        .await
-        .map_err(|_| DiagnosticCode::PrivateStateIo)??;
-        if let Some(mut observer) = existing {
-            if observer.ingest_url == PREDECESSOR_INGEST_PATH {
-                observer.ingest_url = INGEST_PATH.to_owned();
-                let config_root = self.config_root.clone();
-                let persisted = observer.clone();
-                // Rewrite is idempotent and re-runs on the next reuse while the file still holds the predecessor.
-                let _ =
-                    tokio::task::spawn_blocking(move || persist_observer(&config_root, &persisted))
-                        .await;
-            }
-            self.journal.validate_observer(&observer)?;
-            self.bridge.opener().set_registered(&observer)?;
-            return Ok((observer, false));
-        }
-
-        let observer = self
-            .journal
-            .register(descriptor, &self.credential_instance_id, expected_name)
-            .await?;
-        let config_root = self.config_root.clone();
-        let persisted = observer.clone();
-        tokio::task::spawn_blocking(move || persist_observer(&config_root, &persisted))
-            .await
-            .map_err(|_| DiagnosticCode::PrivateStateIo)??;
-        self.bridge.opener().set_registered(&observer)?;
-        Ok((observer, true))
     }
 
     pub async fn shutdown(self) -> Result<(), DiagnosticCode> {
@@ -357,6 +307,7 @@ pub fn fresh_listing_proves_custody(
         };
         valid_sha256(&remote.sha256)
             && remote.sha256 == local.sha256
+            && remote.size == local.size
             && matches!(
                 remote.status,
                 ListingFileStatus::Present | ListingFileStatus::Processed
@@ -633,17 +584,20 @@ impl fmt::Display for SyncOperationError {
 impl std::error::Error for SyncOperationError {}
 
 pub trait SyncJournal: Send {
-    fn observer_name(&self) -> Option<&str>;
-
-    fn ensure_registered<'a>(
-        &'a mut self,
-    ) -> Pin<Box<dyn Future<Output = Result<bool, SyncOperationError>> + Send + 'a>>;
-
     fn upload<'a>(
         &'a mut self,
         candidate: &'a SegmentCandidate,
         files: Vec<PathBuf>,
     ) -> Pin<Box<dyn Future<Output = Result<UploadResult, SyncOperationError>> + Send + 'a>>;
+
+    fn manifest<'a>(
+        &'a mut self,
+    ) -> Pin<Box<dyn Future<Output = Result<IngestManifest, SyncOperationError>> + Send + 'a>>;
+
+    fn manifest_day<'a>(
+        &'a mut self,
+        day: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<IngestDayManifest, SyncOperationError>> + Send + 'a>>;
 
     fn segments<'a>(
         &'a mut self,
@@ -712,6 +666,32 @@ struct CachedInventory {
     names: Vec<String>,
     identities: Vec<FileIdentity>,
     inventory: Vec<LocalFile>,
+}
+
+struct Reconciliation {
+    root: IngestManifest,
+    day: IngestDayManifest,
+    listing: SegmentsEnvelope,
+}
+
+impl Reconciliation {
+    fn proves(
+        &self,
+        requested_day: &str,
+        submitted_key: &str,
+        authoritative_key: &str,
+        local_files: &[LocalFile],
+    ) -> bool {
+        self.root.days.contains_key(requested_day)
+            && self.day.day == requested_day
+            && self.day.segments.contains_key(authoritative_key)
+            && fresh_listing_proves_custody(
+                &self.listing,
+                submitted_key,
+                authoritative_key,
+                local_files,
+            )
+    }
 }
 
 struct Backoff {
@@ -872,9 +852,8 @@ impl SyncScheduler {
                 if summary.failure.is_none()
                     && summary.diagnostic.is_none()
                     && self.status_event_due()
-                    && journal.observer_name().is_some()
                 {
-                    let beacon = self.status_beacon(journal.observer_name());
+                    let beacon = self.status_beacon(self.stream.as_str());
                     match cancellable(&mut shutdown, journal.status_event(&beacon)).await {
                         Err(()) => return,
                         Ok(Ok(())) => {
@@ -916,17 +895,6 @@ impl SyncScheduler {
         mut shutdown: watch::Receiver<bool>,
     ) -> SyncSweepSummary {
         let mut summary = SyncSweepSummary::empty();
-        match cancellable(&mut shutdown, journal.ensure_registered()).await {
-            Err(()) => return self.cancelled_sweep(summary).await,
-            Ok(Ok(contacted)) => {
-                if contacted {
-                    summary.contacted = true;
-                    self.backoff.successful_operation();
-                }
-            }
-            Ok(Err(error)) => return self.end_sweep(summary, error),
-        }
-
         let captures_root = self.captures_root.clone();
         let stream = self.stream.clone();
         let instrumentation = self.instrumentation.clone();
@@ -953,8 +921,7 @@ impl SyncScheduler {
             .retain(|candidate, _| snapshot.contains(candidate));
         if candidates.is_empty() {
             self.facts.pending_segments = 0;
-            let today = local_today(self.clock.as_ref());
-            match cancellable(&mut shutdown, journal.segments(&format_day(today))).await {
+            match cancellable(&mut shutdown, journal.manifest()).await {
                 Err(()) => return self.cancelled_sweep(summary).await,
                 Ok(Ok(_)) => {
                     summary.contacted = true;
@@ -966,7 +933,7 @@ impl SyncScheduler {
         }
         self.facts.pending_segments = u64::try_from(candidates.len()).unwrap_or(u64::MAX);
         let today = local_today(self.clock.as_ref());
-        let mut listings_by_day = HashMap::new();
+        let mut reconciliations_by_day = HashMap::new();
         self.facts.sync_in_progress = true;
         self.write_health().await;
         let mut activity = None;
@@ -1005,51 +972,24 @@ impl SyncScheduler {
                 };
                 let deletion_eligible = self.retention_days >= 0
                     && retention_eligible(candidate.day(), today, self.retention_days);
-                let cached_listing_proves_custody =
-                    listings_by_day.get(candidate.day()).is_some_and(|listing| {
-                        fresh_listing_proves_custody(
-                            listing,
+                let cached_proves_custody = reconciliations_by_day
+                    .get(candidate.day())
+                    .is_some_and(|reconciliation: &Reconciliation| {
+                        reconciliation.proves(
+                            candidate.day(),
                             candidate.segment(),
                             candidate.segment(),
                             &local_files,
                         )
                     });
-                let should_fetch_preupload_listing = !listings_by_day.contains_key(candidate.day())
-                    || (deletion_eligible
-                        && cached_listing_proves_custody
-                        && !batch_fresh_listing_days.contains(candidate.day()));
-                let mut preupload_listing_failed = false;
-                if should_fetch_preupload_listing {
-                    match cancellable(&mut shutdown, journal.segments(candidate.day())).await {
-                        Err(()) => {
-                            return self.cancelled_sweep_with_activity(summary, activity).await;
-                        }
-                        Ok(Ok(listing)) => {
-                            summary.contacted = true;
-                            self.backoff.successful_operation();
-                            listings_by_day.insert(candidate.day().to_owned(), listing);
-                            batch_fresh_listing_days.insert(candidate.day().to_owned());
-                        }
-                        Ok(Err(_)) => preupload_listing_failed = true,
-                    }
-                }
-                let listing_proves_custody = !preupload_listing_failed
-                    && listings_by_day.get(candidate.day()).is_some_and(|listing| {
-                        fresh_listing_proves_custody(
-                            listing,
-                            candidate.segment(),
-                            candidate.segment(),
-                            &local_files,
-                        )
-                    });
-                if listing_proves_custody {
+                if cached_proves_custody {
                     summary.custodied += 1;
                     summary.contacted = true;
                     self.backoff.successful_operation();
                     self.facts.pending_segments = self.facts.pending_segments.saturating_sub(1);
                     if deletion_eligible
                         && batch_fresh_listing_days.contains(candidate.day())
-                        && let Some(listing) = listings_by_day.get(candidate.day())
+                        && let Some(reconciliation) = reconciliations_by_day.get(candidate.day())
                     {
                         match delete_custodied_segment(
                             &self.captures_root,
@@ -1058,7 +998,7 @@ impl SyncScheduler {
                             self.retention_days,
                             candidate,
                             candidate.segment(),
-                            listing,
+                            &reconciliation.listing,
                             self.instrumentation.clone(),
                             Arc::clone(&self.retention_fence),
                         )
@@ -1075,7 +1015,7 @@ impl SyncScheduler {
                     }
                     continue;
                 }
-                listings_by_day.remove(candidate.day());
+                reconciliations_by_day.remove(candidate.day());
                 batch_fresh_listing_days.remove(candidate.day());
                 if activity.is_none() {
                     activity = Some(ActivityGuard::new(self.activity.as_ref()));
@@ -1109,6 +1049,51 @@ impl SyncScheduler {
                         SyncOperationError::EndSweep(SyncFailureClass::Contract),
                     );
                 };
+                let root_manifest = match cancellable(&mut shutdown, journal.manifest()).await {
+                    Err(()) => return self.cancelled_sweep_with_activity(summary, activity).await,
+                    Ok(Ok(manifest)) => {
+                        summary.contacted = true;
+                        self.backoff.successful_operation();
+                        manifest
+                    }
+                    Ok(Err(SyncOperationError::RetainCandidate(code))) => {
+                        summary.diagnostic = Some(code);
+                        continue;
+                    }
+                    Ok(Err(error)) => {
+                        drop(activity);
+                        return self.end_sweep(summary, error);
+                    }
+                };
+                if !root_manifest.days.contains_key(candidate.day()) {
+                    summary.diagnostic = Some(DiagnosticCode::LocalSegmentInvalid);
+                    continue;
+                }
+                let day_manifest =
+                    match cancellable(&mut shutdown, journal.manifest_day(candidate.day())).await {
+                        Err(()) => {
+                            return self.cancelled_sweep_with_activity(summary, activity).await;
+                        }
+                        Ok(Ok(manifest)) => {
+                            summary.contacted = true;
+                            self.backoff.successful_operation();
+                            manifest
+                        }
+                        Ok(Err(SyncOperationError::RetainCandidate(code))) => {
+                            summary.diagnostic = Some(code);
+                            continue;
+                        }
+                        Ok(Err(error)) => {
+                            drop(activity);
+                            return self.end_sweep(summary, error);
+                        }
+                    };
+                if day_manifest.day != candidate.day()
+                    || !day_manifest.segments.contains_key(&authoritative_key)
+                {
+                    summary.diagnostic = Some(DiagnosticCode::LocalSegmentInvalid);
+                    continue;
+                }
                 let listing = match cancellable(&mut shutdown, journal.segments(candidate.day()))
                     .await
                 {
@@ -1116,17 +1101,24 @@ impl SyncScheduler {
                     Ok(Ok(listing)) => {
                         summary.contacted = true;
                         self.backoff.successful_operation();
-                        listings_by_day.insert(candidate.day().to_owned(), listing.clone());
-                        batch_fresh_listing_days.insert(candidate.day().to_owned());
                         listing
+                    }
+                    Ok(Err(SyncOperationError::RetainCandidate(code))) => {
+                        summary.diagnostic = Some(code);
+                        continue;
                     }
                     Ok(Err(error)) => {
                         drop(activity);
                         return self.end_sweep(summary, error);
                     }
                 };
-                if !fresh_listing_proves_custody(
-                    &listing,
+                let reconciliation = Reconciliation {
+                    root: root_manifest,
+                    day: day_manifest,
+                    listing: listing.clone(),
+                };
+                if !reconciliation.proves(
+                    candidate.day(),
                     candidate.segment(),
                     &authoritative_key,
                     &local_files,
@@ -1134,6 +1126,8 @@ impl SyncScheduler {
                     summary.diagnostic = Some(DiagnosticCode::LocalSegmentInvalid);
                     continue;
                 }
+                reconciliations_by_day.insert(candidate.day().to_owned(), reconciliation);
+                batch_fresh_listing_days.insert(candidate.day().to_owned());
                 summary.custodied += 1;
                 self.facts.pending_segments = self.facts.pending_segments.saturating_sub(1);
                 match delete_custodied_segment(
@@ -1254,9 +1248,9 @@ impl SyncScheduler {
         })
     }
 
-    fn status_beacon(&self, observer_name: Option<&str>) -> StatusBeacon {
+    fn status_beacon(&self, observer_name: &str) -> StatusBeacon {
         StatusBeacon {
-            name: observer_name.unwrap_or_default().to_owned(),
+            name: observer_name.to_owned(),
             uptime: self
                 .clock
                 .monotonic_now()
@@ -1321,106 +1315,39 @@ impl Drop for ActivityGuard {
     }
 }
 
-struct ProductionJournal {
-    credential: Credential,
-    config_root: PathBuf,
-    descriptor: RegistrationDescriptor,
-    configured_stream: DerivedName,
-    owner: Option<RegistrationOwner>,
-    observer: Option<ObserverState>,
-}
-
-impl ProductionJournal {
-    fn new(
-        credential: Credential,
-        config_root: PathBuf,
-        platform: PlatformKind,
-        hostname: String,
-        configured_stream: DerivedName,
-    ) -> Self {
-        Self {
-            credential,
-            config_root,
-            descriptor: RegistrationDescriptor {
-                platform: match platform {
-                    PlatformKind::Linux => "linux",
-                    PlatformKind::Macos => "macos",
-                }
-                .to_owned(),
-                hostname,
-            },
-            configured_stream,
-            owner: None,
-            observer: None,
-        }
-    }
-}
-
-impl SyncJournal for ProductionJournal {
-    fn observer_name(&self) -> Option<&str> {
-        self.observer
-            .as_ref()
-            .map(|observer| observer.name.as_str())
-    }
-
-    fn ensure_registered<'a>(
-        &'a mut self,
-    ) -> Pin<Box<dyn Future<Output = Result<bool, SyncOperationError>> + Send + 'a>> {
-        Box::pin(async move {
-            let expected_name = default_stream(&self.descriptor.hostname)
-                .ok()
-                .and_then(|stream| derive_component(&stream).ok())
-                .ok_or(SyncOperationError::EndSweepDiagnostic(
-                    SyncFailureClass::Contract,
-                    DiagnosticCode::ConfiguredStreamMismatch,
-                ))?;
-            if self.configured_stream != expected_name {
-                return Err(SyncOperationError::EndSweepDiagnostic(
-                    SyncFailureClass::Contract,
-                    DiagnosticCode::ConfiguredStreamMismatch,
-                ));
-            }
-            if self.owner.is_none() {
-                self.owner = Some(
-                    RegistrationOwner::start(self.credential.clone(), self.config_root.clone())
-                        .await
-                        .map_err(map_diagnostic)?,
-                );
-            }
-            let (observer, contacted) = self
-                .owner
-                .as_ref()
-                .ok_or(SyncOperationError::EndSweep(SyncFailureClass::Contract))?
-                .ensure_registration(&self.descriptor, expected_name.as_str())
-                .await
-                .map_err(map_journal_error)?;
-            self.observer = Some(observer);
-            Ok(contacted)
-        })
-    }
-
+impl SyncJournal for JournalSession {
     fn upload<'a>(
         &'a mut self,
         candidate: &'a SegmentCandidate,
         files: Vec<PathBuf>,
     ) -> Pin<Box<dyn Future<Output = Result<UploadResult, SyncOperationError>> + Send + 'a>> {
         Box::pin(async move {
-            let owner = self
-                .owner
-                .as_ref()
-                .ok_or(SyncOperationError::EndSweep(SyncFailureClass::Contract))?;
-            let observer = self
-                .observer
-                .as_ref()
-                .ok_or(SyncOperationError::EndSweep(SyncFailureClass::Contract))?;
-            owner
-                .journal()
-                .ingest_upload(
-                    &observer.ingest_url,
-                    candidate.day(),
-                    candidate.segment(),
-                    files,
-                )
+            self.journal
+                .ingest_upload(candidate.day(), candidate.segment(), files)
+                .await
+                .map_err(map_journal_error)
+        })
+    }
+
+    fn manifest<'a>(
+        &'a mut self,
+    ) -> Pin<Box<dyn Future<Output = Result<IngestManifest, SyncOperationError>> + Send + 'a>> {
+        Box::pin(async move {
+            self.journal
+                .ingest_manifest()
+                .await
+                .map_err(map_journal_error)
+        })
+    }
+
+    fn manifest_day<'a>(
+        &'a mut self,
+        day: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<IngestDayManifest, SyncOperationError>> + Send + 'a>>
+    {
+        Box::pin(async move {
+            self.journal
+                .ingest_manifest_day(day)
                 .await
                 .map_err(map_journal_error)
         })
@@ -1432,10 +1359,7 @@ impl SyncJournal for ProductionJournal {
     ) -> Pin<Box<dyn Future<Output = Result<SegmentsEnvelope, SyncOperationError>> + Send + 'a>>
     {
         Box::pin(async move {
-            self.owner
-                .as_ref()
-                .ok_or(SyncOperationError::EndSweep(SyncFailureClass::Contract))?
-                .journal()
+            self.journal
                 .ingest_segments(day)
                 .await
                 .map_err(map_journal_error)
@@ -1447,10 +1371,7 @@ impl SyncJournal for ProductionJournal {
         beacon: &'a StatusBeacon,
     ) -> Pin<Box<dyn Future<Output = Result<(), SyncOperationError>> + Send + 'a>> {
         Box::pin(async move {
-            self.owner
-                .as_ref()
-                .ok_or(SyncOperationError::EndSweep(SyncFailureClass::Contract))?
-                .journal()
+            self.journal
                 .ingest_event("observe", "status", beacon.fields())
                 .await
                 .map_err(map_journal_error)
@@ -1493,14 +1414,17 @@ impl SyncTask {
                 return Ok(());
             }
         };
-        let configured_stream = self.config.stream.clone();
-        let mut journal = ProductionJournal::new(
-            credential,
-            self.config_root,
-            self.platform,
-            self.hostname,
-            configured_stream,
-        );
+        let expected_stream = default_stream(&self.hostname)
+            .ok()
+            .and_then(|stream| derive_component(&stream).ok())
+            .ok_or(DiagnosticCode::ConfiguredStreamMismatch)?;
+        if self.config.stream != expected_stream {
+            let mut facts = SyncFacts::default();
+            facts.failed(DiagnosticCode::ConfiguredStreamMismatch);
+            refresh_waiting_health(&self.health, &facts, self.clock.as_ref(), &mut shutdown).await;
+            return Ok(());
+        }
+        let mut journal = JournalSession::start(credential, self.config_root).await?;
         let mut scheduler = SyncScheduler::new(
             self.data_root.join("captures"),
             self.config.stream,
@@ -1514,9 +1438,7 @@ impl SyncTask {
         scheduler
             .run_with_shutdown(&mut journal, shutdown.clone())
             .await;
-        if let Some(owner) = journal.owner
-            && let Err(code) = owner.shutdown().await
-        {
+        if let Err(code) = journal.shutdown().await {
             scheduler.facts.failed(code);
             scheduler.write_health().await;
             return Err(code);
@@ -1567,24 +1489,6 @@ async fn refresh_waiting_health(
     }
 }
 
-fn map_diagnostic(code: DiagnosticCode) -> SyncOperationError {
-    match code {
-        DiagnosticCode::JournalTimeout => SyncOperationError::EndSweepDiagnostic(
-            SyncFailureClass::Timeout,
-            DiagnosticCode::JournalTimeout,
-        ),
-        DiagnosticCode::JournalContractInvalid
-        | DiagnosticCode::JournalResponseTooLarge
-        | DiagnosticCode::ConfiguredStreamMismatch
-        | DiagnosticCode::RegistrationNameMismatch
-        | DiagnosticCode::PrivateStateInvalid
-        | DiagnosticCode::PrivateStateIo => {
-            SyncOperationError::EndSweepDiagnostic(SyncFailureClass::Contract, code)
-        }
-        _ => SyncOperationError::EndSweepDiagnostic(SyncFailureClass::Direct, code),
-    }
-}
-
 fn map_journal_error(error: JournalError) -> SyncOperationError {
     let diagnostic = error.diagnostic();
     match diagnostic {
@@ -1596,6 +1500,11 @@ fn map_journal_error(error: JournalError) -> SyncOperationError {
             DiagnosticCode::JournalTimeout,
         ),
         DiagnosticCode::JournalRejected => match error.reason_code() {
+            Some(
+                JournalReasonCode::LinkedDeviceRequired
+                | JournalReasonCode::ProtocolVersionLegacy
+                | JournalReasonCode::ProtocolVersionFuture,
+            ) => SyncOperationError::RetainCandidate(DiagnosticCode::JournalRejected),
             Some(
                 JournalReasonCode::AuthKeyInvalid
                 | JournalReasonCode::AuthRequired
@@ -1627,6 +1536,25 @@ fn map_journal_error(error: JournalError) -> SyncOperationError {
             SyncOperationError::EndSweepDiagnostic(SyncFailureClass::Contract, diagnostic)
         }
         _ => SyncOperationError::EndSweepDiagnostic(SyncFailureClass::Direct, diagnostic),
+    }
+}
+
+#[cfg(test)]
+fn map_diagnostic(code: DiagnosticCode) -> SyncOperationError {
+    match code {
+        DiagnosticCode::JournalTimeout => SyncOperationError::EndSweepDiagnostic(
+            SyncFailureClass::Timeout,
+            DiagnosticCode::JournalTimeout,
+        ),
+        DiagnosticCode::JournalContractInvalid
+        | DiagnosticCode::JournalResponseTooLarge
+        | DiagnosticCode::ConfiguredStreamMismatch
+        | DiagnosticCode::RegistrationNameMismatch
+        | DiagnosticCode::PrivateStateInvalid
+        | DiagnosticCode::PrivateStateIo => {
+            SyncOperationError::EndSweepDiagnostic(SyncFailureClass::Contract, code)
+        }
+        _ => SyncOperationError::EndSweepDiagnostic(SyncFailureClass::Direct, code),
     }
 }
 
@@ -2003,15 +1931,6 @@ fn parse_day(value: &str) -> Option<Date> {
     let month = Month::try_from(value[4..6].parse::<u8>().ok()?).ok()?;
     let day = value[6..8].parse().ok()?;
     Date::from_calendar_date(year, month, day).ok()
-}
-
-fn format_day(day: Date) -> String {
-    format!(
-        "{:04}{:02}{:02}",
-        day.year(),
-        u8::from(day.month()),
-        day.day()
-    )
 }
 
 fn local_today(clock: &dyn Clock) -> Date {

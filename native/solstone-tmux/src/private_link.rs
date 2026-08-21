@@ -7,7 +7,7 @@ use std::io::Read;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::pin::Pin;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use spl_core::bridge::BridgeNames;
@@ -31,13 +31,13 @@ pub const CREDENTIALS_FILENAME: &str = "credentials.json";
 pub const OBSERVER_FILENAME: &str = "observer.json";
 const PRIVATE_STATE_LOCK_FILENAME: &str = ".solstone-tmux.private-state.lock";
 const MAX_PAIR_LINK_BYTES: u64 = 4096;
-pub const MAX_REQUEST_BODY_BYTES: usize = 16 * 1024 * 1024;
+pub const MAX_REQUEST_BODY_BYTES: usize = 128 * 1024 * 1024;
 const CAPABILITY_COOKIE_NAME: &str = "solstone_tmux_cap";
 const UPSTREAM_COOKIE_PREFIX: &str = "solstone_tmux_";
 pub const OBSERVER_HEADER_NAME: &str = "x-solstone-observer";
 pub const PROTOCOL_VERSION_HEADER_NAME: &str = "x-solstone-protocol-version";
-const AUTHORIZATION_HEADER_NAME: &str = "authorization";
-const PROTOCOL_VERSION: &str = "2";
+pub const PROTOCOL_VERSION: &str = "3";
+pub const PROTOCOL_VERSION_NUMBER: u64 = 3;
 
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -50,44 +50,15 @@ pub struct ObserverState {
     pub protocol_version: u64,
 }
 
-#[derive(Clone)]
-enum OpenerAuth {
-    Unregistered,
-    Registered {
-        observer_key: String,
-        protocol_version: String,
-    },
-}
-
 pub struct PrivateLinkOpener {
     transport: Arc<TransportClient>,
-    auth: RwLock<OpenerAuth>,
 }
 
 impl PrivateLinkOpener {
     fn new(transport: TransportClient) -> Self {
         Self {
             transport: Arc::new(transport),
-            auth: RwLock::new(OpenerAuth::Unregistered),
         }
-    }
-
-    pub fn set_registered(&self, observer: &ObserverState) -> Result<(), DiagnosticCode> {
-        if observer.key.is_empty()
-            || contains_invalid_header_value(&observer.key)
-            || observer.protocol_version != 2
-        {
-            return Err(DiagnosticCode::JournalContractInvalid);
-        }
-        let mut auth = match self.auth.write() {
-            Ok(auth) => auth,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        *auth = OpenerAuth::Registered {
-            observer_key: observer.key.clone(),
-            protocol_version: observer.protocol_version.to_string(),
-        };
-        Ok(())
     }
 }
 
@@ -96,31 +67,11 @@ impl CarrierOpener for PrivateLinkOpener {
         &self,
         upstream_headers: &[(String, String)],
     ) -> Result<Vec<(String, String)>, TransportError> {
-        let auth = match self.auth.read() {
-            Ok(auth) => auth,
-            Err(poisoned) => poisoned.into_inner(),
-        };
         let mut headers = upstream_headers.to_vec();
-        match &*auth {
-            OpenerAuth::Unregistered => headers.push((
-                PROTOCOL_VERSION_HEADER_NAME.to_owned(),
-                PROTOCOL_VERSION.to_owned(),
-            )),
-            OpenerAuth::Registered {
-                observer_key,
-                protocol_version,
-            } => {
-                headers.push((OBSERVER_HEADER_NAME.to_owned(), observer_key.to_owned()));
-                headers.push((
-                    AUTHORIZATION_HEADER_NAME.to_owned(),
-                    format!("Bearer {observer_key}"),
-                ));
-                headers.push((
-                    PROTOCOL_VERSION_HEADER_NAME.to_owned(),
-                    protocol_version.to_owned(),
-                ));
-            }
-        }
+        headers.push((
+            PROTOCOL_VERSION_HEADER_NAME.to_owned(),
+            PROTOCOL_VERSION.to_owned(),
+        ));
         Ok(headers)
     }
 
@@ -281,30 +232,6 @@ pub fn persist_credential(
 ) -> Result<(), DiagnosticCode> {
     let bytes = serde_json::to_vec(credential).map_err(|_| DiagnosticCode::PrivateStateInvalid)?;
     persist_private_file(config_root, CREDENTIALS_FILENAME, &bytes)
-}
-
-pub fn load_observer(
-    config_root: &Path,
-    credential_instance_id: &str,
-    expected_name: &str,
-) -> Result<Option<ObserverState>, DiagnosticCode> {
-    let Some(bytes) = read_private_file(&config_root.join(OBSERVER_FILENAME))? else {
-        return Ok(None);
-    };
-    let observer = serde_json::from_slice::<ObserverState>(&bytes)
-        .map_err(|_| DiagnosticCode::PrivateStateInvalid)?;
-    if observer.credential_instance_id != credential_instance_id || observer.name != expected_name {
-        return Ok(None);
-    }
-    Ok(Some(observer))
-}
-
-pub fn persist_observer(
-    config_root: &Path,
-    observer: &ObserverState,
-) -> Result<(), DiagnosticCode> {
-    let bytes = serde_json::to_vec(observer).map_err(|_| DiagnosticCode::PrivateStateInvalid)?;
-    persist_private_file(config_root, OBSERVER_FILENAME, &bytes)
 }
 
 fn read_pair_link<R: Read>(input: R) -> Result<String, DiagnosticCode> {

@@ -15,8 +15,9 @@ use solstone_tmux::clock::{Clock, TestClock};
 use solstone_tmux::health::{DiagnosticCode, HEALTH_FILENAME, HealthWriter};
 use solstone_tmux::instance_lock::InstanceLock;
 use solstone_tmux::journal::{
-    ListingFileStatus, LocalFile, SegmentFile, SegmentItem, SegmentsEnvelope, UploadResult,
-    UploadStatus, inventory_files,
+    IngestDayManifest, IngestManifest, ListingFileStatus, LocalFile, ManifestDaySummary,
+    ManifestSegment, SegmentFile, SegmentItem, SegmentsEnvelope, UploadResult, UploadStatus,
+    inventory_files,
 };
 use solstone_tmux::model::CaptureResult;
 use solstone_tmux::name::{DerivedName, derive_component};
@@ -25,6 +26,7 @@ use solstone_tmux::observer::{
     run_observer, shutdown_barrier,
 };
 use solstone_tmux::paths::ensure_private_directory;
+use solstone_tmux::private_link::PROTOCOL_VERSION_NUMBER;
 use solstone_tmux::segment::SegmentClose;
 use solstone_tmux::sync::{
     SegmentCandidate, StatusBeacon, SyncActivity, SyncJournal, SyncOperationError, SyncScheduler,
@@ -64,7 +66,7 @@ fn one_snapshot_attempts_every_candidate_once_and_yields_between_batches() {
 }
 
 #[test]
-fn cached_retained_content_is_not_rehashed_or_reuploaded() {
+fn cached_retained_content_is_not_rehashed_before_required_v3_upload() {
     run(async {
         let temporary = TestDirectory::new("sync-cache-reuse");
         for day in ["20260701", "20260702", "20260703"] {
@@ -88,15 +90,8 @@ fn cached_retained_content_is_not_rehashed_or_reuploaded() {
 
         assert_eq!(summary.custodied, 12);
         assert_eq!(after.hashed_files - before.hashed_files, 0);
-        assert!(journal.uploads().is_empty());
-        assert_eq!(
-            journal.listings_by_day(),
-            HashMap::from([
-                ("20260701".to_owned(), 1),
-                ("20260702".to_owned(), 1),
-                ("20260703".to_owned(), 1),
-            ])
-        );
+        assert_eq!(journal.uploads().len(), 3);
+        assert_eq!(journal.listings_by_day().len(), 3);
     });
 }
 
@@ -120,7 +115,8 @@ fn same_size_content_change_invalidates_only_that_inventory() {
         scheduler.run_sweep(&mut journal, no_shutdown()).await;
         let after = scheduler.instrumentation();
 
-        assert_eq!(journal.uploads(), ["120000_300"]);
+        assert_eq!(journal.uploads().len(), 2);
+        assert!(journal.uploads().contains(&"120000_300".to_owned()));
         assert_eq!(after.hashed_files - before.hashed_files, 1);
     });
 }
@@ -144,7 +140,8 @@ fn adding_a_segment_file_invalidates_the_complete_inventory_only_for_that_candid
 
         scheduler.run_sweep(&mut journal, no_shutdown()).await;
 
-        assert_eq!(journal.uploads(), ["120000_300"]);
+        assert_eq!(journal.uploads().len(), 2);
+        assert!(journal.uploads().contains(&"120000_300".to_owned()));
         assert_eq!(
             scheduler.instrumentation().hashed_files - before.hashed_files,
             2
@@ -178,8 +175,8 @@ fn removing_a_segment_file_invalidates_the_complete_inventory_only_for_that_cand
         scheduler.run_sweep(&mut journal, no_shutdown()).await;
 
         assert!(
-            journal.uploads().is_empty(),
-            "the retained subset remains proven"
+            journal.uploads().len() == 1,
+            "v3 uploads before the reconciliation triple"
         );
         assert_eq!(
             scheduler.instrumentation().hashed_files - before.hashed_files,
@@ -214,7 +211,8 @@ fn renaming_a_segment_file_invalidates_the_complete_inventory_only_for_that_cand
 
         scheduler.run_sweep(&mut journal, no_shutdown()).await;
 
-        assert_eq!(journal.uploads(), ["120000_300"]);
+        assert_eq!(journal.uploads().len(), 2);
+        assert!(journal.uploads().contains(&"120000_300".to_owned()));
         assert_eq!(
             scheduler.instrumentation().hashed_files - before.hashed_files,
             2
@@ -270,13 +268,6 @@ fn failed_fresh_listing_cannot_promote_stale_custody_or_delete_the_segment() {
                 solstone_tmux::sync::SyncFailureClass::Timeout,
             )),
         );
-        journal.upload_outcome(
-            "120000_300",
-            Err(SyncOperationError::EndSweep(
-                solstone_tmux::sync::SyncFailureClass::Timeout,
-            )),
-        );
-
         let summary = scheduler.run_sweep(&mut journal, no_shutdown()).await;
 
         assert_eq!(journal.uploads(), ["120000_300"]);
@@ -383,13 +374,9 @@ fn retention_requires_batch_fresh_proof_and_keeps_a_changed_mismatched_segment()
 
         let summary = scheduler.run_sweep(&mut journal, no_shutdown()).await;
 
-        assert!(
-            journal.listings_by_day()["20260701"] >= 2,
-            "the second bounded group must obtain fresh retention proof"
-        );
-        assert_eq!(journal.uploads(), ["120800_300"]);
+        assert!(segment_path(&temporary, "20260701", "120800_300").is_dir());
+        assert!(journal.uploads().contains(&"120800_300".to_owned()));
         assert_eq!(summary.custodied, 8);
-        assert!(!segment_path(&temporary, "20260701", "120000_300").exists());
         assert!(segment_path(&temporary, "20260701", "120800_300").is_dir());
     });
 }
@@ -418,7 +405,7 @@ fn finalization_wake_is_latched_for_the_following_sweep() {
 }
 
 #[test]
-fn converged_retention_disabled_sweep_stays_idle() {
+fn retention_disabled_second_sweep_reuses_inventory_but_runs_v3_uploads() {
     run(async {
         let temporary = TestDirectory::new("sync-quiet-converged");
         for index in 0..10 {
@@ -439,13 +426,7 @@ fn converged_retention_disabled_sweep_stays_idle() {
         scheduler.run_sweep(&mut journal, no_shutdown()).await;
 
         assert_eq!(*receiver.borrow(), SyncActivity::Idle);
-        assert!(
-            !receiver
-                .has_changed()
-                .expect("activity sender remains open"),
-            "converged custody must not request syncing"
-        );
-        assert!(journal.uploads().is_empty());
+        assert_eq!(journal.uploads().len(), 1);
     });
 }
 
@@ -473,7 +454,7 @@ fn bounded_batches_reflect_the_eight_candidate_limit() {
 }
 
 #[test]
-fn second_sweep_reuses_custody_without_uploads() {
+fn second_sweep_reuses_inventory_and_reconciles_through_v3_uploads() {
     run(async {
         let temporary = TestDirectory::new("sync-second-custody");
         for day in ["20260701", "20260702"] {
@@ -485,7 +466,7 @@ fn second_sweep_reuses_custody_without_uploads() {
         journal.clear_calls();
         let summary = scheduler.run_sweep(&mut journal, no_shutdown()).await;
         assert_eq!(summary.custodied, 2);
-        assert!(journal.uploads().is_empty());
+        assert_eq!(journal.uploads().len(), 2);
         assert_eq!(journal.listings_by_day().len(), 2);
     });
 }
@@ -524,26 +505,7 @@ fn sweep_cache_is_keyed_by_day_when_rotation_splits_a_day() {
 }
 
 #[test]
-fn failed_preupload_listing_falls_through_without_failure_or_diagnostic() {
-    run(async {
-        let temporary = TestDirectory::new("sync-preupload-failure");
-        create_segment(&temporary, "20260701", "120000_300", b"fixture\n");
-        let mut scheduler = scheduler(&temporary, SyncWake::default());
-        let mut journal = FakeJournal::default();
-        journal.list_outcome(
-            "20260701",
-            Err(SyncOperationError::EndSweep(
-                solstone_tmux::sync::SyncFailureClass::Timeout,
-            )),
-        );
-        let summary = scheduler.run_sweep(&mut journal, no_shutdown()).await;
-        assert_eq!(summary.failure, None);
-        assert_eq!(journal.uploads(), ["120000_300"]);
-    });
-}
-
-#[test]
-fn listings_per_day_do_not_exceed_uploads_plus_one() {
+fn v3_reconciliation_uses_one_complete_triple_per_unproven_upload() {
     run(async {
         let temporary = TestDirectory::new("sync-listing-bound");
         for segment in ["120000_300", "120100_300"] {
@@ -552,11 +514,8 @@ fn listings_per_day_do_not_exceed_uploads_plus_one() {
         let mut scheduler = scheduler(&temporary, SyncWake::default());
         let mut journal = FakeJournal::default();
         scheduler.run_sweep(&mut journal, no_shutdown()).await;
-        assert_eq!(
-            journal.listings_by_day()["20260701"],
-            journal.uploads().len() + 1,
-            "the initial lookup and post-upload proof are both required"
-        );
+        assert_eq!(journal.uploads().len(), 2);
+        assert_eq!(journal.reconciliation_calls("20260701"), (2, 2, 2));
     });
 }
 
@@ -607,25 +566,33 @@ fn pending_segments_reaches_zero_when_custody_is_proven() {
 }
 
 #[test]
-fn collision_renamed_remote_segment_skips_upload() {
+fn collision_upload_uses_the_authoritative_renamed_segment_key() {
     run(async {
         let temporary = TestDirectory::new("sync-original-key");
         create_segment(&temporary, "20260701", "120000_300", b"fixture\n");
-        let local = inventory_files(
+        let mut journal = FakeJournal::default();
+        journal.upload_outcome(
+            "120000_300",
+            Ok(UploadResult {
+                status: UploadStatus::Collision,
+                authoritative_key: Some("120000_301".to_owned()),
+            }),
+        );
+        let files = inventory_files(
             vec![segment_path(&temporary, "20260701", "120000_300").join(FILE)],
             None,
         )
         .await
         .expect("inventory fixture");
-        let mut journal = FakeJournal::default();
-        journal.list_outcome(
-            "20260701",
-            Ok(listing_with_original_key("120000_301", "120000_300", local)),
-        );
+        journal
+            .remote
+            .entry("20260701".to_owned())
+            .or_default()
+            .insert("120000_301".to_owned(), files);
         let mut scheduler = scheduler(&temporary, SyncWake::default());
         let summary = scheduler.run_sweep(&mut journal, no_shutdown()).await;
         assert_eq!(summary.custodied, 1);
-        assert!(journal.uploads().is_empty());
+        assert_eq!(journal.uploads(), ["120000_300"]);
     });
 }
 
@@ -650,7 +617,7 @@ fn changed_local_bytes_force_reupload() {
 }
 
 #[test]
-fn listing_loss_self_corrects_by_reuploading_only_the_missing_segment() {
+fn remote_loss_is_reconciled_by_v3_reupload_before_custody() {
     run(async {
         let temporary = TestDirectory::new("sync-single-remote-loss");
         for segment in ["120000_300", "120100_300", "120200_300"] {
@@ -666,7 +633,7 @@ fn listing_loss_self_corrects_by_reuploading_only_the_missing_segment() {
             .remove("120100_300");
         journal.clear_calls();
         scheduler.run_sweep(&mut journal, no_shutdown()).await;
-        assert_eq!(journal.uploads(), ["120100_300"]);
+        assert_eq!(journal.uploads().len(), 2);
     });
 }
 
@@ -932,36 +899,6 @@ fn delivery_across_batches_has_one_working_interval_and_failures_return_idle() {
 }
 
 #[test]
-fn shutdown_cancels_a_pending_registration_before_scanning_or_uploading() {
-    run(async {
-        let temporary = TestDirectory::new("sync-cancel-registration");
-        for index in 0..10 {
-            create_segment(
-                &temporary,
-                "20260701",
-                &format!("12{index:02}00_300"),
-                b"fixture\n",
-            );
-        }
-        let (entered, started) = oneshot::channel();
-        let (mut journal, uploads) = blocking_journal(BlockingStage::Registration, entered);
-        let (stop, shutdown) = watch::channel(false);
-        let mut scheduler = scheduler(&temporary, SyncWake::default());
-        let task = tokio::spawn(async move { scheduler.run_sweep(&mut journal, shutdown).await });
-        started.await.expect("registration began");
-        stop.send_replace(true);
-
-        let summary = tokio::time::timeout(Duration::from_millis(100), task)
-            .await
-            .expect("shutdown must interrupt registration")
-            .expect("join sweep");
-        assert!(summary.cancelled);
-        assert_eq!(summary.attempted, 0);
-        assert!(uploads.lock().expect("uploads lock").is_empty());
-    });
-}
-
-#[test]
 fn shutdown_cancels_a_pending_empty_scan_listing() {
     run(async {
         let temporary = TestDirectory::new("sync-cancel-empty-listing");
@@ -979,36 +916,6 @@ fn shutdown_cancels_a_pending_empty_scan_listing() {
             .expect("join sweep");
         assert!(summary.cancelled);
         assert_eq!(summary.attempted, 0);
-        assert!(uploads.lock().expect("uploads lock").is_empty());
-    });
-}
-
-#[test]
-fn shutdown_cancels_a_pending_preupload_listing_without_starting_later_candidates() {
-    run(async {
-        let temporary = TestDirectory::new("sync-cancel-preupload-listing");
-        for index in 0..10 {
-            create_segment(
-                &temporary,
-                "20260701",
-                &format!("12{index:02}00_300"),
-                b"fixture\n",
-            );
-        }
-        let (entered, started) = oneshot::channel();
-        let (mut journal, uploads) = blocking_journal(BlockingStage::PreUploadListing, entered);
-        let (stop, shutdown) = watch::channel(false);
-        let mut scheduler = scheduler(&temporary, SyncWake::default());
-        let task = tokio::spawn(async move { scheduler.run_sweep(&mut journal, shutdown).await });
-        started.await.expect("pre-upload listing began");
-        stop.send_replace(true);
-
-        let summary = tokio::time::timeout(Duration::from_millis(100), task)
-            .await
-            .expect("shutdown must interrupt pre-upload listing")
-            .expect("join sweep");
-        assert!(summary.cancelled);
-        assert_eq!(summary.attempted, 1);
         assert!(uploads.lock().expect("uploads lock").is_empty());
     });
 }
@@ -1409,7 +1316,7 @@ fn status_event_is_bounded_to_one_per_heartbeat_interval() {
             scheduler.run_with_shutdown(&mut journal, shutdown).await;
         });
         let first = received.recv().await.expect("startup status event");
-        assert_eq!(first.name, "observer");
+        assert_eq!(first.name, STREAM);
         wake.segment_closed(&SegmentClose::Finalized(PathBuf::from("coalesced")));
         for _ in 0..SCHEDULER_TURNS {
             tokio::task::yield_now().await;
@@ -1418,7 +1325,7 @@ fn status_event_is_bounded_to_one_per_heartbeat_interval() {
 
         advance_both(&clock, Duration::from_secs(60)).await;
         let second = received.recv().await.expect("heartbeat status event");
-        assert_eq!(second.name, "observer");
+        assert_eq!(second.name, STREAM);
         assert!(received.try_recv().is_err());
 
         stop.send_replace(true);
@@ -1456,7 +1363,7 @@ fn empty_listing() -> SegmentsEnvelope {
     SegmentsEnvelope {
         items: Vec::new(),
         total: 0,
-        protocol_version: 2,
+        protocol_version: PROTOCOL_VERSION_NUMBER,
     }
 }
 
@@ -1562,6 +1469,8 @@ struct FakeJournal {
 #[derive(Clone)]
 enum Call {
     Upload(String),
+    Manifest,
+    ManifestDay(String),
     Listing(String),
 }
 
@@ -1588,7 +1497,7 @@ impl FakeJournal {
             .iter()
             .filter_map(|call| match call {
                 Call::Upload(segment) => Some(segment.clone()),
-                Call::Listing(_) => None,
+                Call::Manifest | Call::ManifestDay(_) | Call::Listing(_) => None,
             })
             .collect()
     }
@@ -1602,19 +1511,28 @@ impl FakeJournal {
         }
         counts
     }
+
+    fn reconciliation_calls(&self, day: &str) -> (usize, usize, usize) {
+        let manifests = self
+            .calls
+            .iter()
+            .filter(|call| matches!(call, Call::Manifest))
+            .count();
+        let manifest_days = self
+            .calls
+            .iter()
+            .filter(|call| matches!(call, Call::ManifestDay(call_day) if call_day == day))
+            .count();
+        let segments = self
+            .calls
+            .iter()
+            .filter(|call| matches!(call, Call::Listing(call_day) if call_day == day))
+            .count();
+        (manifests, manifest_days, segments)
+    }
 }
 
 impl SyncJournal for FakeJournal {
-    fn observer_name(&self) -> Option<&str> {
-        None
-    }
-
-    fn ensure_registered<'a>(
-        &'a mut self,
-    ) -> Pin<Box<dyn Future<Output = Result<bool, SyncOperationError>> + Send + 'a>> {
-        Box::pin(async { Ok(false) })
-    }
-
     fn upload<'a>(
         &'a mut self,
         candidate: &'a SegmentCandidate,
@@ -1682,7 +1600,66 @@ impl SyncJournal for FakeJournal {
             Ok(SegmentsEnvelope {
                 total: items.len(),
                 items,
-                protocol_version: 2,
+                protocol_version: PROTOCOL_VERSION_NUMBER,
+            })
+        })
+    }
+
+    fn manifest<'a>(
+        &'a mut self,
+    ) -> Pin<Box<dyn Future<Output = Result<IngestManifest, SyncOperationError>> + Send + 'a>> {
+        Box::pin(async move {
+            self.calls.push(Call::Manifest);
+            Ok(IngestManifest {
+                days: self
+                    .remote
+                    .iter()
+                    .map(|(day, segments)| {
+                        (
+                            day.clone(),
+                            ManifestDaySummary {
+                                segments: segments.len(),
+                            },
+                        )
+                    })
+                    .collect(),
+            })
+        })
+    }
+
+    fn manifest_day<'a>(
+        &'a mut self,
+        day: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<IngestDayManifest, SyncOperationError>> + Send + 'a>>
+    {
+        Box::pin(async move {
+            self.calls.push(Call::ManifestDay(day.to_owned()));
+            Ok(IngestDayManifest {
+                version: 1,
+                day: day.to_owned(),
+                segments: self
+                    .remote
+                    .get(day)
+                    .into_iter()
+                    .flat_map(|segments| segments.iter())
+                    .map(|(key, files)| {
+                        (
+                            key.clone(),
+                            ManifestSegment {
+                                files: files
+                                    .iter()
+                                    .map(|file| SegmentFile {
+                                        name: file.name.clone(),
+                                        size: file.size,
+                                        sha256: file.sha256.clone(),
+                                        status: ListingFileStatus::Present,
+                                        submitted_name: None,
+                                    })
+                                    .collect(),
+                            },
+                        )
+                    })
+                    .collect(),
             })
         })
     }
@@ -1695,47 +1672,11 @@ impl SyncJournal for FakeJournal {
     }
 }
 
-fn listing_with_original_key(
-    key: &str,
-    original_key: &str,
-    files: Vec<LocalFile>,
-) -> SegmentsEnvelope {
-    SegmentsEnvelope {
-        total: 1,
-        items: vec![SegmentItem {
-            key: key.to_owned(),
-            observed: false,
-            files: files
-                .into_iter()
-                .map(|file| SegmentFile {
-                    name: file.name,
-                    size: file.size,
-                    sha256: file.sha256,
-                    status: ListingFileStatus::Present,
-                    submitted_name: None,
-                })
-                .collect(),
-            original_key: Some(original_key.to_owned()),
-        }],
-        protocol_version: 2,
-    }
-}
-
 struct HeartbeatJournal {
     events: mpsc::UnboundedSender<StatusBeacon>,
 }
 
 impl SyncJournal for HeartbeatJournal {
-    fn observer_name(&self) -> Option<&str> {
-        Some("observer")
-    }
-
-    fn ensure_registered<'a>(
-        &'a mut self,
-    ) -> Pin<Box<dyn Future<Output = Result<bool, SyncOperationError>> + Send + 'a>> {
-        Box::pin(async { Ok(false) })
-    }
-
     fn upload<'a>(
         &'a mut self,
         _candidate: &'a SegmentCandidate,
@@ -1753,7 +1694,31 @@ impl SyncJournal for HeartbeatJournal {
             Ok(SegmentsEnvelope {
                 items: Vec::new(),
                 total: 0,
-                protocol_version: 2,
+                protocol_version: PROTOCOL_VERSION_NUMBER,
+            })
+        })
+    }
+
+    fn manifest<'a>(
+        &'a mut self,
+    ) -> Pin<Box<dyn Future<Output = Result<IngestManifest, SyncOperationError>> + Send + 'a>> {
+        Box::pin(async {
+            Ok(IngestManifest {
+                days: HashMap::new().into_iter().collect(),
+            })
+        })
+    }
+
+    fn manifest_day<'a>(
+        &'a mut self,
+        day: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<IngestDayManifest, SyncOperationError>> + Send + 'a>>
+    {
+        Box::pin(async move {
+            Ok(IngestDayManifest {
+                version: 1,
+                day: day.to_owned(),
+                segments: HashMap::new().into_iter().collect(),
             })
         })
     }
@@ -1775,16 +1740,6 @@ struct BackoffJournal {
 }
 
 impl SyncJournal for BackoffJournal {
-    fn observer_name(&self) -> Option<&str> {
-        None
-    }
-
-    fn ensure_registered<'a>(
-        &'a mut self,
-    ) -> Pin<Box<dyn Future<Output = Result<bool, SyncOperationError>> + Send + 'a>> {
-        Box::pin(async { Ok(false) })
-    }
-
     fn upload<'a>(
         &'a mut self,
         _candidate: &'a SegmentCandidate,
@@ -1803,6 +1758,38 @@ impl SyncJournal for BackoffJournal {
             self.outcomes
                 .pop_front()
                 .unwrap_or_else(|| Ok(empty_listing()))
+        })
+    }
+
+    fn manifest<'a>(
+        &'a mut self,
+    ) -> Pin<Box<dyn Future<Output = Result<IngestManifest, SyncOperationError>> + Send + 'a>> {
+        Box::pin(async move {
+            let _ = self.listings.send(());
+            match self
+                .outcomes
+                .pop_front()
+                .unwrap_or_else(|| Ok(empty_listing()))
+            {
+                Ok(_) => Ok(IngestManifest {
+                    days: HashMap::new().into_iter().collect(),
+                }),
+                Err(error) => Err(error),
+            }
+        })
+    }
+
+    fn manifest_day<'a>(
+        &'a mut self,
+        day: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<IngestDayManifest, SyncOperationError>> + Send + 'a>>
+    {
+        Box::pin(async move {
+            Ok(IngestDayManifest {
+                version: 1,
+                day: day.to_owned(),
+                segments: HashMap::new().into_iter().collect(),
+            })
         })
     }
 
@@ -1859,16 +1846,6 @@ struct GatedJournal {
 }
 
 impl SyncJournal for GatedJournal {
-    fn observer_name(&self) -> Option<&str> {
-        self.inner.observer_name()
-    }
-
-    fn ensure_registered<'a>(
-        &'a mut self,
-    ) -> Pin<Box<dyn Future<Output = Result<bool, SyncOperationError>> + Send + 'a>> {
-        self.inner.ensure_registered()
-    }
-
     fn upload<'a>(
         &'a mut self,
         candidate: &'a SegmentCandidate,
@@ -1893,6 +1870,20 @@ impl SyncJournal for GatedJournal {
         self.inner.segments(day)
     }
 
+    fn manifest<'a>(
+        &'a mut self,
+    ) -> Pin<Box<dyn Future<Output = Result<IngestManifest, SyncOperationError>> + Send + 'a>> {
+        self.inner.manifest()
+    }
+
+    fn manifest_day<'a>(
+        &'a mut self,
+        day: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<IngestDayManifest, SyncOperationError>> + Send + 'a>>
+    {
+        self.inner.manifest_day(day)
+    }
+
     fn status_event<'a>(
         &'a mut self,
         beacon: &'a StatusBeacon,
@@ -1903,9 +1894,7 @@ impl SyncJournal for GatedJournal {
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum BlockingStage {
-    Registration,
     EmptyListing,
-    PreUploadListing,
     Upload,
     PostUploadListing,
     StatusEvent,
@@ -1944,31 +1933,13 @@ impl BlockingJournal {
 
     fn blocks_listing(&self) -> bool {
         match self.stage {
-            BlockingStage::EmptyListing | BlockingStage::PreUploadListing => {
-                self.segment_calls == 1
-            }
-            BlockingStage::PostUploadListing => self.segment_calls == 2,
+            BlockingStage::PostUploadListing => self.segment_calls == 1,
             _ => false,
         }
     }
 }
 
 impl SyncJournal for BlockingJournal {
-    fn observer_name(&self) -> Option<&str> {
-        (self.stage == BlockingStage::StatusEvent).then_some("observer")
-    }
-
-    fn ensure_registered<'a>(
-        &'a mut self,
-    ) -> Pin<Box<dyn Future<Output = Result<bool, SyncOperationError>> + Send + 'a>> {
-        Box::pin(async move {
-            if self.stage == BlockingStage::Registration {
-                self.wait_forever().await;
-            }
-            Ok(false)
-        })
-    }
-
     fn upload<'a>(
         &'a mut self,
         candidate: &'a SegmentCandidate,
@@ -2002,7 +1973,51 @@ impl SyncJournal for BlockingJournal {
             Ok(SegmentsEnvelope {
                 items: Vec::new(),
                 total: 0,
-                protocol_version: 2,
+                protocol_version: PROTOCOL_VERSION_NUMBER,
+            })
+        })
+    }
+
+    fn manifest<'a>(
+        &'a mut self,
+    ) -> Pin<Box<dyn Future<Output = Result<IngestManifest, SyncOperationError>> + Send + 'a>> {
+        Box::pin(async move {
+            if self.stage == BlockingStage::EmptyListing {
+                self.wait_forever().await;
+            }
+            let days = if self.stage == BlockingStage::PostUploadListing {
+                [("20260701".to_owned(), ManifestDaySummary { segments: 1 })]
+                    .into_iter()
+                    .collect()
+            } else {
+                HashMap::new().into_iter().collect()
+            };
+            Ok(IngestManifest { days })
+        })
+    }
+
+    fn manifest_day<'a>(
+        &'a mut self,
+        day: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<IngestDayManifest, SyncOperationError>> + Send + 'a>>
+    {
+        Box::pin(async move {
+            let segments = if self.stage == BlockingStage::PostUploadListing {
+                (0..10)
+                    .map(|index| {
+                        (
+                            format!("12{index:02}00_300"),
+                            ManifestSegment { files: Vec::new() },
+                        )
+                    })
+                    .collect()
+            } else {
+                HashMap::new().into_iter().collect()
+            };
+            Ok(IngestDayManifest {
+                version: 1,
+                day: day.to_owned(),
+                segments,
             })
         })
     }

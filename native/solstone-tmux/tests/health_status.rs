@@ -8,21 +8,19 @@ use std::io::Write;
 use std::os::unix::fs::symlink;
 use std::process::{Command, Stdio};
 
-use serde_json::{Value, json};
+use serde_json::Value;
 use solstone_tmux::health::{
     DiagnosticCode, HEALTH_FILENAME, HealthState, HealthWriter, StatusHealth, SyncFacts,
     read_status_health,
 };
 use solstone_tmux::instance_lock::{InstanceLock, LOCK_FILENAME};
-use solstone_tmux::journal::RegistrationDescriptor;
 use solstone_tmux::paths::ensure_private_directory;
-use solstone_tmux::sync::{RegistrationOwner, StatusBeacon, SyncFailureClass, SyncOperationError};
+use solstone_tmux::sync::{JournalSession, StatusBeacon, SyncFailureClass, SyncOperationError};
 use support::private_link_peer::PrivateLinkPeer;
 use support::{IsolatedRoots, TestDirectory};
 
 const NOW: i64 = 1_800_000_000;
 const PAIR_LINK_SENTINEL: &str = "SENTINEL_PAIR_LINK";
-const OBSERVER_KEY_SENTINEL: &str = "SENTINEL_OBSERVER_KEY_SENTINEL_BEARER_TOKEN";
 const RELAY_TOKEN_SENTINEL: &str = "SENTINEL_RELAY_TOKEN";
 const RESPONSE_BODY_SENTINEL: &str = "SENTINEL_RESPONSE_BODY";
 const CAPTURE_PATH_SENTINEL: &str = "SENTINEL_CAPTURE_PATH";
@@ -170,30 +168,9 @@ fn production_failure_paths_redact_secrets_and_owner_content() {
         let mut credential = peer.credential();
         credential.device_token = Some(RELAY_TOKEN_SENTINEL.to_owned());
         credential.device_token_expires_at = Some(NOW + 300);
-        peer.enqueue_response(
-            200,
-            serde_json::to_vec(&json!({
-                "key": OBSERVER_KEY_SENTINEL,
-                "prefix": "redaction",
-                "name": "redaction",
-                "ingest_url": "/app/observer/ingest",
-                "protocol_version": 2,
-            }))
-            .expect("registration response"),
-        );
-        let owner = RegistrationOwner::start(credential, config_root)
+        let owner = JournalSession::start(credential, config_root)
             .await
-            .expect("start redaction registration owner");
-        owner
-            .ensure_registration(
-                &RegistrationDescriptor {
-                    platform: "linux".to_owned(),
-                    hostname: "redaction".to_owned(),
-                },
-                "redaction",
-            )
-            .await
-            .expect("register redaction observer");
+            .expect("start redaction session");
 
         peer.enqueue_response(200, RESPONSE_BODY_SENTINEL.as_bytes());
         let response_error = match owner.journal().ingest_segments("20260728").await {
@@ -201,29 +178,14 @@ fn production_failure_paths_redact_secrets_and_owner_content() {
             Ok(_) => panic!("malformed response was accepted"),
         };
         let requests = peer.requests();
-        let authenticated = requests.last().expect("authenticated request");
-        assert!(
-            authenticated
-                .header("x-solstone-observer")
-                .is_some_and(|value| value == OBSERVER_KEY_SENTINEL),
-            "observer authentication was not exercised"
-        );
-        assert!(
-            authenticated
-                .header("authorization")
-                .is_some_and(|value| value == format!("Bearer {OBSERVER_KEY_SENTINEL}")),
-            "bearer authentication was not exercised"
-        );
+        let authenticated = requests.last().expect("linked-device request");
+        assert!(authenticated.header("x-solstone-observer").is_none());
+        assert!(authenticated.header("authorization").is_none());
 
         let capture_path = temporary.path().join(CAPTURE_PATH_SENTINEL);
         let path_error = match owner
             .journal()
-            .ingest_upload(
-                "/app/observer/ingest",
-                "20260728",
-                "120000_300",
-                vec![capture_path],
-            )
+            .ingest_upload("20260728", "120000_300", vec![capture_path])
             .await
         {
             Err(error) => error,

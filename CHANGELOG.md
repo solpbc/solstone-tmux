@@ -4,6 +4,18 @@ All notable changes to solstone-tmux will be documented in this file.
 
 Format adapted from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Changed
+- syncing now uses your paired device identity directly, so finished tmux
+  segments reach your journal without a separate observer registration step.
+- your journal can confirm custody through linked-device manifests before this
+  machine removes a cached segment. those checks also compare the file size.
+
+### Fixed
+- larger completed segment files can now be delivered while each upload part
+  still stays within the journal's linked-device limits.
+
 ## [1.0.2] - 2026-08-08
 
 ### Changed

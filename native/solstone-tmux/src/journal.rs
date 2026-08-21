@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 sol pbc
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
@@ -25,20 +26,22 @@ use tokio::task::JoinHandle;
 use crate::health::DiagnosticCode;
 use crate::name::derive_component;
 use crate::private_link::{
-    MAX_REQUEST_BODY_BYTES, ObserverState, PrivateLinkBridge, contains_invalid_header_value,
+    MAX_REQUEST_BODY_BYTES, ObserverState, PROTOCOL_VERSION_NUMBER, PrivateLinkBridge,
+    contains_invalid_header_value,
 };
 use crate::storage::open_regular_readonly;
 use crate::sync::SyncInstrumentation;
 
 const REGISTER_PATH: &str = "/app/devices/register";
+const MANIFEST_PATH: &str = "/app/devices/ingest/manifest";
 const SEGMENTS_PATH: &str = "/app/devices/ingest/segments";
 const EVENT_PATH: &str = "/app/devices/ingest/event";
 pub(crate) const INGEST_PATH: &str = "/app/devices/ingest";
-pub(crate) const PREDECESSOR_INGEST_PATH: &str = "/app/observer/ingest";
 const LOOPBACK_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const FILE_STAGE_CAPACITY: usize = UPLOAD_BODY_STAGE_CAPACITY / RECOMMENDED_CHUNK;
 const MAX_RESPONSE_BODY_BYTES: usize = 4 * 1024 * 1024;
+pub const MAX_MULTIPART_PART_BYTES: u64 = 64 * 1024 * 1024;
 
 #[derive(Clone)]
 pub struct RegistrationDescriptor {
@@ -83,7 +86,10 @@ pub enum JournalReasonCode {
     InvalidSegmentOrStream,
     LocalRequestOnly,
     MissingRequiredField,
+    LinkedDeviceRequired,
     PlRevoked,
+    ProtocolVersionFuture,
+    ProtocolVersionLegacy,
     SettingsOperationFailed,
 }
 
@@ -101,7 +107,10 @@ impl JournalReasonCode {
             "invalid_segment_or_stream" => Some(Self::InvalidSegmentOrStream),
             "local_request_only" => Some(Self::LocalRequestOnly),
             "missing_required_field" => Some(Self::MissingRequiredField),
+            "linked_device_required" => Some(Self::LinkedDeviceRequired),
             "pl_revoked" => Some(Self::PlRevoked),
+            "protocol_version_future" => Some(Self::ProtocolVersionFuture),
+            "protocol_version_legacy" => Some(Self::ProtocolVersionLegacy),
             "settings_operation_failed" => Some(Self::SettingsOperationFailed),
             _ => None,
         }
@@ -192,6 +201,28 @@ pub struct LocalFile {
     pub sha256: String,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+pub struct IngestManifest {
+    pub days: BTreeMap<String, ManifestDaySummary>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+pub struct ManifestDaySummary {
+    pub segments: usize,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+pub struct IngestDayManifest {
+    pub version: u64,
+    pub day: String,
+    pub segments: BTreeMap<String, ManifestSegment>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+pub struct ManifestSegment {
+    pub files: Vec<SegmentFile>,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
 #[serde(rename_all = "lowercase")]
 pub enum ListingFileStatus {
@@ -234,6 +265,18 @@ struct EventResponse {
 struct PreparedFile {
     descriptor: LocalFile,
     file: File,
+}
+
+#[derive(Serialize)]
+struct UploadEnvelope {
+    day: String,
+    segment: String,
+    files: Vec<UploadEnvelopeFile>,
+}
+
+#[derive(Serialize)]
+struct UploadEnvelopeFile {
+    submitted: String,
 }
 
 #[derive(Default)]
@@ -440,22 +483,8 @@ impl JournalClient {
         decode_registration_response(&body, credential_instance_id, expected_name)
     }
 
-    pub fn validate_observer(&self, observer: &ObserverState) -> Result<(), DiagnosticCode> {
-        let response = RegistrationResponse {
-            key: observer.key.clone(),
-            prefix: observer.prefix.clone(),
-            name: observer.name.clone(),
-            ingest_url: observer.ingest_url.clone(),
-            protocol_version: observer.protocol_version,
-        };
-        validate_registration(&response)?;
-        confine_path(&self.origin, &observer.ingest_url)?;
-        Ok(())
-    }
-
     pub async fn ingest_upload(
         &self,
-        ingest_path: &str,
         day: &str,
         segment: &str,
         paths: Vec<PathBuf>,
@@ -466,12 +495,33 @@ impl JournalClient {
         let prepared = tokio::task::spawn_blocking(move || prepare_files(paths, None))
             .await
             .map_err(|_| JournalError::local(DiagnosticCode::LocalSegmentInvalid))??;
-        let mut producers = Vec::with_capacity(prepared.len());
-        let mut producer_starts = Vec::with_capacity(prepared.len());
-        let mut form = Form::new()
-            .text("day", day.to_owned())
-            .text("segment", segment.to_owned());
+        let mut envelope = UploadEnvelope {
+            day: day.to_owned(),
+            segment: segment.to_owned(),
+            files: Vec::with_capacity(prepared.len()),
+        };
+        let mut upload_files = Vec::with_capacity(prepared.len());
         for prepared_file in prepared {
+            if prepared_file.descriptor.size > MAX_MULTIPART_PART_BYTES {
+                return Err(JournalError::local(DiagnosticCode::RequestTooLarge));
+            }
+            envelope.files.push(UploadEnvelopeFile {
+                submitted: prepared_file.descriptor.name.clone(),
+            });
+            upload_files.push(prepared_file);
+        }
+        let envelope = serde_json::to_vec(&envelope)
+            .map_err(|_| JournalError::local(DiagnosticCode::JournalContractInvalid))?;
+        if envelope.len() > MAX_MULTIPART_PART_BYTES as usize {
+            return Err(JournalError::local(DiagnosticCode::RequestTooLarge));
+        }
+        let mut producers = Vec::with_capacity(upload_files.len());
+        let mut producer_starts = Vec::with_capacity(upload_files.len());
+        let envelope_part = Part::bytes(envelope)
+            .mime_str("application/json")
+            .map_err(|_| JournalError::local(DiagnosticCode::JournalContractInvalid))?;
+        let mut form = Form::new().part("envelope", envelope_part);
+        for prepared_file in upload_files {
             let PreparedFile { descriptor, file } = prepared_file;
             let (sender, receiver) = mpsc::channel(FILE_STAGE_CAPACITY);
             let start = Arc::new(ProducerStart::default());
@@ -490,7 +540,7 @@ impl JournalClient {
         }
 
         let request = self
-            .request(Method::POST, ingest_path)?
+            .request(Method::POST, INGEST_PATH)?
             .multipart(form)
             .build()
             .map_err(|_| JournalError::local(DiagnosticCode::LocalSegmentInvalid))?;
@@ -520,6 +570,48 @@ impl JournalClient {
             return Err(classify_error_response(status.as_u16(), &body));
         }
         decode_upload_response(&body)
+    }
+
+    pub async fn ingest_manifest(&self) -> Result<IngestManifest, JournalError> {
+        let response = self
+            .request(Method::GET, MANIFEST_PATH)?
+            .send()
+            .await
+            .map_err(|error| {
+                JournalError::local(request_diagnostic(
+                    &error,
+                    DiagnosticCode::JournalUnavailable,
+                ))
+            })?;
+        let status = response.status();
+        let body = collect_response_body(response).await?;
+        if status != StatusCode::OK {
+            return Err(classify_error_response(status.as_u16(), &body));
+        }
+        decode_manifest_response(&body)
+    }
+
+    pub async fn ingest_manifest_day(&self, day: &str) -> Result<IngestDayManifest, JournalError> {
+        if !valid_day(day) {
+            return Err(JournalError::local(DiagnosticCode::LocalSegmentInvalid));
+        }
+        let path = format!("{MANIFEST_PATH}/{day}");
+        let response = self
+            .request(Method::GET, &path)?
+            .send()
+            .await
+            .map_err(|error| {
+                JournalError::local(request_diagnostic(
+                    &error,
+                    DiagnosticCode::JournalUnavailable,
+                ))
+            })?;
+        let status = response.status();
+        let body = collect_response_body(response).await?;
+        if status != StatusCode::OK {
+            return Err(classify_error_response(status.as_u16(), &body));
+        }
+        decode_manifest_day_response(&body, day)
     }
 
     pub async fn ingest_segments(&self, day: &str) -> Result<SegmentsEnvelope, JournalError> {
@@ -652,10 +744,42 @@ pub fn decode_upload_response(body: &[u8]) -> Result<UploadResult, JournalError>
     })
 }
 
+pub fn decode_manifest_response(body: &[u8]) -> Result<IngestManifest, JournalError> {
+    let response = serde_json::from_slice::<IngestManifest>(body)
+        .map_err(|_| JournalError::local(DiagnosticCode::JournalContractInvalid))?;
+    if response.days.keys().any(|day| !valid_day(day)) {
+        return Err(JournalError::local(DiagnosticCode::JournalContractInvalid));
+    }
+    Ok(response)
+}
+
+pub fn decode_manifest_day_response(
+    body: &[u8],
+    requested_day: &str,
+) -> Result<IngestDayManifest, JournalError> {
+    if !valid_day(requested_day) {
+        return Err(JournalError::local(DiagnosticCode::LocalSegmentInvalid));
+    }
+    let response = serde_json::from_slice::<IngestDayManifest>(body)
+        .map_err(|_| JournalError::local(DiagnosticCode::JournalContractInvalid))?;
+    if response.day != requested_day
+        || response.segments.keys().any(|key| !valid_component(key))
+        || response.segments.values().any(|segment| {
+            segment
+                .files
+                .iter()
+                .any(|file| file.name.is_empty() || !valid_sha256(&file.sha256))
+        })
+    {
+        return Err(JournalError::local(DiagnosticCode::JournalContractInvalid));
+    }
+    Ok(response)
+}
+
 pub fn decode_segments_response(body: &[u8]) -> Result<SegmentsEnvelope, JournalError> {
     let response = serde_json::from_slice::<SegmentsEnvelope>(body)
         .map_err(|_| JournalError::local(DiagnosticCode::JournalContractInvalid))?;
-    if response.protocol_version != 2
+    if response.protocol_version != PROTOCOL_VERSION_NUMBER
         || response.total != response.items.len()
         || response
             .items
@@ -902,4 +1026,11 @@ fn valid_day(day: &str) -> bool {
 
 fn valid_component(value: &str) -> bool {
     derive_component(value).is_ok_and(|derived| derived.as_str() == value)
+}
+
+fn valid_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
 }

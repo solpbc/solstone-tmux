@@ -12,11 +12,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use solstone_tmux::clock::{Clock, TestClock};
 use solstone_tmux::config::{CONFIG_FILENAME, RuntimeConfig};
 use solstone_tmux::health::{DiagnosticCode, HEALTH_FILENAME, HealthWriter};
 use solstone_tmux::instance_lock::InstanceLock;
-use solstone_tmux::journal::RegistrationDescriptor;
 use solstone_tmux::migration::{MigrationOutcome, migrate_legacy_config};
 use solstone_tmux::model::CaptureResult;
 use solstone_tmux::observer::{
@@ -25,19 +25,21 @@ use solstone_tmux::observer::{
 };
 use solstone_tmux::paths::{PlatformKind, ensure_private_directory};
 use solstone_tmux::private_link::{
-    CREDENTIALS_FILENAME, OBSERVER_FILENAME, ObserverState, load_observer, persist_credential,
-    persist_observer,
+    OBSERVER_HEADER_NAME, PROTOCOL_VERSION, PROTOCOL_VERSION_HEADER_NAME, persist_credential,
 };
 use solstone_tmux::segment::SegmentState;
-use solstone_tmux::sync::{RegistrationOwner, SyncActivity, SyncTask, SyncWake};
+use solstone_tmux::sync::{JournalSession, SyncActivity, SyncScheduler, SyncTask, SyncWake};
 use support::private_link_peer::PrivateLinkPeer;
-use support::{TestDirectory, golden_capture, observer_wire_fixture};
+use support::{TestDirectory, golden_capture};
 use time::{Date, Month, PrimitiveDateTime, Time, UtcOffset};
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, watch};
 
-const LEGACY_KEY: &str = "LEGACYKEYCANARY-do-not-copy";
-const RETURNED_KEY: &str = "journal-returned-observer-key";
 const CANDIDATE_BYTES: &[u8] = b"existing cache remains\n";
+const LINKED_DEVICE_DAY: &str = "20260729";
+const LINKED_DEVICE_STREAM: &str = "host.tmux";
+const LINKED_DEVICE_SEGMENT: &str = "120000_300";
+const LINKED_DEVICE_FILE: &str = "tmux_linked_device_screen.jsonl";
+const LINKED_DEVICE_BYTES: &[u8] = b"linked-device candidate\n";
 
 #[tokio::test]
 async fn migrated_custom_stream_refuses_before_network_while_capture_continues() {
@@ -71,297 +73,6 @@ async fn migrated_custom_stream_refuses_before_network_while_capture_continues()
     peer.shutdown().await;
 }
 
-#[tokio::test]
-async fn returned_name_mismatch_is_not_persisted_and_capture_continues() {
-    let fixture = BindingFixture::new("binding-returned-name");
-    fixture.install_legacy(empty_stream_fixture());
-    assert_eq!(fixture.migrate("host.example"), MigrationOutcome::Migrated);
-    let peer = PrivateLinkPeer::start().await;
-    peer.enqueue_response(
-        200,
-        registration_response("wrong-name", "wrong-name-observer-key"),
-    );
-
-    let evidence = run_binding_failure(
-        &fixture,
-        &peer,
-        "host.example",
-        DiagnosticCode::RegistrationNameMismatch,
-    )
-    .await;
-
-    let requests = peer.requests();
-    assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0].path(), "/app/devices/register");
-    assert!(!fixture.config_root.join(OBSERVER_FILENAME).exists());
-    evidence.assert_capture_continued();
-    assert_eq!(
-        fs::read(&evidence.candidate).expect("retained candidate"),
-        CANDIDATE_BYTES
-    );
-    assert_eq!(
-        evidence.health["last_error_code"],
-        "registration_name_mismatch"
-    );
-    peer.shutdown().await;
-}
-
-#[tokio::test]
-async fn normal_prior_install_migrates_and_reuses_checked_registration() {
-    let fixture = BindingFixture::new("binding-normal-prior-install");
-    let legacy = real_legacy_fixture();
-    assert!(String::from_utf8_lossy(&legacy).contains(LEGACY_KEY));
-    fixture.install_legacy(legacy);
-    let cache = fixture.create_candidate("extro.tmux");
-    assert_eq!(fixture.migrate("extro.example"), MigrationOutcome::Migrated);
-    let runtime =
-        RuntimeConfig::load(&fixture.config_root, "extro.example").expect("load migrated settings");
-    assert_eq!(runtime.stream.as_str(), "extro.tmux");
-
-    let peer = PrivateLinkPeer::start().await;
-    let credential = peer.credential();
-    persist_credential(&fixture.config_root, &credential).expect("pairing state");
-    peer.enqueue_response(200, registration_response("extro.tmux", RETURNED_KEY));
-    let owner = RegistrationOwner::start(credential.clone(), fixture.config_root.clone())
-        .await
-        .expect("start registration owner");
-    let descriptor = descriptor("extro.example");
-    let (registered, contacted) = owner
-        .ensure_registration(&descriptor, "extro.tmux")
-        .await
-        .expect("idempotent Journal registration");
-    assert!(contacted);
-    assert_eq!(registered.key, RETURNED_KEY);
-    owner.shutdown().await.expect("first owner shutdown");
-
-    let persisted = load_observer(&fixture.config_root, &credential.instance_id, "extro.tmux")
-        .expect("load observer state")
-        .expect("observer state present");
-    assert_eq!(persisted.key, RETURNED_KEY);
-    assert_eq!(persisted.credential_instance_id, credential.instance_id);
-    assert_eq!(
-        fs::read(&cache).expect("existing cache retained"),
-        CANDIDATE_BYTES
-    );
-
-    let native = fs::read(fixture.config_root.join(CONFIG_FILENAME)).expect("native config");
-    let credentials =
-        fs::read(fixture.config_root.join(CREDENTIALS_FILENAME)).expect("credentials state");
-    let observer = fs::read(fixture.config_root.join(OBSERVER_FILENAME)).expect("observer state");
-    for bytes in [&native, &credentials, &observer] {
-        assert!(
-            !String::from_utf8_lossy(bytes).contains(LEGACY_KEY),
-            "legacy key reached native or private state"
-        );
-    }
-    assert!(!String::from_utf8_lossy(&native).contains("server_url"));
-    assert_ne!(
-        fixture.config_root.join(CONFIG_FILENAME),
-        fixture.config_root.join(CREDENTIALS_FILENAME)
-    );
-
-    let second = RegistrationOwner::start(credential, fixture.config_root.clone())
-        .await
-        .expect("restart registration owner");
-    let (reused, contacted) = second
-        .ensure_registration(&descriptor, "extro.tmux")
-        .await
-        .expect("reuse registration");
-    assert!(!contacted);
-    assert_eq!(reused.ingest_url, "/app/devices/ingest");
-    assert_eq!(
-        reused.credential_instance_id,
-        persisted.credential_instance_id
-    );
-    assert_eq!(reused.key, persisted.key);
-    assert_eq!(reused.prefix, persisted.prefix);
-    assert_eq!(reused.name, persisted.name);
-    assert_eq!(reused.protocol_version, persisted.protocol_version);
-    peer.enqueue_response(
-        200,
-        br#"{"protocol_version":2,"items":[],"total":0}"#.to_vec(),
-    );
-    second
-        .journal()
-        .ingest_segments("20260729")
-        .await
-        .expect("authenticated listing");
-    let requests = peer.requests();
-    assert_eq!(requests.len(), 2);
-    assert_eq!(requests[0].path(), "/app/devices/register");
-    assert_eq!(
-        requests[1].header("authorization"),
-        Some("Bearer journal-returned-observer-key")
-    );
-    assert_eq!(
-        requests[1].header("x-solstone-observer"),
-        Some(RETURNED_KEY)
-    );
-    second.shutdown().await.expect("second owner shutdown");
-    peer.shutdown().await;
-}
-
-#[tokio::test]
-async fn stale_cached_observer_name_forces_reregistration() {
-    let fixture = BindingFixture::new("binding-stale-cached-name");
-    let peer = PrivateLinkPeer::start().await;
-    let credential = peer.credential();
-    persist_observer(
-        &fixture.config_root,
-        &ObserverState {
-            credential_instance_id: credential.instance_id.clone(),
-            key: "stale-key".to_owned(),
-            prefix: "stale-prefix".to_owned(),
-            name: "stale-name".to_owned(),
-            ingest_url: "/app/observer/ingest".to_owned(),
-            protocol_version: 2,
-        },
-    )
-    .expect("persist stale observer");
-    peer.enqueue_response(200, registration_response("host.tmux", RETURNED_KEY));
-
-    let owner = RegistrationOwner::start(credential.clone(), fixture.config_root.clone())
-        .await
-        .expect("start registration owner");
-    let (observer, contacted) = owner
-        .ensure_registration(&descriptor("host.example"), "host.tmux")
-        .await
-        .expect("stale name re-registers");
-
-    assert!(contacted);
-    assert_eq!(observer.name, "host.tmux");
-    assert_eq!(observer.key, RETURNED_KEY);
-    assert_eq!(peer.requests().len(), 1);
-    assert_eq!(peer.requests()[0].path(), "/app/devices/register");
-    assert!(
-        load_observer(&fixture.config_root, &credential.instance_id, "host.tmux")
-            .expect("load refreshed observer")
-            .expect("refreshed observer")
-            == observer,
-        "refreshed observer state differs"
-    );
-    owner.shutdown().await.expect("owner shutdown");
-    peer.shutdown().await;
-}
-
-#[tokio::test]
-async fn reused_predecessor_ingest_url_is_rewritten_and_upload_targets_devices() {
-    let fixture = BindingFixture::new("binding-predecessor-ingest-rewrite");
-    let peer = PrivateLinkPeer::start().await;
-    let credential = peer.credential();
-    persist_credential(&fixture.config_root, &credential).expect("pairing state");
-    persist_observer(
-        &fixture.config_root,
-        &ObserverState {
-            credential_instance_id: credential.instance_id.clone(),
-            key: "observer-key".to_owned(),
-            prefix: "observer-prefix".to_owned(),
-            name: "host.tmux".to_owned(),
-            ingest_url: "/app/observer/ingest".to_owned(),
-            protocol_version: 2,
-        },
-    )
-    .expect("persist predecessor observer");
-
-    let owner = RegistrationOwner::start(credential.clone(), fixture.config_root.clone())
-        .await
-        .expect("start registration owner");
-    let (observer, contacted) = owner
-        .ensure_registration(&descriptor("host.example"), "host.tmux")
-        .await
-        .expect("reuse predecessor registration");
-
-    assert!(!contacted);
-    assert!(peer.requests().is_empty());
-    assert_eq!(observer.ingest_url, "/app/devices/ingest");
-
-    peer.enqueue_response(200, upload_success_body());
-    let upload_path = fixture.config_root.join("segment.jsonl");
-    fs::write(&upload_path, b"upload fixture\n").expect("write upload file");
-    owner
-        .journal()
-        .ingest_upload(
-            &observer.ingest_url,
-            "20260729",
-            "110000_300",
-            vec![upload_path],
-        )
-        .await
-        .expect("upload after predecessor rewrite");
-
-    let requests = peer.requests();
-    assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0].path(), "/app/devices/ingest");
-    assert_eq!(
-        load_observer(&fixture.config_root, &credential.instance_id, "host.tmux")
-            .expect("load rewritten observer")
-            .expect("rewritten observer")
-            .ingest_url,
-        "/app/devices/ingest"
-    );
-
-    owner.shutdown().await.expect("owner shutdown");
-    peer.shutdown().await;
-}
-
-#[tokio::test]
-async fn already_devices_ingest_url_is_left_unchanged_and_upload_targets_devices() {
-    let fixture = BindingFixture::new("binding-devices-ingest-unchanged");
-    let peer = PrivateLinkPeer::start().await;
-    let credential = peer.credential();
-    persist_credential(&fixture.config_root, &credential).expect("pairing state");
-    persist_observer(
-        &fixture.config_root,
-        &ObserverState {
-            credential_instance_id: credential.instance_id.clone(),
-            key: "observer-key".to_owned(),
-            prefix: "observer-prefix".to_owned(),
-            name: "host.tmux".to_owned(),
-            ingest_url: "/app/devices/ingest".to_owned(),
-            protocol_version: 2,
-        },
-    )
-    .expect("persist devices observer");
-    let observer_path = fixture.config_root.join(OBSERVER_FILENAME);
-    let original = fs::read(&observer_path).expect("read devices observer");
-
-    let owner = RegistrationOwner::start(credential, fixture.config_root.clone())
-        .await
-        .expect("start registration owner");
-    let (observer, contacted) = owner
-        .ensure_registration(&descriptor("host.example"), "host.tmux")
-        .await
-        .expect("reuse devices registration");
-
-    assert!(!contacted);
-    assert!(peer.requests().is_empty());
-    assert_eq!(
-        fs::read(&observer_path).expect("reread devices observer"),
-        original
-    );
-
-    peer.enqueue_response(200, upload_success_body());
-    let upload_path = fixture.config_root.join("segment.jsonl");
-    fs::write(&upload_path, b"upload fixture\n").expect("write upload file");
-    owner
-        .journal()
-        .ingest_upload(
-            &observer.ingest_url,
-            "20260729",
-            "110000_300",
-            vec![upload_path],
-        )
-        .await
-        .expect("upload already-devices ingest");
-
-    let requests = peer.requests();
-    assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0].path(), "/app/devices/ingest");
-
-    owner.shutdown().await.expect("owner shutdown");
-    peer.shutdown().await;
-}
-
 #[test]
 fn registration_binding_diagnostics_are_actionable() {
     assert_eq!(
@@ -372,14 +83,119 @@ fn registration_binding_diagnostics_are_actionable() {
         DiagnosticCode::ConfiguredStreamMismatch.message(),
         "set stream to the hostname-derived tmux name and restart"
     );
+    assert_eq!(DiagnosticCode::JournalRejected.as_str(), "journal_rejected");
     assert_eq!(
-        DiagnosticCode::RegistrationNameMismatch.as_str(),
-        "registration_name_mismatch"
+        DiagnosticCode::JournalRejected.message(),
+        "journal request was rejected"
     );
-    assert_eq!(
-        DiagnosticCode::RegistrationNameMismatch.message(),
-        "update the paired journal and retry registration"
-    );
+}
+
+#[test]
+fn linked_device_sweep_uses_exactly_the_four_v3_operations_without_legacy_headers() {
+    linked_device_runtime().block_on(async {
+        let peer = PrivateLinkPeer::start().await;
+        let temporary = TestDirectory::new("linked-device-four-v3-operations");
+        ensure_private_directory(temporary.path()).expect("private root");
+        let candidate = create_linked_device_candidate(&temporary);
+        let mut session = JournalSession::start(peer.credential(), temporary.path().to_path_buf())
+            .await
+            .expect("linked-device session");
+        enqueue_v3_success_chain(&peer);
+        let mut scheduler = linked_device_scheduler(&temporary, -1);
+
+        let summary = scheduler
+            .run_sweep(&mut session, linked_device_no_shutdown())
+            .await;
+
+        assert_eq!(summary.attempted, 1);
+        assert_eq!(summary.custodied, 1, "{summary:?}");
+        assert_eq!(
+            peer.requests()
+                .iter()
+                .map(|request| (request.method(), request.path()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("POST", "/app/devices/ingest"),
+                ("GET", "/app/devices/ingest/manifest"),
+                ("GET", "/app/devices/ingest/manifest/20260729",),
+                ("GET", "/app/devices/ingest/segments/20260729",),
+            ],
+            "the real mTLS peer must observe no registration or extra liveness request",
+        );
+        for request in peer.requests() {
+            assert_eq!(
+                request.header(PROTOCOL_VERSION_HEADER_NAME),
+                Some(PROTOCOL_VERSION)
+            );
+            assert_legacy_header_is_absent(&request, "authorization");
+            assert_legacy_header_is_absent(&request, OBSERVER_HEADER_NAME);
+        }
+        assert_eq!(
+            fs::read(candidate).expect("candidate bytes"),
+            LINKED_DEVICE_BYTES
+        );
+        session
+            .shutdown()
+            .await
+            .expect("shutdown linked-device session");
+        peer.shutdown().await;
+    });
+}
+
+#[test]
+fn linked_device_403_and_426_retain_every_candidate_for_each_operation_class() {
+    linked_device_runtime().block_on(async {
+        for (status, reason_code) in [
+            (403, "linked_device_required"),
+            (426, "protocol_version_legacy"),
+            (426, "protocol_version_future"),
+        ] {
+            for operation in ["upload", "manifest", "manifest_day", "segments"] {
+                let peer = PrivateLinkPeer::start().await;
+                let temporary = TestDirectory::new(&format!(
+                    "linked-device-{status}-{reason_code}-{operation}"
+                ));
+                ensure_private_directory(temporary.path()).expect("private root");
+                let candidate = create_linked_device_candidate(&temporary);
+                let mut session = JournalSession::start(
+                    peer.credential(),
+                    temporary.path().to_path_buf(),
+                )
+                .await
+                .expect("linked-device session");
+                enqueue_v3_rejection(&peer, operation, status, reason_code);
+                let mut scheduler = linked_device_scheduler(&temporary, 0);
+
+                let summary = scheduler
+                    .run_sweep(&mut session, linked_device_no_shutdown())
+                    .await;
+
+                assert_eq!(summary.attempted, 1, "{operation} {reason_code}");
+                assert_eq!(summary.custodied, 0, "{operation} {reason_code}");
+                assert_eq!(
+                    summary.diagnostic,
+                    Some(DiagnosticCode::JournalRejected),
+                    "{operation} {reason_code}: {summary:?}",
+                );
+                assert_eq!(
+                    peer.requests()
+                        .iter()
+                        .map(|request| request.path())
+                        .collect::<Vec<_>>(),
+                    v3_paths_through(operation),
+                    "a refused {operation} must not populate reconciliation state or mark the day fresh",
+                );
+                assert!(candidate.parent().expect("segment directory").is_dir());
+                assert_eq!(
+                    fs::read(&candidate).expect("retained candidate bytes"),
+                    LINKED_DEVICE_BYTES,
+                    "a refused {operation} must not clean up local data",
+                );
+                session.shutdown().await.expect("shutdown linked-device session");
+                peer.shutdown().await;
+            }
+        }
+    });
 }
 
 async fn run_binding_failure(
@@ -566,39 +382,206 @@ fn real_legacy_fixture() -> Vec<u8> {
     .expect("real legacy fixture")
 }
 
-fn empty_stream_fixture() -> Vec<u8> {
-    fs::read(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/legacy/config-empty-stream.json"),
+fn create_linked_device_candidate(temporary: &TestDirectory) -> PathBuf {
+    let path = temporary
+        .path()
+        .join("captures")
+        .join(LINKED_DEVICE_DAY)
+        .join(LINKED_DEVICE_STREAM)
+        .join(LINKED_DEVICE_SEGMENT)
+        .join(LINKED_DEVICE_FILE);
+    fs::create_dir_all(path.parent().expect("candidate parent")).expect("candidate directory");
+    fs::write(&path, LINKED_DEVICE_BYTES).expect("candidate bytes");
+    path
+}
+
+fn linked_device_scheduler(temporary: &TestDirectory, retention_days: i64) -> SyncScheduler {
+    SyncScheduler::new(
+        temporary.path().join("captures"),
+        solstone_tmux::name::derive_component(LINKED_DEVICE_STREAM).expect("derived stream"),
+        retention_days,
+        Arc::new(test_clock()),
+        SyncWake::default(),
     )
-    .expect("empty-stream legacy fixture")
 }
 
-fn upload_success_body() -> Vec<u8> {
-    serde_json::to_vec(
-        &observer_wire_fixture(
-            "example.observer.ingestUpload.response.200.application-json.normal",
-        )
-        .payload,
-    )
-    .expect("serialize upload fixture")
+fn linked_device_no_shutdown() -> watch::Receiver<bool> {
+    let (sender, receiver) = watch::channel(false);
+    std::mem::forget(sender);
+    receiver
 }
 
-fn registration_response(name: &str, key: &str) -> Vec<u8> {
-    serde_json::to_vec(&json!({
-        "key": key,
-        "prefix": "checked-prefix",
-        "name": name,
-        "ingest_url": "/app/observer/ingest",
-        "protocol_version": 2
-    }))
-    .expect("registration response")
+fn enqueue_v3_success_chain(peer: &PrivateLinkPeer) {
+    let digest = linked_device_digest();
+    let mut upload = v3_projection_example("upload");
+    upload["segment"] = Value::String(LINKED_DEVICE_SEGMENT.to_owned());
+    peer.enqueue_response(200, serde_json::to_vec(&upload).expect("upload response"));
+
+    let mut manifest = v3_projection_example("manifest");
+    manifest["days"] = json!({ LINKED_DEVICE_DAY: { "segments": 1 } });
+    peer.enqueue_response(
+        200,
+        serde_json::to_vec(&manifest).expect("manifest response"),
+    );
+
+    let mut manifest_day = v3_projection_example("manifest_day");
+    manifest_day["day"] = Value::String(LINKED_DEVICE_DAY.to_owned());
+    manifest_day["segments"] = json!({
+        LINKED_DEVICE_SEGMENT: {
+            "files": [linked_device_remote_file(&digest)]
+        }
+    });
+    peer.enqueue_response(
+        200,
+        serde_json::to_vec(&manifest_day).expect("day manifest response"),
+    );
+
+    let mut segments = v3_projection_example("segments");
+    segments["items"] = json!([{
+        "key": LINKED_DEVICE_SEGMENT,
+        "observed": true,
+        "files": [linked_device_remote_file(&digest)]
+    }]);
+    segments["total"] = json!(1);
+    peer.enqueue_response(
+        200,
+        serde_json::to_vec(&segments).expect("segments response"),
+    );
 }
 
-fn descriptor(hostname: &str) -> RegistrationDescriptor {
-    RegistrationDescriptor {
-        platform: "linux".to_owned(),
-        hostname: hostname.to_owned(),
+fn enqueue_v3_rejection(peer: &PrivateLinkPeer, operation: &str, status: u16, reason_code: &str) {
+    match operation {
+        "upload" => peer.enqueue_response(status, rejection_response(reason_code)),
+        "manifest" => {
+            enqueue_v3_upload(peer);
+            peer.enqueue_response(status, rejection_response(reason_code));
+        }
+        "manifest_day" => {
+            enqueue_v3_upload(peer);
+            enqueue_v3_manifest(peer);
+            peer.enqueue_response(status, rejection_response(reason_code));
+        }
+        "segments" => {
+            enqueue_v3_upload(peer);
+            enqueue_v3_manifest(peer);
+            enqueue_v3_manifest_day(peer);
+            peer.enqueue_response(status, rejection_response(reason_code));
+        }
+        _ => panic!("unknown v3 operation: {operation}"),
     }
+}
+
+fn enqueue_v3_upload(peer: &PrivateLinkPeer) {
+    let mut upload = v3_projection_example("upload");
+    upload["segment"] = Value::String(LINKED_DEVICE_SEGMENT.to_owned());
+    peer.enqueue_response(200, serde_json::to_vec(&upload).expect("upload response"));
+}
+
+fn enqueue_v3_manifest(peer: &PrivateLinkPeer) {
+    let mut manifest = v3_projection_example("manifest");
+    manifest["days"] = json!({ LINKED_DEVICE_DAY: { "segments": 1 } });
+    peer.enqueue_response(
+        200,
+        serde_json::to_vec(&manifest).expect("manifest response"),
+    );
+}
+
+fn enqueue_v3_manifest_day(peer: &PrivateLinkPeer) {
+    let digest = linked_device_digest();
+    let mut manifest_day = v3_projection_example("manifest_day");
+    manifest_day["day"] = Value::String(LINKED_DEVICE_DAY.to_owned());
+    manifest_day["segments"] = json!({
+        LINKED_DEVICE_SEGMENT: {
+            "files": [linked_device_remote_file(&digest)]
+        }
+    });
+    peer.enqueue_response(
+        200,
+        serde_json::to_vec(&manifest_day).expect("day manifest response"),
+    );
+}
+
+fn linked_device_remote_file(digest: &str) -> Value {
+    json!({
+        "name": LINKED_DEVICE_FILE,
+        "size": LINKED_DEVICE_BYTES.len(),
+        "sha256": digest,
+        "status": "present"
+    })
+}
+
+fn linked_device_digest() -> String {
+    format!("{:x}", Sha256::digest(LINKED_DEVICE_BYTES))
+}
+
+fn rejection_response(reason_code: &str) -> Vec<u8> {
+    serde_json::to_vec(&json!({
+        "error": "linked device rejected",
+        "reason_code": reason_code,
+        "detail": "linked-device identity or protocol version is not accepted"
+    }))
+    .expect("rejection response")
+}
+
+fn v3_projection_example(name: &str) -> Value {
+    let projection: Value = serde_json::from_slice(
+        &fs::read(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("vendor/observer-client-contract/projection.openapi.json"),
+        )
+        .expect("read projection"),
+    )
+    .expect("parse projection");
+    match name {
+        "upload" => projection["paths"]["/app/devices/ingest"]["post"]["responses"]["200"]
+            ["content"]["application/json"]["examples"]["normal"]["value"]
+            .clone(),
+        "manifest" => projection["paths"]["/app/devices/ingest/manifest"]["get"]
+            ["responses"]["200"]["content"]["application/json"]["example"]
+            .clone(),
+        "manifest_day" => projection["paths"]["/app/devices/ingest/manifest/{day}"]["get"]
+            ["responses"]["200"]["content"]["application/json"]["example"]
+            .clone(),
+        "segments" => projection["paths"]["/app/devices/ingest/segments/{day}"]["get"]
+            ["responses"]["200"]["content"]["application/json"]["example"]
+            .clone(),
+        _ => panic!("unknown projection example: {name}"),
+    }
+}
+
+fn v3_paths_through(operation: &str) -> Vec<&'static str> {
+    match operation {
+        "upload" => vec!["/app/devices/ingest"],
+        "manifest" => vec!["/app/devices/ingest", "/app/devices/ingest/manifest"],
+        "manifest_day" => vec![
+            "/app/devices/ingest",
+            "/app/devices/ingest/manifest",
+            "/app/devices/ingest/manifest/20260729",
+        ],
+        "segments" => vec![
+            "/app/devices/ingest",
+            "/app/devices/ingest/manifest",
+            "/app/devices/ingest/manifest/20260729",
+            "/app/devices/ingest/segments/20260729",
+        ],
+        _ => panic!("unknown v3 operation: {operation}"),
+    }
+}
+
+fn assert_legacy_header_is_absent(request: &support::private_link_peer::PeerRequest, name: &str) {
+    assert!(request.header(name).is_none(), "unexpected {name} header");
+    assert!(
+        request.header(&name.to_ascii_uppercase()).is_none(),
+        "unexpected {name} header in another casing",
+    );
+}
+
+fn linked_device_runtime() -> tokio::runtime::Runtime {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_io()
+        .enable_time()
+        .build()
+        .expect("runtime")
 }
 
 fn test_clock() -> TestClock {
