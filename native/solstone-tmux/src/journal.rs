@@ -33,10 +33,11 @@ use crate::storage::open_regular_readonly;
 use crate::sync::SyncInstrumentation;
 
 const REGISTER_PATH: &str = "/app/devices/register";
-const MANIFEST_PATH: &str = "/app/devices/ingest/manifest";
-const SEGMENTS_PATH: &str = "/app/devices/ingest/segments";
 const EVENT_PATH: &str = "/app/devices/ingest/event";
-pub(crate) const INGEST_PATH: &str = "/app/devices/ingest";
+pub const INGEST_PATH: &str = "/app/devices/ingest";
+pub const INGEST_MANIFEST_PATH: &str = "/app/devices/ingest/manifest";
+pub const INGEST_MANIFEST_DAY_PATH: &str = "/app/devices/ingest/manifest/{day}";
+pub const INGEST_SEGMENTS_PATH: &str = "/app/devices/ingest/segments/{day}";
 const LOOPBACK_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const FILE_STAGE_CAPACITY: usize = UPLOAD_BODY_STAGE_CAPACITY / RECOMMENDED_CHUNK;
@@ -574,7 +575,7 @@ impl JournalClient {
 
     pub async fn ingest_manifest(&self) -> Result<IngestManifest, JournalError> {
         let response = self
-            .request(Method::GET, MANIFEST_PATH)?
+            .request(Method::GET, INGEST_MANIFEST_PATH)?
             .send()
             .await
             .map_err(|error| {
@@ -595,7 +596,7 @@ impl JournalClient {
         if !valid_day(day) {
             return Err(JournalError::local(DiagnosticCode::LocalSegmentInvalid));
         }
-        let path = format!("{MANIFEST_PATH}/{day}");
+        let path = INGEST_MANIFEST_DAY_PATH.replace("{day}", day);
         let response = self
             .request(Method::GET, &path)?
             .send()
@@ -618,7 +619,7 @@ impl JournalClient {
         if !valid_day(day) {
             return Err(JournalError::local(DiagnosticCode::LocalSegmentInvalid));
         }
-        let path = format!("{SEGMENTS_PATH}/{day}");
+        let path = INGEST_SEGMENTS_PATH.replace("{day}", day);
         let response = self
             .request(Method::GET, &path)?
             .send()

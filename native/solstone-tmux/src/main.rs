@@ -251,7 +251,6 @@ fn run_native(
         config_root,
         data_root,
         config,
-        platform,
         hostname,
         clock,
         wake: sync_wake,

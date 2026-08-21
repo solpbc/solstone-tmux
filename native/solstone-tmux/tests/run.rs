@@ -13,9 +13,7 @@ use std::time::{Duration, Instant};
 
 use solstone_tmux::config::CONFIG_FILENAME;
 use solstone_tmux::instance_lock::LOCK_FILENAME;
-use solstone_tmux::private_link::{
-    CREDENTIALS_FILENAME, OBSERVER_FILENAME, acquire_private_state_lock,
-};
+use solstone_tmux::private_link::{CREDENTIALS_FILENAME, acquire_private_state_lock};
 use solstone_tmux::service::{LocalObserver, STATE_FILENAME};
 use support::{IsolatedRoots, TestDirectory};
 
@@ -165,7 +163,6 @@ fn assert_setup_checks_existing_run_lock_before_pairing_or_private_state_creatio
     assert!(stderr.contains("setup is unavailable"));
     assert!(!stderr.contains(pair_input));
     assert!(!fixture.config_root().join(CREDENTIALS_FILENAME).exists());
-    assert!(!fixture.config_root().join(OBSERVER_FILENAME).exists());
     assert!(!fixture.data_root().join("captures").exists());
 }
 

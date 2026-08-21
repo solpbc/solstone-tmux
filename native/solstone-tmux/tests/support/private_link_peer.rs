@@ -21,7 +21,7 @@ use spl_core::mux::INITIAL_WINDOW;
 use spl_transport::credential::{Credential, EndpointAddr};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, WriteHalf};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::mpsc;
+use tokio::sync::{Notify, mpsc};
 use tokio::task::JoinHandle;
 use tokio_rustls::TlsAcceptor;
 use tokio_rustls::server::TlsStream;
@@ -75,7 +75,7 @@ struct PeerState {
     responses: Arc<Mutex<VecDeque<PeerResponse>>>,
     requests: Arc<Mutex<Vec<PeerRequest>>>,
     withhold_credit: Arc<AtomicBool>,
-    received_upload_bytes: Arc<AtomicUsize>,
+    upload_stalled: Arc<Notify>,
     current_stream: Arc<AtomicU32>,
     accepted: Arc<AtomicUsize>,
 }
@@ -100,7 +100,7 @@ impl PrivateLinkPeer {
             responses: Arc::new(Mutex::new(VecDeque::new())),
             requests: Arc::new(Mutex::new(Vec::new())),
             withhold_credit: Arc::new(AtomicBool::new(false)),
-            received_upload_bytes: Arc::new(AtomicUsize::new(0)),
+            upload_stalled: Arc::new(Notify::new()),
             current_stream: Arc::new(AtomicU32::new(0)),
             accepted: Arc::new(AtomicUsize::new(0)),
         };
@@ -135,12 +135,11 @@ impl PrivateLinkPeer {
     }
 
     pub fn withhold_upload_credit(&self) {
-        self.state.received_upload_bytes.store(0, Ordering::SeqCst);
         self.state.withhold_credit.store(true, Ordering::SeqCst);
     }
 
-    pub fn received_upload_bytes(&self) -> usize {
-        self.state.received_upload_bytes.load(Ordering::SeqCst)
+    pub async fn wait_for_upload_stall(&self) {
+        self.state.upload_stalled.notified().await;
     }
 
     pub fn grant_upload_credit(&self, credit: u32) {
@@ -292,9 +291,7 @@ async fn handle_carrier(
                     }
                     if frame.flags & FLAG_DATA != 0 {
                         if state.withhold_credit.load(Ordering::SeqCst) {
-                            state
-                                .received_upload_bytes
-                                .fetch_add(frame.payload.len(), Ordering::SeqCst);
+                            state.upload_stalled.notify_one();
                         }
                         request_bytes
                             .entry(stream_id)

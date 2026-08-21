@@ -7,8 +7,10 @@ use std::fs;
 
 use serde_json::Value;
 use solstone_tmux::journal::{
-    LocalFile, SegmentFile, SegmentItem, SegmentsEnvelope, decode_segments_response,
+    INGEST_SEGMENTS_PATH, LocalFile, SegmentFile, SegmentItem, SegmentsEnvelope,
+    decode_segments_response,
 };
+use solstone_tmux::private_link::PROTOCOL_VERSION_NUMBER;
 use solstone_tmux::sync::fresh_listing_proves_custody;
 
 #[test]
@@ -49,7 +51,7 @@ fn v3_projection_listing_requires_matching_name_digest_size_and_held_status() {
 #[test]
 fn malformed_unknown_status_never_becomes_custody_evidence() {
     let payload = serde_json::json!({
-        "protocol_version": 3,
+        "protocol_version": PROTOCOL_VERSION_NUMBER,
         "total": 1,
         "items": [{
             "key": "143000_1",
@@ -66,7 +68,7 @@ fn malformed_unknown_status_never_becomes_custody_evidence() {
 }
 
 #[test]
-fn duplicate_remote_evidence_and_original_key_ambiguity_retain_the_segment() {
+fn duplicate_remote_evidence_and_original_key_ambiguity_prevent_custody_proof() {
     let mut listing = projection_listing();
     let entry = listing.items[0].clone();
     let local = local_from_remote(&entry.files[0]);
@@ -100,13 +102,25 @@ fn authority_submitted_name_omission_falls_back_to_remote_name() {
 }
 
 #[test]
-fn partial_and_ambiguous_file_evidence_retain_the_segment() {
+fn partial_and_ambiguous_file_evidence_prevent_custody_proof() {
     let mut listing = projection_listing();
     let key = listing.items[0].key.clone();
     let local = local_from_remote(&listing.items[0].files[0]);
     listing.items[0].files.clear();
     assert!(!fresh_listing_proves_custody(
         &listing,
+        &key,
+        &key,
+        &[local]
+    ));
+
+    let mut ambiguous = projection_listing();
+    let key = ambiguous.items[0].key.clone();
+    let local = local_from_remote(&ambiguous.items[0].files[0]);
+    let duplicate = ambiguous.items[0].files[0].clone();
+    ambiguous.items[0].files.push(duplicate);
+    assert!(!fresh_listing_proves_custody(
+        &ambiguous,
         &key,
         &key,
         &[local]
@@ -131,7 +145,7 @@ fn local_case_collision_custody_can_match_original_key() {
 }
 
 #[test]
-fn malformed_hash_or_duplicate_local_name_retain_the_segment() {
+fn malformed_hash_or_duplicate_local_name_prevent_custody_proof() {
     let listing = projection_listing();
     let entry = &listing.items[0];
     let local = local_from_remote(&entry.files[0]);
@@ -162,8 +176,8 @@ fn projection_listing() -> SegmentsEnvelope {
         .expect("projection"),
     )
     .expect("projection JSON");
-    let value = &projection["paths"]["/app/devices/ingest/segments/{day}"]["get"]["responses"]["200"]
-        ["content"]["application/json"]["example"];
+    let value = &projection["paths"][INGEST_SEGMENTS_PATH]["get"]["responses"]["200"]["content"]["application/json"]
+        ["example"];
     decode_segments_response(&serde_json::to_vec(value).expect("listing bytes"))
         .expect("v3 listing")
 }

@@ -8,6 +8,9 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use solstone_tmux::journal::{
+    INGEST_MANIFEST_DAY_PATH, INGEST_MANIFEST_PATH, INGEST_PATH, INGEST_SEGMENTS_PATH,
+};
 
 const AUTHORITY_REPOSITORY: &str = "https://github.com/solpbc/solstone-journal";
 const AUTHORITY_COMMIT: &str = "dd76c42a21a7892fccc1b0cfa790ce1ad31bf78b";
@@ -138,22 +141,14 @@ fn projection_has_only_v3_ingest_operations_and_no_v2_write_route() {
         }
     }
     let expected = BTreeSet::from([
-        ("post", "/app/devices/ingest", "observer.ingestUpload"),
+        ("post", INGEST_PATH, "observer.ingestUpload"),
+        ("get", INGEST_MANIFEST_PATH, "observer.ingestManifest"),
         (
             "get",
-            "/app/devices/ingest/manifest",
-            "observer.ingestManifest",
-        ),
-        (
-            "get",
-            "/app/devices/ingest/manifest/{day}",
+            INGEST_MANIFEST_DAY_PATH,
             "observer.ingestManifestDay",
         ),
-        (
-            "get",
-            "/app/devices/ingest/segments/{day}",
-            "observer.ingestSegments",
-        ),
+        ("get", INGEST_SEGMENTS_PATH, "observer.ingestSegments"),
     ]);
     assert_eq!(actual, expected, "projection operation set differs from v3");
 

@@ -28,7 +28,6 @@ use crate::journal::{
     stream_sha256_hex,
 };
 use crate::name::{DerivedName, derive_component};
-use crate::paths::PlatformKind;
 use crate::private_link::{PrivateLinkBridge, load_credential, persist_credential};
 use crate::segment::SegmentClose;
 use crate::storage::{
@@ -1383,7 +1382,6 @@ pub struct SyncTask {
     pub config_root: PathBuf,
     pub data_root: PathBuf,
     pub config: RuntimeConfig,
-    pub platform: PlatformKind,
     pub hostname: String,
     pub clock: Arc<dyn Clock>,
     pub wake: SyncWake,

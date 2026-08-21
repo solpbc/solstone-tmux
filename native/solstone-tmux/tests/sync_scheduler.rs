@@ -3,7 +3,7 @@
 
 mod support;
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
@@ -39,6 +39,7 @@ use tokio::sync::{mpsc, oneshot, watch};
 const STREAM: &str = "host.tmux";
 const FILE: &str = "tmux_main_screen.jsonl";
 const SCHEDULER_TURNS: usize = 1_024;
+const HANG_GUARD: Duration = Duration::from_secs(5);
 
 #[test]
 fn one_snapshot_attempts_every_candidate_once_and_yields_between_batches() {
@@ -239,6 +240,8 @@ fn remote_loss_requires_a_fresh_post_upload_listing_before_custody() {
                 authoritative_key: Some("120000_300".to_owned()),
             }),
         );
+        let segment = segment_path(&temporary, "20260701", "120000_300");
+        let before = snapshot_segment_bytes(&segment);
 
         let summary = scheduler.run_sweep(&mut journal, no_shutdown()).await;
 
@@ -248,7 +251,7 @@ fn remote_loss_requires_a_fresh_post_upload_listing_before_custody() {
             summary.diagnostic,
             Some(DiagnosticCode::LocalSegmentInvalid)
         );
-        assert!(segment_path(&temporary, "20260701", "120000_300").is_dir());
+        assert_segment_bytes_unchanged(&segment, &before);
     });
 }
 
@@ -268,6 +271,8 @@ fn failed_fresh_listing_cannot_promote_stale_custody_or_delete_the_segment() {
                 solstone_tmux::sync::SyncFailureClass::Timeout,
             )),
         );
+        let segment = segment_path(&temporary, "20260701", "120000_300");
+        let before = snapshot_segment_bytes(&segment);
         let summary = scheduler.run_sweep(&mut journal, no_shutdown()).await;
 
         assert_eq!(journal.uploads(), ["120000_300"]);
@@ -276,7 +281,7 @@ fn failed_fresh_listing_cannot_promote_stale_custody_or_delete_the_segment() {
             summary.failure,
             Some(solstone_tmux::sync::SyncFailureClass::Timeout)
         );
-        assert!(segment_path(&temporary, "20260701", "120000_300").is_dir());
+        assert_segment_bytes_unchanged(&segment, &before);
     });
 }
 
@@ -371,13 +376,14 @@ fn retention_requires_batch_fresh_proof_and_keeps_a_changed_mismatched_segment()
             clock(),
             SyncWake::default(),
         );
+        let segment = segment_path(&temporary, "20260701", "120800_300");
+        let before = snapshot_segment_bytes(&segment);
 
         let summary = scheduler.run_sweep(&mut journal, no_shutdown()).await;
 
-        assert!(segment_path(&temporary, "20260701", "120800_300").is_dir());
+        assert_segment_bytes_unchanged(&segment, &before);
         assert!(journal.uploads().contains(&"120800_300".to_owned()));
         assert_eq!(summary.custodied, 8);
-        assert!(segment_path(&temporary, "20260701", "120800_300").is_dir());
     });
 }
 
@@ -392,7 +398,7 @@ fn finalization_wake_is_latched_for_the_following_sweep() {
         scheduler.run_sweep(&mut journal, no_shutdown()).await;
         create_segment(&temporary, "20260701", "120100_300", b"fixture\n");
         wake.segment_closed(&SegmentClose::Finalized(PathBuf::from("new-segment")));
-        tokio::time::timeout(Duration::from_millis(50), wake.wait())
+        tokio::time::timeout(HANG_GUARD, wake.wait())
             .await
             .expect("finalization wake was not latched");
         journal.clear_calls();
@@ -481,11 +487,13 @@ fn stale_cached_custody_does_not_delete_when_current_listing_disagrees() {
         scheduler.run_sweep(&mut journal, no_shutdown()).await;
         journal.remote.clear();
         journal.clear_calls();
+        let segment = segment_path(&temporary, "20260701", "120000_300");
+        let before = snapshot_segment_bytes(&segment);
 
         scheduler.run_sweep(&mut journal, no_shutdown()).await;
 
         assert_eq!(journal.uploads(), ["120000_300"]);
-        assert!(segment_path(&temporary, "20260701", "120000_300").is_dir());
+        assert_segment_bytes_unchanged(&segment, &before);
     });
 }
 
@@ -670,12 +678,15 @@ fn retained_outcomes_keep_their_diagnostic_and_never_claim_custody() {
                 DiagnosticCode::LocalSegmentInvalid,
             )),
         );
+        let segment = segment_path(&temporary, "20260701", "120000_300");
+        let before = snapshot_segment_bytes(&segment);
         let summary = scheduler.run_sweep(&mut journal, no_shutdown()).await;
         assert_eq!(
             summary.diagnostic,
             Some(DiagnosticCode::LocalSegmentInvalid)
         );
         assert_eq!(summary.custodied, 0);
+        assert_segment_bytes_unchanged(&segment, &before);
     });
 }
 
@@ -697,6 +708,8 @@ fn conflict_and_failed_contacts_do_not_claim_successful_custody() {
                     authoritative_key: None,
                 }),
             );
+            let segment = segment_path(&temporary, "20260701", "120000_300");
+            let before = snapshot_segment_bytes(&segment);
             let summary = scheduler.run_sweep(&mut journal, no_shutdown()).await;
 
             assert_eq!(summary.custodied, 0);
@@ -704,7 +717,7 @@ fn conflict_and_failed_contacts_do_not_claim_successful_custody() {
                 summary.diagnostic,
                 Some(DiagnosticCode::LocalSegmentInvalid)
             );
-            assert!(segment_path(&temporary, "20260701", "120000_300").is_dir());
+            assert_segment_bytes_unchanged(&segment, &before);
         }
     });
 }
@@ -723,12 +736,14 @@ fn an_unproven_fresh_listing_records_a_diagnostic_and_keeps_the_segment() {
                 authoritative_key: Some("120000_300".to_owned()),
             }),
         );
+        let segment = segment_path(&temporary, "20260701", "120000_300");
+        let before = snapshot_segment_bytes(&segment);
         let summary = scheduler.run_sweep(&mut journal, no_shutdown()).await;
         assert_eq!(
             summary.diagnostic,
             Some(DiagnosticCode::LocalSegmentInvalid)
         );
-        assert!(segment_path(&temporary, "20260701", "120000_300").is_dir());
+        assert_segment_bytes_unchanged(&segment, &before);
     });
 }
 
@@ -910,7 +925,7 @@ fn shutdown_cancels_a_pending_empty_scan_listing() {
         started.await.expect("empty listing began");
         stop.send_replace(true);
 
-        let summary = tokio::time::timeout(Duration::from_millis(100), task)
+        let summary = tokio::time::timeout(HANG_GUARD, task)
             .await
             .expect("shutdown must interrupt empty listing")
             .expect("join sweep");
@@ -942,7 +957,7 @@ fn shutdown_cancels_a_pending_upload_and_restores_idle() {
         assert_eq!(*receiver.borrow(), SyncActivity::Working);
         stop.send_replace(true);
 
-        let summary = tokio::time::timeout(Duration::from_millis(100), task)
+        let summary = tokio::time::timeout(HANG_GUARD, task)
             .await
             .expect("shutdown must interrupt upload")
             .expect("join sweep");
@@ -974,7 +989,7 @@ fn shutdown_cancels_a_pending_postupload_listing_without_starting_later_candidat
         started.await.expect("post-upload listing began");
         stop.send_replace(true);
 
-        let summary = tokio::time::timeout(Duration::from_millis(100), task)
+        let summary = tokio::time::timeout(HANG_GUARD, task)
             .await
             .expect("shutdown must interrupt post-upload listing")
             .expect("join sweep");
@@ -1003,7 +1018,7 @@ fn shutdown_cancels_a_pending_status_event() {
         started.await.expect("status event began");
         stop.send(()).expect("request shutdown");
 
-        tokio::time::timeout(Duration::from_millis(100), task)
+        tokio::time::timeout(HANG_GUARD, task)
             .await
             .expect("shutdown must interrupt status event")
             .expect("join scheduler");
@@ -1456,6 +1471,48 @@ fn segment_path(temporary: &TestDirectory, day: &str, segment: &str) -> PathBuf 
         .join(day)
         .join(STREAM)
         .join(segment)
+}
+
+fn snapshot_segment_bytes(segment: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
+    let mut snapshot = BTreeMap::new();
+    collect_segment_bytes(segment, segment, &mut snapshot);
+    snapshot
+}
+
+fn collect_segment_bytes(
+    segment: &Path,
+    directory: &Path,
+    snapshot: &mut BTreeMap<PathBuf, Vec<u8>>,
+) {
+    for entry in std::fs::read_dir(directory).expect("read segment directory") {
+        let entry = entry.expect("read segment entry");
+        let path = entry.path();
+        let relative = path
+            .strip_prefix(segment)
+            .expect("entry below segment")
+            .to_owned();
+        let file_type = entry.file_type().expect("inspect segment entry");
+        if file_type.is_dir() {
+            collect_segment_bytes(segment, &path, snapshot);
+        } else if file_type.is_file() {
+            assert!(
+                snapshot
+                    .insert(relative, std::fs::read(path).expect("read segment file"))
+                    .is_none(),
+                "duplicate segment file"
+            );
+        } else {
+            panic!("unexpected non-file entry in segment");
+        }
+    }
+}
+
+fn assert_segment_bytes_unchanged(segment: &Path, before: &BTreeMap<PathBuf, Vec<u8>>) {
+    assert_eq!(
+        snapshot_segment_bytes(segment),
+        *before,
+        "segment bytes changed"
+    );
 }
 
 #[derive(Default)]

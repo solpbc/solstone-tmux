@@ -28,7 +28,6 @@ use crate::paths::{
 use crate::storage::{StorageError, atomic_write_bytes, open_regular_readonly};
 
 pub const CREDENTIALS_FILENAME: &str = "credentials.json";
-pub const OBSERVER_FILENAME: &str = "observer.json";
 const PRIVATE_STATE_LOCK_FILENAME: &str = ".solstone-tmux.private-state.lock";
 const MAX_PAIR_LINK_BYTES: u64 = 4096;
 pub const MAX_REQUEST_BODY_BYTES: usize = 128 * 1024 * 1024;

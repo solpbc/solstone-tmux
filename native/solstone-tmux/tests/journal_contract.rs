@@ -8,12 +8,14 @@ use std::fs;
 use serde_json::Value;
 use solstone_tmux::health::DiagnosticCode;
 use solstone_tmux::journal::{
+    INGEST_MANIFEST_DAY_PATH, INGEST_MANIFEST_PATH, INGEST_PATH, INGEST_SEGMENTS_PATH,
     MAX_MULTIPART_PART_BYTES, UploadStatus, decode_manifest_day_response, decode_manifest_response,
     decode_segments_response, decode_upload_response,
 };
 use solstone_tmux::paths::ensure_private_directory;
 use solstone_tmux::private_link::{
     MAX_REQUEST_BODY_BYTES, OBSERVER_HEADER_NAME, PROTOCOL_VERSION, PROTOCOL_VERSION_HEADER_NAME,
+    PROTOCOL_VERSION_NUMBER,
 };
 use solstone_tmux::sync::JournalSession;
 use support::TestDirectory;
@@ -64,9 +66,15 @@ fn v3_operations_use_projection_examples_and_exact_multipart_envelope() {
         let requests = peer.requests();
         assert_eq!(requests.len(), 4);
         assert_exact_multipart(&requests[0], &["first.jsonl", "second.jsonl"]);
-        assert_eq!(requests[1].path(), "/app/devices/ingest/manifest");
-        assert_eq!(requests[2].path(), "/app/devices/ingest/manifest/20260815");
-        assert_eq!(requests[3].path(), "/app/devices/ingest/segments/20260815");
+        assert_eq!(requests[1].path(), INGEST_MANIFEST_PATH);
+        assert_eq!(
+            requests[2].path(),
+            INGEST_MANIFEST_DAY_PATH.replace("{day}", DAY)
+        );
+        assert_eq!(
+            requests[3].path(),
+            INGEST_SEGMENTS_PATH.replace("{day}", DAY)
+        );
         for request in &requests {
             assert_eq!(
                 request.header(PROTOCOL_VERSION_HEADER_NAME),
@@ -89,11 +97,22 @@ fn malformed_v3_manifest_and_listing_payloads_are_rejected() {
         br#"{"version":1,"day":"20260816","segments":{}}"#,
         DAY,
     ));
+    let legacy_version = PROTOCOL_VERSION_NUMBER.saturating_sub(1);
     assert_contract_error(decode_segments_response(
-        br#"{"protocol_version":2,"total":0,"items":[]}"#,
+        &serde_json::to_vec(&serde_json::json!({
+            "protocol_version": legacy_version,
+            "total": 0,
+            "items": [],
+        }))
+        .expect("legacy payload"),
     ));
     assert_contract_error(decode_segments_response(
-        br#"{"protocol_version":3,"total":1,"items":[]}"#,
+        &serde_json::to_vec(&serde_json::json!({
+            "protocol_version": PROTOCOL_VERSION_NUMBER,
+            "total": 1,
+            "items": [],
+        }))
+        .expect("mismatched total payload"),
     ));
 }
 
@@ -218,32 +237,204 @@ fn unknown_upload_status_is_rejected() {
     assert_contract_error(decode_upload_response(br#"{"status":"unknown"}"#));
 }
 
+#[test]
+fn exact_multipart_checker_rejects_an_extra_file_part() {
+    let boundary = "test-boundary";
+    let envelope = serde_json::json!({
+        "day": DAY,
+        "segment": SEGMENT,
+        "files": [{ "submitted": "first.jsonl" }],
+    })
+    .to_string();
+    let body = [
+        format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"envelope\"\r\nContent-Type: application/json\r\n\r\n{envelope}\r\n"
+        ),
+        format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"files\"; filename=\"first.jsonl\"\r\nContent-Type: application/octet-stream\r\n\r\nfirst\r\n"
+        ),
+        format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"files\"; filename=\"extra.jsonl\"\r\nContent-Type: application/octet-stream\r\n\r\nextra\r\n--{boundary}--\r\n"
+        ),
+    ]
+    .concat();
+
+    assert!(
+        assert_exact_multipart_body(
+            &format!("multipart/form-data; boundary={boundary}"),
+            body.as_bytes(),
+            &["first.jsonl"],
+        )
+        .is_err(),
+        "an extra file part was accepted"
+    );
+}
+
 fn assert_exact_multipart(request: &PeerRequest, submitted: &[&str]) {
     assert_eq!(request.method(), "POST");
-    assert_eq!(request.path(), "/app/devices/ingest");
-    let body = String::from_utf8_lossy(request.body());
-    assert!(body.contains("name=\"envelope\""));
-    assert!(body.contains("Content-Type: application/json"));
-    assert!(!body.contains("name=\"day\""));
-    assert!(!body.contains("name=\"segment\""));
-    let envelope_start = body.find("{\"day\"").expect("envelope JSON");
-    let envelope_end = body[envelope_start..].find("\r\n").expect("envelope end") + envelope_start;
-    let envelope: Value =
-        serde_json::from_str(&body[envelope_start..envelope_end]).expect("parse envelope");
-    assert_eq!(envelope["day"], DAY);
-    assert_eq!(envelope["segment"], SEGMENT);
-    assert!(envelope.get("stream").is_none());
-    assert!(envelope.get("observer").is_none());
-    let names = envelope["files"]
-        .as_array()
-        .expect("envelope files")
-        .iter()
-        .map(|file| file["submitted"].as_str().expect("submitted"))
-        .collect::<Vec<_>>();
-    assert_eq!(names, submitted);
-    for name in submitted {
-        assert!(body.contains(&format!("name=\"files\"; filename=\"{name}\"")));
+    assert_eq!(request.path(), INGEST_PATH);
+    let content_type = request
+        .header("content-type")
+        .expect("multipart content type");
+    assert_exact_multipart_body(content_type, request.body(), submitted)
+        .unwrap_or_else(|error| panic!("invalid multipart body: {error}"));
+}
+
+struct MultipartPart<'a> {
+    name: String,
+    filename: Option<String>,
+    content_type: String,
+    body: &'a [u8],
+}
+
+fn assert_exact_multipart_body(
+    content_type: &str,
+    body: &[u8],
+    submitted: &[&str],
+) -> Result<(), String> {
+    let parts = parse_multipart_parts(content_type, body)?;
+    if parts.len() != submitted.len() + 1 {
+        return Err(format!(
+            "expected {} multipart parts, got {}",
+            submitted.len() + 1,
+            parts.len()
+        ));
     }
+
+    let envelope_part = &parts[0];
+    if envelope_part.name != "envelope"
+        || envelope_part.filename.is_some()
+        || !envelope_part
+            .content_type
+            .eq_ignore_ascii_case("application/json")
+    {
+        return Err("first multipart part is not the JSON envelope".to_owned());
+    }
+    let envelope: Value = serde_json::from_slice(envelope_part.body)
+        .map_err(|_| "envelope is not JSON".to_owned())?;
+    let envelope_object = envelope
+        .as_object()
+        .ok_or_else(|| "envelope is not an object".to_owned())?;
+    if envelope_object.len() != 3
+        || envelope.get("day") != Some(&Value::String(DAY.to_owned()))
+        || envelope.get("segment") != Some(&Value::String(SEGMENT.to_owned()))
+    {
+        return Err("envelope fields differ from the v3 contract".to_owned());
+    }
+    let envelope_files = envelope
+        .get("files")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "envelope files are missing".to_owned())?;
+    let envelope_submitted = envelope_files
+        .iter()
+        .map(|file| {
+            let object = file
+                .as_object()
+                .ok_or_else(|| "envelope file is not an object".to_owned())?;
+            if object.len() != 1 {
+                return Err("envelope file has unexpected fields".to_owned());
+            }
+            object
+                .get("submitted")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+                .ok_or_else(|| "envelope file is missing submitted".to_owned())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let expected = submitted
+        .iter()
+        .map(|name| (*name).to_owned())
+        .collect::<Vec<_>>();
+    if envelope_submitted != expected {
+        return Err("envelope submitted names differ from expected files".to_owned());
+    }
+
+    for (part, expected_name) in parts[1..].iter().zip(&envelope_submitted) {
+        if part.name != "files"
+            || part.filename.as_deref() != Some(expected_name)
+            || !part
+                .content_type
+                .eq_ignore_ascii_case("application/octet-stream")
+        {
+            return Err("file part differs from its envelope entry".to_owned());
+        }
+    }
+    Ok(())
+}
+
+fn parse_multipart_parts<'a>(
+    content_type: &str,
+    body: &'a [u8],
+) -> Result<Vec<MultipartPart<'a>>, String> {
+    let boundary = content_type
+        .split(';')
+        .map(str::trim)
+        .find_map(|parameter| parameter.strip_prefix("boundary="))
+        .map(|boundary| boundary.trim_matches('"'))
+        .filter(|boundary| !boundary.is_empty())
+        .ok_or_else(|| "multipart boundary is missing".to_owned())?;
+    let opening = format!("--{boundary}\r\n");
+    let separator = format!("\r\n--{boundary}");
+    let mut remainder = body
+        .strip_prefix(opening.as_bytes())
+        .ok_or_else(|| "multipart body has no opening boundary".to_owned())?;
+    let mut parts = Vec::new();
+    loop {
+        let separator_offset = find_bytes(remainder, separator.as_bytes())
+            .ok_or_else(|| "multipart part has no closing boundary".to_owned())?;
+        parts.push(parse_multipart_part(&remainder[..separator_offset])?);
+        remainder = &remainder[separator_offset + separator.len()..];
+        if remainder == b"--\r\n" {
+            return Ok(parts);
+        }
+        remainder = remainder
+            .strip_prefix(b"\r\n")
+            .ok_or_else(|| "multipart boundary is malformed".to_owned())?;
+    }
+}
+
+fn parse_multipart_part(bytes: &[u8]) -> Result<MultipartPart<'_>, String> {
+    let headers_end = find_bytes(bytes, b"\r\n\r\n")
+        .ok_or_else(|| "multipart part has no header separator".to_owned())?;
+    let headers = std::str::from_utf8(&bytes[..headers_end])
+        .map_err(|_| "multipart headers are not UTF-8".to_owned())?;
+    let disposition = headers
+        .split("\r\n")
+        .find_map(|header| header.strip_prefix("Content-Disposition: "))
+        .ok_or_else(|| "multipart part has no content disposition".to_owned())?;
+    let content_type = headers
+        .split("\r\n")
+        .find_map(|header| header.strip_prefix("Content-Type: "))
+        .ok_or_else(|| "multipart part has no content type".to_owned())?
+        .to_owned();
+    if !disposition.starts_with("form-data") {
+        return Err("multipart disposition is not form-data".to_owned());
+    }
+    let name = multipart_disposition_parameter(disposition, "name")
+        .ok_or_else(|| "multipart part has no name".to_owned())?;
+    Ok(MultipartPart {
+        name,
+        filename: multipart_disposition_parameter(disposition, "filename"),
+        content_type,
+        body: &bytes[headers_end + b"\r\n\r\n".len()..],
+    })
+}
+
+fn multipart_disposition_parameter(disposition: &str, parameter: &str) -> Option<String> {
+    disposition.split(';').skip(1).find_map(|attribute| {
+        let (name, value) = attribute.trim().split_once('=')?;
+        (name == parameter).then(|| value.trim_matches('"').to_owned())
+    })
+}
+
+fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    (!needle.is_empty())
+        .then(|| {
+            haystack
+                .windows(needle.len())
+                .position(|window| window == needle)
+        })
+        .flatten()
 }
 
 fn projection_example(name: &str) -> Vec<u8> {
@@ -257,20 +448,20 @@ fn projection_example(name: &str) -> Vec<u8> {
     .expect("parse projection");
     let value = match name {
         "upload_normal" => {
-            &projection["paths"]["/app/devices/ingest"]["post"]["responses"]["200"]["content"]["application/json"]
+            &projection["paths"][INGEST_PATH]["post"]["responses"]["200"]["content"]["application/json"]
                 ["examples"]["normal"]["value"]
         }
         "manifest" => {
-            &projection["paths"]["/app/devices/ingest/manifest"]["get"]["responses"]["200"]["content"]
-                ["application/json"]["example"]
+            &projection["paths"][INGEST_MANIFEST_PATH]["get"]["responses"]["200"]["content"]["application/json"]
+                ["example"]
         }
         "manifest_day" => {
-            &projection["paths"]["/app/devices/ingest/manifest/{day}"]["get"]["responses"]["200"]["content"]
-                ["application/json"]["example"]
+            &projection["paths"][INGEST_MANIFEST_DAY_PATH]["get"]["responses"]["200"]["content"]["application/json"]
+                ["example"]
         }
         "segments" => {
-            &projection["paths"]["/app/devices/ingest/segments/{day}"]["get"]["responses"]["200"]["content"]
-                ["application/json"]["example"]
+            &projection["paths"][INGEST_SEGMENTS_PATH]["get"]["responses"]["200"]["content"]["application/json"]
+                ["example"]
         }
         _ => panic!("unknown projection example"),
     };
@@ -286,7 +477,7 @@ fn projection_upload(name: &str) -> Value {
         .expect("read projection"),
     )
     .expect("parse projection");
-    projection["paths"]["/app/devices/ingest"]["post"]["responses"]["200"]["content"]
+    projection["paths"][INGEST_PATH]["post"]["responses"]["200"]["content"]
         ["application/json"]["examples"][name]["value"]
         .clone()
 }

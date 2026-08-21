@@ -17,6 +17,9 @@ use solstone_tmux::clock::{Clock, TestClock};
 use solstone_tmux::config::{CONFIG_FILENAME, RuntimeConfig};
 use solstone_tmux::health::{DiagnosticCode, HEALTH_FILENAME, HealthWriter};
 use solstone_tmux::instance_lock::InstanceLock;
+use solstone_tmux::journal::{
+    INGEST_MANIFEST_DAY_PATH, INGEST_MANIFEST_PATH, INGEST_PATH, INGEST_SEGMENTS_PATH,
+};
 use solstone_tmux::migration::{MigrationOutcome, migrate_legacy_config};
 use solstone_tmux::model::CaptureResult;
 use solstone_tmux::observer::{
@@ -112,13 +115,19 @@ fn linked_device_sweep_uses_exactly_the_four_v3_operations_without_legacy_header
         assert_eq!(
             peer.requests()
                 .iter()
-                .map(|request| (request.method(), request.path()))
+                .map(|request| (request.method().to_owned(), request.path().to_owned()))
                 .collect::<Vec<_>>(),
             vec![
-                ("POST", "/app/devices/ingest"),
-                ("GET", "/app/devices/ingest/manifest"),
-                ("GET", "/app/devices/ingest/manifest/20260729",),
-                ("GET", "/app/devices/ingest/segments/20260729",),
+                ("POST".to_owned(), INGEST_PATH.to_owned()),
+                ("GET".to_owned(), INGEST_MANIFEST_PATH.to_owned()),
+                (
+                    "GET".to_owned(),
+                    INGEST_MANIFEST_DAY_PATH.replace("{day}", LINKED_DEVICE_DAY),
+                ),
+                (
+                    "GET".to_owned(),
+                    INGEST_SEGMENTS_PATH.replace("{day}", LINKED_DEVICE_DAY),
+                ),
             ],
             "the real mTLS peer must observe no registration or extra liveness request",
         );
@@ -180,7 +189,7 @@ fn linked_device_403_and_426_retain_every_candidate_for_each_operation_class() {
                 assert_eq!(
                     peer.requests()
                         .iter()
-                        .map(|request| request.path())
+                        .map(|request| request.path().to_owned())
                         .collect::<Vec<_>>(),
                     v3_paths_through(operation),
                     "a refused {operation} must not populate reconciliation state or mark the day fresh",
@@ -257,7 +266,6 @@ async fn run_binding_failure(
             config_root: fixture.config_root.clone(),
             data_root: fixture.data_root.clone(),
             config,
-            platform: PlatformKind::Linux,
             hostname: hostname.to_owned(),
             clock: Arc::clone(&clock) as Arc<dyn Clock>,
             wake: SyncWake::default(),
@@ -533,36 +541,36 @@ fn v3_projection_example(name: &str) -> Value {
     )
     .expect("parse projection");
     match name {
-        "upload" => projection["paths"]["/app/devices/ingest"]["post"]["responses"]["200"]
+        "upload" => projection["paths"][INGEST_PATH]["post"]["responses"]["200"]
             ["content"]["application/json"]["examples"]["normal"]["value"]
             .clone(),
-        "manifest" => projection["paths"]["/app/devices/ingest/manifest"]["get"]
+        "manifest" => projection["paths"][INGEST_MANIFEST_PATH]["get"]
             ["responses"]["200"]["content"]["application/json"]["example"]
             .clone(),
-        "manifest_day" => projection["paths"]["/app/devices/ingest/manifest/{day}"]["get"]
+        "manifest_day" => projection["paths"][INGEST_MANIFEST_DAY_PATH]["get"]
             ["responses"]["200"]["content"]["application/json"]["example"]
             .clone(),
-        "segments" => projection["paths"]["/app/devices/ingest/segments/{day}"]["get"]
+        "segments" => projection["paths"][INGEST_SEGMENTS_PATH]["get"]
             ["responses"]["200"]["content"]["application/json"]["example"]
             .clone(),
         _ => panic!("unknown projection example: {name}"),
     }
 }
 
-fn v3_paths_through(operation: &str) -> Vec<&'static str> {
+fn v3_paths_through(operation: &str) -> Vec<String> {
     match operation {
-        "upload" => vec!["/app/devices/ingest"],
-        "manifest" => vec!["/app/devices/ingest", "/app/devices/ingest/manifest"],
+        "upload" => vec![INGEST_PATH.to_owned()],
+        "manifest" => vec![INGEST_PATH.to_owned(), INGEST_MANIFEST_PATH.to_owned()],
         "manifest_day" => vec![
-            "/app/devices/ingest",
-            "/app/devices/ingest/manifest",
-            "/app/devices/ingest/manifest/20260729",
+            INGEST_PATH.to_owned(),
+            INGEST_MANIFEST_PATH.to_owned(),
+            INGEST_MANIFEST_DAY_PATH.replace("{day}", LINKED_DEVICE_DAY),
         ],
         "segments" => vec![
-            "/app/devices/ingest",
-            "/app/devices/ingest/manifest",
-            "/app/devices/ingest/manifest/20260729",
-            "/app/devices/ingest/segments/20260729",
+            INGEST_PATH.to_owned(),
+            INGEST_MANIFEST_PATH.to_owned(),
+            INGEST_MANIFEST_DAY_PATH.replace("{day}", LINKED_DEVICE_DAY),
+            INGEST_SEGMENTS_PATH.replace("{day}", LINKED_DEVICE_DAY),
         ],
         _ => panic!("unknown v3 operation: {operation}"),
     }

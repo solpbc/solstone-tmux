@@ -14,9 +14,7 @@ use solstone_tmux::cli::{CliCommand, parse_args};
 use solstone_tmux::health::DiagnosticCode;
 use solstone_tmux::instance_lock::LOCK_FILENAME;
 use solstone_tmux::paths::ensure_private_directory;
-use solstone_tmux::private_link::{
-    CREDENTIALS_FILENAME, OBSERVER_FILENAME, load_credential, persist_credential,
-};
+use solstone_tmux::private_link::{CREDENTIALS_FILENAME, load_credential, persist_credential};
 use spl_transport::credential::{Credential, EndpointAddr};
 use support::{IsolatedRoots, TestDirectory};
 
@@ -113,7 +111,6 @@ fn assert_invalid_setup_input_creates_no_observer_runtime_state(roots: &Isolated
     assert!(!roots.data_root().join("captures").exists());
     assert!(roots.config_root().is_dir());
     assert!(!roots.config_root().join(CREDENTIALS_FILENAME).exists());
-    assert!(!roots.config_root().join(OBSERVER_FILENAME).exists());
 }
 
 #[test]
