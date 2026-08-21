@@ -169,9 +169,10 @@ macOS uses:
 - data and config: `$HOME/Library/Application Support/solstone-tmux`
 
 The data root owns `captures/`, the process lock, and `sync-health.json`. The
-config root owns `config.json`, `credentials.json`, `observer.json`, the
-private-state lock, and resolved local service state. Config and private state
-are separate.
+config root owns `config.json`, `credentials.json`, the private-state lock, and
+resolved local service state. A prior install's `observer.json` is tolerated as
+a legacy artifact, but the live path ignores it. Config and private state are
+separate.
 
 ### Segments and recovery
 

@@ -428,11 +428,24 @@ fn retention_disabled_second_sweep_reuses_inventory_but_runs_v3_uploads() {
         scheduler.run_sweep(&mut journal, no_shutdown()).await;
         journal.clear_calls();
         receiver.borrow_and_update();
+        let before = scheduler.instrumentation();
 
         scheduler.run_sweep(&mut journal, no_shutdown()).await;
+        let after = scheduler.instrumentation();
 
         assert_eq!(*receiver.borrow(), SyncActivity::Idle);
         assert_eq!(journal.uploads().len(), 1);
+        assert_eq!(after.hashed_files - before.hashed_files, 0);
+        // sync.rs:1610 deliberately processes candidates newest-first.
+        assert_eq!(
+            journal.calls,
+            vec![
+                Call::Upload("120900_300".to_owned()),
+                Call::Manifest,
+                Call::ManifestDay("20260701".to_owned()),
+                Call::Listing("20260701".to_owned()),
+            ]
+        );
     });
 }
 
@@ -470,10 +483,27 @@ fn second_sweep_reuses_inventory_and_reconciles_through_v3_uploads() {
         let mut journal = FakeJournal::default();
         scheduler.run_sweep(&mut journal, no_shutdown()).await;
         journal.clear_calls();
+        let before = scheduler.instrumentation();
         let summary = scheduler.run_sweep(&mut journal, no_shutdown()).await;
+        let after = scheduler.instrumentation();
         assert_eq!(summary.custodied, 2);
         assert_eq!(journal.uploads().len(), 2);
         assert_eq!(journal.listings_by_day().len(), 2);
+        assert_eq!(after.hashed_files - before.hashed_files, 0);
+        // sync.rs:1610 deliberately processes candidates newest-first.
+        assert_eq!(
+            journal.calls,
+            vec![
+                Call::Upload("120000_300".to_owned()),
+                Call::Manifest,
+                Call::ManifestDay("20260702".to_owned()),
+                Call::Listing("20260702".to_owned()),
+                Call::Upload("120000_300".to_owned()),
+                Call::Manifest,
+                Call::ManifestDay("20260701".to_owned()),
+                Call::Listing("20260701".to_owned()),
+            ]
+        );
     });
 }
 
@@ -640,8 +670,11 @@ fn remote_loss_is_reconciled_by_v3_reupload_before_custody() {
             .expect("remote day")
             .remove("120100_300");
         journal.clear_calls();
-        scheduler.run_sweep(&mut journal, no_shutdown()).await;
+        let summary = scheduler.run_sweep(&mut journal, no_shutdown()).await;
         assert_eq!(journal.uploads().len(), 2);
+        assert!(journal.uploads().contains(&"120100_300".to_owned()));
+        assert_eq!(summary.custodied, 3);
+        assert_eq!(journal.reconciliation_calls("20260701"), (2, 2, 2));
     });
 }
 
@@ -762,10 +795,12 @@ fn a_retained_candidate_still_lets_later_candidates_be_attempted() {
                 authoritative_key: None,
             }),
         );
+        let retained = segment_path(&temporary, "20260701", "120100_300");
+        let before = snapshot_segment_bytes(&retained);
         let summary = scheduler.run_sweep(&mut journal, no_shutdown()).await;
         assert_eq!(summary.attempted, 2);
         assert_eq!(journal.uploads(), ["120100_300", "120000_300"]);
-        assert!(segment_path(&temporary, "20260701", "120100_300").is_dir());
+        assert_segment_bytes_unchanged(&retained, &before);
         assert_eq!(summary.custodied, 1);
     });
 }
@@ -1523,7 +1558,7 @@ struct FakeJournal {
     upload_outcomes: HashMap<String, VecDeque<Result<UploadResult, SyncOperationError>>>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 enum Call {
     Upload(String),
     Manifest,

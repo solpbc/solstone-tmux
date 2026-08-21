@@ -6,7 +6,7 @@ mod support;
 use std::fs::{self, OpenOptions};
 use std::future::Future;
 use std::io::Write;
-use std::os::unix::fs::{MetadataExt, symlink};
+use std::os::unix::fs::{FileTypeExt, MetadataExt, symlink};
 use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
@@ -181,6 +181,7 @@ fn custody_is_required_before_deletion() {
         let segment = create_segment(temporary.path(), "captures", "20260701", STREAM, SEGMENT);
         let candidate = SegmentCandidate::new("20260701", STREAM, SEGMENT);
         let listing = listing_for(&segment, &candidate, ListingFileStatus::Missing).await;
+        let before = snapshot_segment_entries(&segment);
 
         let outcome = delete_custodied_segment(
             &captures,
@@ -194,7 +195,7 @@ fn custody_is_required_before_deletion() {
         .await;
 
         assert_eq!(outcome, RetentionOutcome::Retained);
-        assert!(segment.is_dir());
+        assert_segment_entries_unchanged(&segment, &before);
     });
 }
 
@@ -244,6 +245,7 @@ fn traversal_candidate_cannot_escape_its_stream() {
             total: 0,
             protocol_version: PROTOCOL_VERSION_NUMBER,
         };
+        let before = snapshot_segment_entries(&outside);
 
         let outcome = delete_custodied_segment(
             &captures,
@@ -257,7 +259,7 @@ fn traversal_candidate_cannot_escape_its_stream() {
         .await;
 
         assert_eq!(outcome, RetentionOutcome::Retained);
-        assert!(outside.is_dir());
+        assert_segment_entries_unchanged(&outside, &before);
     });
 }
 
@@ -270,7 +272,14 @@ fn symlink_and_special_file_retain_the_whole_segment() {
         fs::create_dir_all(&symlink_segment).expect("create symlink segment");
         let referent = temporary.path().join("outside.jsonl");
         fs::write(&referent, b"outside\n").expect("write symlink referent");
-        symlink(&referent, symlink_segment.join(FILE)).expect("create segment symlink");
+        let symlink_path = symlink_segment.join(FILE);
+        symlink(&referent, &symlink_path).expect("create segment symlink");
+        let symlink_target = fs::read_link(&symlink_path).expect("read symlink target");
+        fs::write(
+            symlink_segment.join("tmux_aux_screen.jsonl"),
+            b"symlink sidecar\n",
+        )
+        .expect("write symlink sidecar");
 
         let socket_segment = segment_dir(&captures, "20260701", STREAM, "120500_300");
         fs::create_dir_all(&socket_segment).expect("create socket segment");
@@ -278,10 +287,17 @@ fn symlink_and_special_file_retain_the_whole_segment() {
         let socket_source = temporary.path().join("s");
         let _listener = UnixListener::bind(&socket_source).expect("bind fixture socket");
         fs::rename(socket_source, &socket_path).expect("move socket into segment");
+        fs::write(
+            socket_segment.join("tmux_aux_screen.jsonl"),
+            b"socket sidecar\n",
+        )
+        .expect("write socket sidecar");
+        let symlink_before = snapshot_segment_entries(&symlink_segment);
+        let socket_before = snapshot_segment_entries(&socket_segment);
 
-        for (segment_name, segment) in [
-            ("120000_300", symlink_segment),
-            ("120500_300", socket_segment),
+        for (segment_name, _segment) in [
+            ("120000_300", &symlink_segment),
+            ("120500_300", &socket_segment),
         ] {
             let candidate = SegmentCandidate::new("20260701", STREAM, segment_name);
             let listing = SegmentsEnvelope {
@@ -302,8 +318,25 @@ fn symlink_and_special_file_retain_the_whole_segment() {
                 .await,
                 RetentionOutcome::Retained
             );
-            assert!(segment.is_dir());
         }
+        assert_segment_entries_unchanged(&symlink_segment, &symlink_before);
+        assert_segment_entries_unchanged(&socket_segment, &socket_before);
+        assert!(
+            fs::symlink_metadata(&symlink_path)
+                .expect("inspect retained symlink")
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(
+            fs::read_link(&symlink_path).expect("read retained symlink target"),
+            symlink_target
+        );
+        assert!(
+            fs::symlink_metadata(&socket_path)
+                .expect("inspect retained socket")
+                .file_type()
+                .is_socket()
+        );
         assert_eq!(
             fs::read(&referent).expect("read symlink referent"),
             b"outside\n"
@@ -707,6 +740,74 @@ fn create_segment(root: &Path, captures: &str, day: &str, stream: &str, segment:
 
 fn segment_dir(captures: &Path, day: &str, stream: &str, segment: &str) -> PathBuf {
     captures.join(day).join(stream).join(segment)
+}
+
+#[derive(Debug, Eq, PartialEq)]
+enum SegmentEntry {
+    Directory,
+    File(Vec<u8>),
+    Symlink(PathBuf),
+    Socket,
+    BlockDevice,
+    CharacterDevice,
+    Fifo,
+}
+
+fn snapshot_segment_entries(segment: &Path) -> std::collections::BTreeMap<PathBuf, SegmentEntry> {
+    let mut entries = std::collections::BTreeMap::new();
+    collect_segment_entries(segment, segment, &mut entries);
+    entries
+}
+
+fn collect_segment_entries(
+    segment: &Path,
+    directory: &Path,
+    entries: &mut std::collections::BTreeMap<PathBuf, SegmentEntry>,
+) {
+    for entry in fs::read_dir(directory).expect("read segment directory") {
+        let entry = entry.expect("read segment entry");
+        let path = entry.path();
+        let relative = path
+            .strip_prefix(segment)
+            .expect("entry below segment")
+            .to_owned();
+        let file_type = fs::symlink_metadata(&path)
+            .expect("inspect segment entry")
+            .file_type();
+        let snapshot = if file_type.is_dir() {
+            collect_segment_entries(segment, &path, entries);
+            SegmentEntry::Directory
+        } else if file_type.is_file() {
+            SegmentEntry::File(fs::read(&path).expect("read segment file"))
+        } else if file_type.is_symlink() {
+            SegmentEntry::Symlink(fs::read_link(&path).expect("read segment symlink"))
+        } else if file_type.is_socket() {
+            SegmentEntry::Socket
+        } else if file_type.is_block_device() {
+            SegmentEntry::BlockDevice
+        } else if file_type.is_char_device() {
+            SegmentEntry::CharacterDevice
+        } else if file_type.is_fifo() {
+            SegmentEntry::Fifo
+        } else {
+            panic!("unsupported segment entry type");
+        };
+        assert!(
+            entries.insert(relative, snapshot).is_none(),
+            "duplicate segment entry"
+        );
+    }
+}
+
+fn assert_segment_entries_unchanged(
+    segment: &Path,
+    before: &std::collections::BTreeMap<PathBuf, SegmentEntry>,
+) {
+    assert_eq!(
+        snapshot_segment_entries(segment),
+        *before,
+        "segment entries changed"
+    );
 }
 
 struct RecordingIndicator(Arc<Mutex<Vec<&'static str>>>);
