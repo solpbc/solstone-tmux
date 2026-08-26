@@ -12,7 +12,7 @@ continues while pairing or sync is unavailable, and incomplete segments recover
 after a restart.
 
 The product is one Rust crate and one executable. Linux and macOS share capture,
-serialization, storage, recovery, registration, sync, health, and supervision
+serialization, storage, recovery, sync, health, and supervision
 logic. Platform-specific code is limited to path and service lifecycle policy.
 
 ## Source layout
@@ -45,7 +45,7 @@ native/solstone-tmux/
         name.rs                    Injective filename-safe names
         observer.rs                Poll and shutdown lifecycle
         paths.rs, paths/           Linux and macOS path policy
-        private_link.rs            Pairing, credentials, bridge, observer state
+        private_link.rs            Pairing, credentials, and bridge
         recovery.rs                Incomplete-segment recovery
         segment.rs                 Rotation and finalization
         serialize.rs               JSONL serialization
@@ -182,14 +182,14 @@ metadata is a sibling file, never a member of the segment directory. Derived
 stream and session components are injective across slash, whitespace,
 case-folding, and Unicode-normalization aliases.
 
-### Pairing and registration
+### Pairing
 
 `setup` reads one pairing link from stdin and persists only the SPL credential.
 `run` verifies the configured stream equals the hostname-derived stream before
 it opens the linked-device bridge. The paired mTLS credential is the Journal
-identity; sync does not register an observer, select a server-issued ingest URL,
-or read `observer.json`. The preserved registration decoder remains outside the
-live sync path for its existing callers.
+identity; sync bootstraps the Journal client through that bridge. There is no
+observer registration client or decoder, and sync does not select a
+server-issued ingest URL or read `observer.json`.
 
 ### Sync and custody
 

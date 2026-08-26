@@ -13,7 +13,7 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 
 use futures_core::Stream;
-use reqwest::header::{CONTENT_LENGTH, CONTENT_TYPE, TRANSFER_ENCODING};
+use reqwest::header::{CONTENT_LENGTH, TRANSFER_ENCODING};
 use reqwest::multipart::{Form, Part};
 use reqwest::{Method, StatusCode, Url};
 use serde::{Deserialize, Serialize};
@@ -25,15 +25,10 @@ use tokio::task::JoinHandle;
 
 use crate::health::DiagnosticCode;
 use crate::name::derive_component;
-use crate::private_link::{
-    MAX_REQUEST_BODY_BYTES, ObserverState, PROTOCOL_VERSION_NUMBER, PrivateLinkBridge,
-    contains_invalid_header_value,
-};
+use crate::private_link::{MAX_REQUEST_BODY_BYTES, PROTOCOL_VERSION_NUMBER, PrivateLinkBridge};
 use crate::storage::open_regular_readonly;
 use crate::sync::SyncInstrumentation;
 
-const REGISTER_PATH: &str = "/app/devices/register";
-const EVENT_PATH: &str = "/app/devices/ingest/event";
 pub const INGEST_PATH: &str = "/app/devices/ingest";
 pub const INGEST_MANIFEST_PATH: &str = "/app/devices/ingest/manifest";
 pub const INGEST_MANIFEST_DAY_PATH: &str = "/app/devices/ingest/manifest/{day}";
@@ -43,29 +38,6 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const FILE_STAGE_CAPACITY: usize = UPLOAD_BODY_STAGE_CAPACITY / RECOMMENDED_CHUNK;
 const MAX_RESPONSE_BODY_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_MULTIPART_PART_BYTES: u64 = 64 * 1024 * 1024;
-
-#[derive(Clone)]
-pub struct RegistrationDescriptor {
-    pub platform: String,
-    pub hostname: String,
-}
-
-#[derive(Serialize)]
-struct RegistrationRequest<'a> {
-    platform: &'a str,
-    hostname: &'a str,
-    stream_type: &'static str,
-    version: &'static str,
-}
-
-#[derive(Deserialize)]
-struct RegistrationResponse {
-    key: String,
-    prefix: String,
-    name: String,
-    ingest_url: String,
-    protocol_version: u64,
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum JournalStatusClass {
@@ -258,11 +230,6 @@ pub struct SegmentsEnvelope {
     pub protocol_version: u64,
 }
 
-#[derive(Deserialize)]
-struct EventResponse {
-    status: String,
-}
-
 struct PreparedFile {
     descriptor: LocalFile,
     file: File,
@@ -450,40 +417,6 @@ impl JournalClient {
         Ok(self.client.request(method, url).timeout(REQUEST_TIMEOUT))
     }
 
-    pub async fn register(
-        &self,
-        descriptor: &RegistrationDescriptor,
-        credential_instance_id: &str,
-        expected_name: &str,
-    ) -> Result<ObserverState, JournalError> {
-        let request = RegistrationRequest {
-            platform: &descriptor.platform,
-            hostname: &descriptor.hostname,
-            stream_type: "tmux",
-            version: env!("CARGO_PKG_VERSION"),
-        };
-        let body = serde_json::to_vec(&request)
-            .map_err(|_| JournalError::local(DiagnosticCode::JournalContractInvalid))?;
-        let response = self
-            .request(Method::POST, REGISTER_PATH)?
-            .header(CONTENT_TYPE, "application/json")
-            .body(body)
-            .send()
-            .await
-            .map_err(|error| {
-                JournalError::local(request_diagnostic(
-                    &error,
-                    DiagnosticCode::RegistrationFailed,
-                ))
-            })?;
-        let status = response.status();
-        let body = collect_response_body(response).await?;
-        if status != StatusCode::OK {
-            return Err(classify_error_response(status.as_u16(), &body));
-        }
-        decode_registration_response(&body, credential_instance_id, expected_name)
-    }
-
     pub async fn ingest_upload(
         &self,
         day: &str,
@@ -637,45 +570,6 @@ impl JournalClient {
         }
         decode_segments_response(&body)
     }
-
-    pub async fn ingest_event(
-        &self,
-        tract: &str,
-        event: &str,
-        mut fields: serde_json::Map<String, serde_json::Value>,
-    ) -> Result<(), JournalError> {
-        if tract.is_empty() || event.is_empty() {
-            return Err(JournalError::local(DiagnosticCode::LocalSegmentInvalid));
-        }
-        fields.insert(
-            "tract".to_owned(),
-            serde_json::Value::String(tract.to_owned()),
-        );
-        fields.insert(
-            "event".to_owned(),
-            serde_json::Value::String(event.to_owned()),
-        );
-        let body = serde_json::to_vec(&fields)
-            .map_err(|_| JournalError::local(DiagnosticCode::JournalContractInvalid))?;
-        let response = self
-            .request(Method::POST, EVENT_PATH)?
-            .header(CONTENT_TYPE, "application/json")
-            .body(body)
-            .send()
-            .await
-            .map_err(|error| {
-                JournalError::local(request_diagnostic(
-                    &error,
-                    DiagnosticCode::JournalUnavailable,
-                ))
-            })?;
-        let status = response.status();
-        let body = collect_response_body(response).await?;
-        if status != StatusCode::OK {
-            return Err(classify_error_response(status.as_u16(), &body));
-        }
-        decode_event_response(&body)
-    }
 }
 
 async fn collect_response_body(mut response: reqwest::Response) -> Result<Vec<u8>, JournalError> {
@@ -705,30 +599,6 @@ async fn collect_response_body(mut response: reqwest::Response) -> Result<Vec<u8
         body.extend_from_slice(&chunk);
     }
     Ok(body)
-}
-
-pub fn decode_registration_response(
-    body: &[u8],
-    credential_instance_id: &str,
-    expected_name: &str,
-) -> Result<ObserverState, JournalError> {
-    let response = serde_json::from_slice::<RegistrationResponse>(body)
-        .map_err(|_| JournalError::local(DiagnosticCode::JournalContractInvalid))?;
-    validate_registration(&response).map_err(JournalError::local)?;
-    // Journal registration-name behavior pinned at dbe1b0fb316fe127fa8ea55dd2aeb605546c5351.
-    if response.name != expected_name {
-        return Err(JournalError::local(
-            DiagnosticCode::RegistrationNameMismatch,
-        ));
-    }
-    Ok(ObserverState {
-        credential_instance_id: credential_instance_id.to_owned(),
-        key: response.key,
-        prefix: response.prefix,
-        name: response.name,
-        ingest_url: response.ingest_url,
-        protocol_version: response.protocol_version,
-    })
 }
 
 pub fn decode_upload_response(body: &[u8]) -> Result<UploadResult, JournalError> {
@@ -792,15 +662,6 @@ pub fn decode_segments_response(body: &[u8]) -> Result<SegmentsEnvelope, Journal
     Ok(response)
 }
 
-pub fn decode_event_response(body: &[u8]) -> Result<(), JournalError> {
-    let response = serde_json::from_slice::<EventResponse>(body)
-        .map_err(|_| JournalError::local(DiagnosticCode::JournalContractInvalid))?;
-    if response.status != "ok" {
-        return Err(JournalError::local(DiagnosticCode::JournalContractInvalid));
-    }
-    Ok(())
-}
-
 pub fn classify_error_response(status: u16, body: &[u8]) -> JournalError {
     let status_class = match status {
         400..=499 => JournalStatusClass::Client,
@@ -837,21 +698,6 @@ fn request_diagnostic(error: &reqwest::Error, fallback: DiagnosticCode) -> Diagn
     } else {
         fallback
     }
-}
-
-fn validate_registration(response: &RegistrationResponse) -> Result<(), DiagnosticCode> {
-    if response.key.is_empty()
-        || contains_invalid_header_value(&response.key)
-        || response.prefix.is_empty()
-        || response.name.is_empty()
-        || response.protocol_version != 2
-    {
-        return Err(DiagnosticCode::JournalContractInvalid);
-    }
-    let origin =
-        Url::parse("http://127.0.0.1").map_err(|_| DiagnosticCode::JournalContractInvalid)?;
-    confine_path(&origin, &response.ingest_url)?;
-    Ok(())
 }
 
 fn confine_path(origin: &Url, path: &str) -> Result<Url, DiagnosticCode> {

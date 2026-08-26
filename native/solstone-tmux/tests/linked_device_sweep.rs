@@ -77,7 +77,7 @@ async fn migrated_custom_stream_refuses_before_network_while_capture_continues()
 }
 
 #[test]
-fn registration_binding_diagnostics_are_actionable() {
+fn linked_device_sweep_diagnostics_are_actionable() {
     assert_eq!(
         DiagnosticCode::ConfiguredStreamMismatch.as_str(),
         "configured_stream_mismatch"

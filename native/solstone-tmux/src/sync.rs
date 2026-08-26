@@ -43,7 +43,7 @@ const RETRY_DELAYS: [Duration; 4] = [
 ];
 const PERIODIC_SYNC_INTERVAL: Duration = Duration::from_secs(60);
 const CANDIDATES_PER_BATCH: usize = 8;
-const STATUS_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(60);
+const HEALTH_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SyncActivity {
@@ -98,45 +98,6 @@ impl SyncInstrumentation {
             usize::try_from(bytes).unwrap_or(usize::MAX),
             Ordering::Relaxed,
         );
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct StatusBeacon {
-    pub name: String,
-    pub uptime: u64,
-    pub last_successful_sync: Option<i64>,
-    pub pending_queue_depth: u64,
-    pub recent_error_count: u32,
-    pub last_error_reason: Option<DiagnosticCode>,
-}
-
-impl StatusBeacon {
-    pub fn fields(&self) -> serde_json::Map<String, serde_json::Value> {
-        let mut fields = serde_json::Map::new();
-        fields.insert("name".to_owned(), self.name.clone().into());
-        fields.insert("stream_type".to_owned(), "tmux".into());
-        fields.insert("version".to_owned(), env!("CARGO_PKG_VERSION").into());
-        fields.insert("uptime".to_owned(), self.uptime.into());
-        fields.insert(
-            "last_successful_sync".to_owned(),
-            self.last_successful_sync
-                .map_or(serde_json::Value::Null, Into::into),
-        );
-        fields.insert(
-            "pending_queue_depth".to_owned(),
-            self.pending_queue_depth.into(),
-        );
-        fields.insert(
-            "recent_error_count".to_owned(),
-            u64::from(self.recent_error_count).into(),
-        );
-        fields.insert(
-            "last_error_reason".to_owned(),
-            self.last_error_reason
-                .map_or(serde_json::Value::Null, |code| code.as_str().into()),
-        );
-        fields
     }
 }
 
@@ -602,11 +563,6 @@ pub trait SyncJournal: Send {
         &'a mut self,
         day: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<SegmentsEnvelope, SyncOperationError>> + Send + 'a>>;
-
-    fn status_event<'a>(
-        &'a mut self,
-        beacon: &'a StatusBeacon,
-    ) -> Pin<Box<dyn Future<Output = Result<(), SyncOperationError>> + Send + 'a>>;
 }
 
 #[derive(Clone, Default)]
@@ -738,8 +694,6 @@ pub struct SyncScheduler {
     activity: Option<watch::Sender<SyncActivity>>,
     health: Option<HealthWriter>,
     facts: SyncFacts,
-    started_at: Duration,
-    last_status_event: Option<Duration>,
     retention_fence: Arc<RetentionFence>,
 }
 
@@ -751,7 +705,6 @@ impl SyncScheduler {
         clock: Arc<dyn Clock>,
         wake: SyncWake,
     ) -> Self {
-        let started_at = clock.monotonic_now();
         Self {
             captures_root,
             stream,
@@ -764,8 +717,6 @@ impl SyncScheduler {
             activity: None,
             health: None,
             facts: SyncFacts::default(),
-            started_at,
-            last_status_event: None,
             retention_fence: Arc::new(RetentionFence::new()),
         }
     }
@@ -843,31 +794,11 @@ impl SyncScheduler {
                     }
                 }
 
-                let mut summary = self.run_sweep(journal, shutdown.clone()).await;
+                let summary = self.run_sweep(journal, shutdown.clone()).await;
                 if summary.cancelled {
                     return;
                 }
                 self.update_facts(&summary);
-                if summary.failure.is_none()
-                    && summary.diagnostic.is_none()
-                    && self.status_event_due()
-                {
-                    let beacon = self.status_beacon(self.stream.as_str());
-                    match cancellable(&mut shutdown, journal.status_event(&beacon)).await {
-                        Err(()) => return,
-                        Ok(Ok(())) => {
-                            summary.contacted = true;
-                            self.facts
-                                .successful_contact(self.clock.wall_now().unix_timestamp());
-                            self.backoff.successful_operation();
-                        }
-                        Ok(Err(error)) => {
-                            summary = self.end_sweep(summary, error);
-                            self.update_facts(&summary);
-                        }
-                    }
-                    self.last_status_event = Some(self.clock.monotonic_now());
-                }
                 self.write_health().await;
                 requested = summary.failure.is_some();
                 if self.wake.take_pending() {
@@ -1241,27 +1172,6 @@ impl SyncScheduler {
         self.facts.sync_in_progress = false;
     }
 
-    fn status_event_due(&self) -> bool {
-        self.last_status_event.is_none_or(|last| {
-            self.clock.monotonic_now().saturating_sub(last) >= STATUS_HEARTBEAT_INTERVAL
-        })
-    }
-
-    fn status_beacon(&self, observer_name: &str) -> StatusBeacon {
-        StatusBeacon {
-            name: observer_name.to_owned(),
-            uptime: self
-                .clock
-                .monotonic_now()
-                .saturating_sub(self.started_at)
-                .as_secs(),
-            last_successful_sync: self.facts.last_successful_sync_unix_seconds,
-            pending_queue_depth: self.facts.pending_segments,
-            recent_error_count: self.facts.recent_error_count,
-            last_error_reason: self.facts.last_error_code,
-        }
-    }
-
     async fn write_health(&self) {
         if let Some(health) = &self.health {
             let _ = health
@@ -1364,18 +1274,6 @@ impl SyncJournal for JournalSession {
                 .map_err(map_journal_error)
         })
     }
-
-    fn status_event<'a>(
-        &'a mut self,
-        beacon: &'a StatusBeacon,
-    ) -> Pin<Box<dyn Future<Output = Result<(), SyncOperationError>> + Send + 'a>> {
-        Box::pin(async move {
-            self.journal
-                .ingest_event("observe", "status", beacon.fields())
-                .await
-                .map_err(map_journal_error)
-        })
-    }
 }
 
 pub struct SyncTask {
@@ -1474,7 +1372,7 @@ async fn refresh_waiting_health(
     clock: &dyn Clock,
     shutdown: &mut watch::Receiver<bool>,
 ) {
-    let mut heartbeat = tokio::time::interval(STATUS_HEARTBEAT_INTERVAL);
+    let mut heartbeat = tokio::time::interval(HEALTH_REFRESH_INTERVAL);
     heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         tokio::select! {
@@ -1528,7 +1426,6 @@ fn map_journal_error(error: JournalError) -> SyncOperationError {
         DiagnosticCode::JournalContractInvalid
         | DiagnosticCode::JournalResponseTooLarge
         | DiagnosticCode::ConfiguredStreamMismatch
-        | DiagnosticCode::RegistrationNameMismatch
         | DiagnosticCode::PrivateStateInvalid
         | DiagnosticCode::PrivateStateIo => {
             SyncOperationError::EndSweepDiagnostic(SyncFailureClass::Contract, diagnostic)
@@ -1547,7 +1444,6 @@ fn map_diagnostic(code: DiagnosticCode) -> SyncOperationError {
         DiagnosticCode::JournalContractInvalid
         | DiagnosticCode::JournalResponseTooLarge
         | DiagnosticCode::ConfiguredStreamMismatch
-        | DiagnosticCode::RegistrationNameMismatch
         | DiagnosticCode::PrivateStateInvalid
         | DiagnosticCode::PrivateStateIo => {
             SyncOperationError::EndSweepDiagnostic(SyncFailureClass::Contract, code)

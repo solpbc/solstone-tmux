@@ -29,8 +29,7 @@ use solstone_tmux::paths::ensure_private_directory;
 use solstone_tmux::private_link::PROTOCOL_VERSION_NUMBER;
 use solstone_tmux::segment::SegmentClose;
 use solstone_tmux::sync::{
-    SegmentCandidate, StatusBeacon, SyncActivity, SyncJournal, SyncOperationError, SyncScheduler,
-    SyncWake,
+    SegmentCandidate, SyncActivity, SyncJournal, SyncOperationError, SyncScheduler, SyncWake,
 };
 use support::TestDirectory;
 use time::{Date, Month, PrimitiveDateTime, Time, UtcOffset};
@@ -1036,32 +1035,6 @@ fn shutdown_cancels_a_pending_postupload_listing_without_starting_later_candidat
 }
 
 #[test]
-fn shutdown_cancels_a_pending_status_event() {
-    run(async {
-        let temporary = TestDirectory::new("sync-cancel-status-event");
-        let (entered, started) = oneshot::channel();
-        let (mut journal, uploads) = blocking_journal(BlockingStage::StatusEvent, entered);
-        let (stop, stopped) = oneshot::channel();
-        let mut scheduler = scheduler(&temporary, SyncWake::default());
-        let task = tokio::spawn(async move {
-            scheduler
-                .run(&mut journal, async move {
-                    let _ = stopped.await;
-                })
-                .await;
-        });
-        started.await.expect("status event began");
-        stop.send(()).expect("request shutdown");
-
-        tokio::time::timeout(HANG_GUARD, task)
-            .await
-            .expect("shutdown must interrupt status event")
-            .expect("join scheduler");
-        assert!(uploads.lock().expect("uploads lock").is_empty());
-    });
-}
-
-#[test]
 fn startup_finalization_and_periodic_wakes_converge_on_a_rescan() {
     paused(async {
         let temporary = TestDirectory::new("sync-wake-sources");
@@ -1343,43 +1316,6 @@ fn health_distinguishes_contact_from_custody_and_decrements_deleted_work() {
         assert_eq!(snapshot["pending_segments"], 1);
         assert!(!snapshot["last_successful_contact_unix_seconds"].is_null());
         assert!(snapshot["last_successful_sync_unix_seconds"].is_null());
-    });
-}
-
-#[test]
-fn status_event_is_bounded_to_one_per_heartbeat_interval() {
-    paused(async {
-        let temporary = TestDirectory::new("sync-status-cadence");
-        let clock = clock();
-        let wake = SyncWake::default();
-        let (events, mut received) = mpsc::unbounded_channel();
-        let mut scheduler = SyncScheduler::new(
-            temporary.path().join("captures"),
-            stream(),
-            -1,
-            clock.clone() as Arc<dyn Clock>,
-            wake.clone(),
-        );
-        let (stop, shutdown) = watch::channel(false);
-        let task = tokio::spawn(async move {
-            let mut journal = HeartbeatJournal { events };
-            scheduler.run_with_shutdown(&mut journal, shutdown).await;
-        });
-        let first = received.recv().await.expect("startup status event");
-        assert_eq!(first.name, STREAM);
-        wake.segment_closed(&SegmentClose::Finalized(PathBuf::from("coalesced")));
-        for _ in 0..SCHEDULER_TURNS {
-            tokio::task::yield_now().await;
-        }
-        assert!(received.try_recv().is_err());
-
-        advance_both(&clock, Duration::from_secs(60)).await;
-        let second = received.recv().await.expect("heartbeat status event");
-        assert_eq!(second.name, STREAM);
-        assert!(received.try_recv().is_err());
-
-        stop.send_replace(true);
-        task.await.expect("join scheduler");
     });
 }
 
@@ -1755,75 +1691,6 @@ impl SyncJournal for FakeJournal {
             })
         })
     }
-
-    fn status_event<'a>(
-        &'a mut self,
-        _beacon: &'a StatusBeacon,
-    ) -> Pin<Box<dyn Future<Output = Result<(), SyncOperationError>> + Send + 'a>> {
-        Box::pin(async { Ok(()) })
-    }
-}
-
-struct HeartbeatJournal {
-    events: mpsc::UnboundedSender<StatusBeacon>,
-}
-
-impl SyncJournal for HeartbeatJournal {
-    fn upload<'a>(
-        &'a mut self,
-        _candidate: &'a SegmentCandidate,
-        _files: Vec<PathBuf>,
-    ) -> Pin<Box<dyn Future<Output = Result<UploadResult, SyncOperationError>> + Send + 'a>> {
-        Box::pin(async { unreachable!("empty status fixture has no upload") })
-    }
-
-    fn segments<'a>(
-        &'a mut self,
-        _day: &'a str,
-    ) -> Pin<Box<dyn Future<Output = Result<SegmentsEnvelope, SyncOperationError>> + Send + 'a>>
-    {
-        Box::pin(async {
-            Ok(SegmentsEnvelope {
-                items: Vec::new(),
-                total: 0,
-                protocol_version: PROTOCOL_VERSION_NUMBER,
-            })
-        })
-    }
-
-    fn manifest<'a>(
-        &'a mut self,
-    ) -> Pin<Box<dyn Future<Output = Result<IngestManifest, SyncOperationError>> + Send + 'a>> {
-        Box::pin(async {
-            Ok(IngestManifest {
-                days: HashMap::new().into_iter().collect(),
-            })
-        })
-    }
-
-    fn manifest_day<'a>(
-        &'a mut self,
-        day: &'a str,
-    ) -> Pin<Box<dyn Future<Output = Result<IngestDayManifest, SyncOperationError>> + Send + 'a>>
-    {
-        Box::pin(async move {
-            Ok(IngestDayManifest {
-                version: 1,
-                day: day.to_owned(),
-                segments: HashMap::new().into_iter().collect(),
-            })
-        })
-    }
-
-    fn status_event<'a>(
-        &'a mut self,
-        beacon: &'a StatusBeacon,
-    ) -> Pin<Box<dyn Future<Output = Result<(), SyncOperationError>> + Send + 'a>> {
-        Box::pin(async move {
-            let _ = self.events.send(beacon.clone());
-            Ok(())
-        })
-    }
 }
 
 struct BackoffJournal {
@@ -1883,13 +1750,6 @@ impl SyncJournal for BackoffJournal {
                 segments: HashMap::new().into_iter().collect(),
             })
         })
-    }
-
-    fn status_event<'a>(
-        &'a mut self,
-        _beacon: &'a StatusBeacon,
-    ) -> Pin<Box<dyn Future<Output = Result<(), SyncOperationError>> + Send + 'a>> {
-        Box::pin(async { Ok(()) })
     }
 }
 
@@ -1975,13 +1835,6 @@ impl SyncJournal for GatedJournal {
     {
         self.inner.manifest_day(day)
     }
-
-    fn status_event<'a>(
-        &'a mut self,
-        beacon: &'a StatusBeacon,
-    ) -> Pin<Box<dyn Future<Output = Result<(), SyncOperationError>> + Send + 'a>> {
-        self.inner.status_event(beacon)
-    }
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -1989,7 +1842,6 @@ enum BlockingStage {
     EmptyListing,
     Upload,
     PostUploadListing,
-    StatusEvent,
 }
 
 struct BlockingJournal {
@@ -2111,18 +1963,6 @@ impl SyncJournal for BlockingJournal {
                 day: day.to_owned(),
                 segments,
             })
-        })
-    }
-
-    fn status_event<'a>(
-        &'a mut self,
-        _beacon: &'a StatusBeacon,
-    ) -> Pin<Box<dyn Future<Output = Result<(), SyncOperationError>> + Send + 'a>> {
-        Box::pin(async move {
-            if self.stage == BlockingStage::StatusEvent {
-                self.wait_forever().await;
-            }
-            Ok(())
         })
     }
 }

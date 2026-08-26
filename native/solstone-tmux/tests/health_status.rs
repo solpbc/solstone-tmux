@@ -15,7 +15,7 @@ use solstone_tmux::health::{
 };
 use solstone_tmux::instance_lock::{InstanceLock, LOCK_FILENAME};
 use solstone_tmux::paths::ensure_private_directory;
-use solstone_tmux::sync::{JournalSession, StatusBeacon, SyncFailureClass, SyncOperationError};
+use solstone_tmux::sync::{JournalSession, SyncFailureClass, SyncOperationError};
 use support::private_link_peer::PrivateLinkPeer;
 use support::{IsolatedRoots, TestDirectory};
 
@@ -253,7 +253,7 @@ fn production_failure_paths_redact_secrets_and_owner_content() {
                 "health snapshot disclosed a sensitive sentinel"
             );
         }
-        owner.shutdown().await.expect("shutdown registration owner");
+        owner.shutdown().await.expect("shutdown journal session");
         peer.shutdown().await;
     });
 }
@@ -315,43 +315,6 @@ fn status_is_read_only_when_native_state_is_absent() {
     assert!(!roots.data_root().exists());
     assert!(!roots.data_root().join(LOCK_FILENAME).exists());
     assert!(!roots.data_root().join(HEALTH_FILENAME).exists());
-}
-
-#[test]
-fn status_beacon_has_only_the_eight_closed_diagnostic_fields() {
-    let beacon = StatusBeacon {
-        name: "observer-name".to_owned(),
-        uptime: 60,
-        last_successful_sync: Some(NOW),
-        pending_queue_depth: 2,
-        recent_error_count: 1,
-        last_error_reason: Some(DiagnosticCode::JournalTimeout),
-    };
-    let fields = beacon.fields();
-    assert_eq!(
-        fields.keys().map(String::as_str).collect::<Vec<_>>(),
-        [
-            "last_error_reason",
-            "last_successful_sync",
-            "name",
-            "pending_queue_depth",
-            "recent_error_count",
-            "stream_type",
-            "uptime",
-            "version",
-        ]
-    );
-    let encoded = serde_json::to_string(&fields).expect("encode beacon");
-    for sentinel in [
-        "SENTINEL_PAIR_LINK",
-        "SENTINEL_OBSERVER_KEY",
-        "SENTINEL_RELAY_TOKEN",
-        "SENTINEL_RESPONSE_BODY",
-        "SENTINEL_CAPTURE_PATH",
-        "SENTINEL_TERMINAL_CONTENT",
-    ] {
-        assert!(!encoded.contains(sentinel));
-    }
 }
 
 fn runtime() -> tokio::runtime::Runtime {

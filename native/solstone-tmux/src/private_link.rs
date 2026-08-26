@@ -9,7 +9,6 @@ use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use serde::{Deserialize, Serialize};
 use spl_core::bridge::BridgeNames;
 use spl_transport::TransportError;
 use spl_transport::client::{DialedCarrier, TokenPersistHook, TransportClient};
@@ -37,17 +36,6 @@ pub const OBSERVER_HEADER_NAME: &str = "x-solstone-observer";
 pub const PROTOCOL_VERSION_HEADER_NAME: &str = "x-solstone-protocol-version";
 pub const PROTOCOL_VERSION: &str = "3";
 pub const PROTOCOL_VERSION_NUMBER: u64 = 3;
-
-#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct ObserverState {
-    pub credential_instance_id: String,
-    pub key: String,
-    pub prefix: String,
-    pub name: String,
-    pub ingest_url: String,
-    pub protocol_version: u64,
-}
 
 pub struct PrivateLinkOpener {
     transport: Arc<TransportClient>,
@@ -284,8 +272,4 @@ fn persist_private_file(
         Err(StorageError::InvalidTarget(_)) => Err(DiagnosticCode::PrivateStateInvalid),
         Err(_) => Err(DiagnosticCode::PrivateStateIo),
     }
-}
-
-pub(crate) fn contains_invalid_header_value(value: &str) -> bool {
-    value.bytes().any(|byte| matches!(byte, b'\r' | b'\n' | 0))
 }
