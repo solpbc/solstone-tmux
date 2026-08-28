@@ -24,7 +24,7 @@ use solstone_tmux::observer::{
 };
 use solstone_tmux::paths::ensure_private_directory;
 use solstone_tmux::private_link::{
-    OBSERVER_HEADER_NAME, PROTOCOL_VERSION, PROTOCOL_VERSION_HEADER_NAME,
+    OBSERVER_HEADER_NAME, PROTOCOL_VERSION, PROTOCOL_VERSION_HEADER_NAME, PrivateLinkBridge,
 };
 use solstone_tmux::segment::SegmentClose;
 use solstone_tmux::sync::JournalSession;
@@ -81,6 +81,23 @@ fn linked_device_bridge_rejects_caller_auth_and_mints_only_v3_protocol_header() 
         assert!(requests[0].header("authorization").is_none());
         assert!(requests[0].header(OBSERVER_HEADER_NAME).is_none());
         session.shutdown().await.expect("shutdown");
+        peer.shutdown().await;
+    });
+}
+
+#[test]
+fn relay_only_credential_starts_the_private_link_bridge() {
+    runtime().block_on(async {
+        let peer = PrivateLinkPeer::start().await;
+        let mut credential = peer.credential();
+        credential.endpoints.clear();
+        credential.relay_origin = Some("https://relay.example.invalid".to_owned());
+        credential.device_token = Some("relay-only-test-token".to_owned());
+
+        let bridge = PrivateLinkBridge::start(credential, None)
+            .await
+            .expect("start relay-only bridge");
+        bridge.shutdown().await;
         peer.shutdown().await;
     });
 }

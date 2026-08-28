@@ -298,6 +298,67 @@ async fn run_binding_failure(
     }
 }
 
+#[test]
+fn unavailable_bridge_at_start_stays_supervised_with_bounded_retry() {
+    linked_device_runtime().block_on(async {
+        let fixture = BindingFixture::new("linked-device-startup-retry");
+        let hostname = "offline-host";
+        fs::write(
+            fixture.config_root.join(CONFIG_FILENAME),
+            br#"{"stream":"offline-host.tmux","capture_interval":5,"segment_interval":300,"status_indicator":false}"#,
+        )
+        .expect("write native config");
+        let config =
+            RuntimeConfig::load(&fixture.config_root, hostname).expect("load runtime settings");
+        let peer = PrivateLinkPeer::start().await;
+        let mut credential = peer.credential();
+        credential.client_key_pem.clear();
+        persist_credential(&fixture.config_root, &credential).expect("persist paired credential");
+        peer.shutdown().await;
+
+        let clock = Arc::new(test_clock());
+        let lock = InstanceLock::acquire(&fixture.data_root).expect("instance lock");
+        let (stop, shutdown) = watch::channel(false);
+        let (activity, _activity_receiver) = watch::channel(SyncActivity::Idle);
+        let sync = tokio::spawn(
+            SyncTask {
+                config_root: fixture.config_root.clone(),
+                data_root: fixture.data_root.clone(),
+                config,
+                hostname: hostname.to_owned(),
+                clock: Arc::clone(&clock) as Arc<dyn Clock>,
+                wake: SyncWake::default(),
+                activity,
+                health: HealthWriter::new(fixture.data_root.clone(), &lock),
+                retention_fence: Arc::new(solstone_tmux::sync::RetentionFence::new()),
+            }
+            .run(shutdown),
+        );
+
+        let health = wait_for_diagnostic(&fixture.data_root, DiagnosticCode::BridgeUnavailable).await;
+        assert_eq!(health["state"], "offline");
+        assert_eq!(health["paired"], true);
+        assert_eq!(health["recent_error_count"], 1);
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(
+            !sync.is_finished(),
+            "a transient bootstrap outage must not terminate the supervisor"
+        );
+        let latest: Value = serde_json::from_slice(
+            &fs::read(fixture.data_root.join(HEALTH_FILENAME)).expect("read retry health"),
+        )
+        .expect("parse retry health");
+        assert_eq!(latest["recent_error_count"], 1, "retry must honor backoff");
+
+        stop.send_replace(true);
+        tokio::time::timeout(Duration::from_secs(5), sync)
+            .await
+            .expect("sync stops after shutdown")
+            .expect("join sync")
+            .expect("clean shutdown");
+    });
+}
+
 struct FailureEvidence {
     candidate: PathBuf,
     polls: usize,

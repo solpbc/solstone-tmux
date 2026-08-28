@@ -1290,7 +1290,18 @@ pub struct SyncTask {
 
 impl SyncTask {
     pub async fn run(self, mut shutdown: watch::Receiver<bool>) -> Result<(), DiagnosticCode> {
-        let load_root = self.config_root.clone();
+        let SyncTask {
+            config_root,
+            data_root,
+            config,
+            hostname,
+            clock,
+            wake,
+            activity,
+            health,
+            retention_fence,
+        } = self;
+        let load_root = config_root.clone();
         let loaded = tokio::task::spawn_blocking(move || load_credential(&load_root))
             .await
             .map_err(|_| DiagnosticCode::PrivateStateIo)?;
@@ -1298,48 +1309,85 @@ impl SyncTask {
             Ok(Some(credential)) => credential,
             Ok(None) => {
                 let facts = SyncFacts::default();
-                refresh_waiting_health(&self.health, &facts, self.clock.as_ref(), &mut shutdown)
-                    .await;
+                refresh_waiting_health(&health, &facts, clock.as_ref(), &mut shutdown).await;
                 return Ok(());
             }
             Err(code) => {
                 let mut facts = SyncFacts::default();
                 facts.failed(code);
-                refresh_waiting_health(&self.health, &facts, self.clock.as_ref(), &mut shutdown)
-                    .await;
+                refresh_waiting_health(&health, &facts, clock.as_ref(), &mut shutdown).await;
                 return Ok(());
             }
         };
-        let expected_stream = default_stream(&self.hostname)
+        let expected_stream = default_stream(&hostname)
             .ok()
             .and_then(|stream| derive_component(&stream).ok())
             .ok_or(DiagnosticCode::ConfiguredStreamMismatch)?;
-        if self.config.stream != expected_stream {
+        if config.stream != expected_stream {
             let mut facts = SyncFacts::default();
             facts.failed(DiagnosticCode::ConfiguredStreamMismatch);
-            refresh_waiting_health(&self.health, &facts, self.clock.as_ref(), &mut shutdown).await;
+            refresh_waiting_health(&health, &facts, clock.as_ref(), &mut shutdown).await;
             return Ok(());
         }
-        let mut journal = JournalSession::start(credential, self.config_root).await?;
-        let mut scheduler = SyncScheduler::new(
-            self.data_root.join("captures"),
-            self.config.stream,
-            self.config.cache_retention_days,
-            self.clock,
-            self.wake,
-        )
-        .with_observability(self.activity, self.health)
-        .with_retention_fence(self.retention_fence);
-        scheduler.facts.paired = true;
-        scheduler
-            .run_with_shutdown(&mut journal, shutdown.clone())
-            .await;
-        if let Err(code) = journal.shutdown().await {
-            scheduler.facts.failed(code);
-            scheduler.write_health().await;
-            return Err(code);
+        let mut reconnect = Backoff::new();
+        let mut reconnect_facts = SyncFacts {
+            paired: true,
+            ..SyncFacts::default()
+        };
+        loop {
+            if shutdown_requested(&mut shutdown) {
+                return Ok(());
+            }
+            let mut journal =
+                match JournalSession::start(credential.clone(), config_root.clone()).await {
+                    Ok(journal) => journal,
+                    Err(code) => {
+                        reconnect_facts.failed(code);
+                        let _ = health
+                            .write(&reconnect_facts, clock.wall_now().unix_timestamp())
+                            .await;
+                        reconnect.failed_operation();
+                        let deadline = reconnect
+                            .deadline()
+                            .expect("failed reconnect has a retry deadline");
+                        if !wait_for_retry_or_shutdown(&mut shutdown, deadline).await {
+                            return Ok(());
+                        }
+                        reconnect.deadline_reached();
+                        continue;
+                    }
+                };
+            let mut scheduler = SyncScheduler::new(
+                data_root.join("captures"),
+                config.stream,
+                config.cache_retention_days,
+                clock,
+                wake,
+            )
+            .with_observability(activity, health)
+            .with_retention_fence(retention_fence);
+            scheduler.facts.paired = true;
+            scheduler
+                .run_with_shutdown(&mut journal, shutdown.clone())
+                .await;
+            if let Err(code) = journal.shutdown().await {
+                scheduler.facts.failed(code);
+                scheduler.write_health().await;
+                return Err(code);
+            }
+            return Ok(());
         }
-        Ok(())
+    }
+}
+
+async fn wait_for_retry_or_shutdown(
+    shutdown: &mut watch::Receiver<bool>,
+    deadline: Instant,
+) -> bool {
+    tokio::select! {
+        biased;
+        () = wait_for_shutdown(shutdown) => false,
+        () = tokio::time::sleep_until(deadline) => true,
     }
 }
 

@@ -84,8 +84,12 @@ impl PrivateLinkBridge {
             .iter()
             .map(|endpoint| endpoint.host.clone())
             .collect();
-        let transport = TransportClient::new(credential, token_persist)
-            .map_err(|_| DiagnosticCode::BridgeUnavailable)?;
+        let transport = if credential.endpoints.is_empty() {
+            TransportClient::new_relay_only(credential, token_persist)
+        } else {
+            TransportClient::new(credential, token_persist)
+        }
+        .map_err(|_| DiagnosticCode::BridgeUnavailable)?;
         let opener = Arc::new(PrivateLinkOpener::new(transport));
         let bridge_names = BridgeNames {
             capability_cookie_name: CAPABILITY_COOKIE_NAME.to_owned(),

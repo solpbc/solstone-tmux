@@ -4,6 +4,19 @@ All notable changes to solstone-tmux will be documented in this file.
 
 Format adapted from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.0.4] - 2026-08-28
+
+### Changed
+
+- tmux syncing now works through your paired-device connection to your journal.
+
+### Fixed
+
+- if your paired journal is temporarily unavailable when solstone-tmux starts, it now keeps trying to reconnect instead of stopping.
+- pairing now works with the current link from your journal, including when it is reachable only remotely.
+- finished tmux work now stays on this machine until your journal can confirm it has every file.
+- larger completed tmux work can now reach your journal.
+
 ## [1.0.3] - 2026-08-28
 
 ### Changed
