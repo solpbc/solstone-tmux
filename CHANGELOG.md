@@ -10,6 +10,7 @@ Format adapted from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - tmux syncing now works through your paired-device connection to your journal.
 
 ### Fixed
+- the current pairing link from your journal now works.
 - finished tmux work now stays on this machine until your journal can confirm it has every file.
 - larger completed tmux work can now reach your journal.
 
