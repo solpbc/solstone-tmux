@@ -55,6 +55,12 @@ fn operator_flow_has_one_exact_ordered_command_path() {
     assert!(commands.contains("/usr/local/bin/solstone-tmux install-service"));
     assert!(commands.contains("launchctl print gui/501/com.solstone.tmux"));
     assert!(commands.contains("/usr/local/bin/solstone-tmux uninstall-service"));
+    assert!(
+        run.workflow_commands.iter().any(|command| {
+            command_name(command) == "mktemp" && command.contains("/tmp/$TMUX_ROOT")
+        }),
+        "the observer's implicit tmux socket must use the short dedicated root"
+    );
     let tmux_commands = run
         .workflow_commands
         .iter()
@@ -124,6 +130,27 @@ fn every_operator_command_failure_stops_before_later_work() {
     }
 }
 
+#[test]
+fn short_tmux_root_allocation_failure_removes_the_candidate_root() {
+    let fixture = OperatorFixture::new();
+    let baseline = fixture.run(0, "short-tmux-root-baseline");
+    assert_success(&baseline.output);
+    let failure_position = baseline
+        .workflow_commands
+        .iter()
+        .position(|command| {
+            command_name(command) == "mktemp" && command.contains("/tmp/$TMUX_ROOT")
+        })
+        .expect("short tmux root allocation")
+        + 1;
+    let run = fixture.run(failure_position, "short-tmux-root-failure");
+
+    assert!(!run.output.status.success());
+    assert!(run.cleanup_commands.iter().any(|command| {
+        command_name(command) == "rm" && command.contains("$RUN/output/$SCRATCH")
+    }));
+}
+
 fn expected_command_names() -> Vec<&'static str> {
     let mut names = vec!["sh"; 44];
     names.extend([
@@ -142,6 +169,7 @@ fn expected_command_names() -> Vec<&'static str> {
         "grep",
         "xcrun",
         "id",
+        "mktemp",
         "mktemp",
         "mkdir",
         "mkdir",
@@ -354,6 +382,13 @@ fn normalize_command(command: &str, run_root: &Path) -> String {
             .find(['/', ' '])
             .unwrap_or(normalized.len() - suffix_start);
         normalized.replace_range(start..suffix_start + suffix_len, "$SCRATCH");
+    }
+    while let Some(start) = normalized.find("solstone-tmux-macos-tmux.") {
+        let suffix_start = start + "solstone-tmux-macos-tmux.".len();
+        let suffix_len = normalized[suffix_start..]
+            .find(['/', ' '])
+            .unwrap_or(normalized.len() - suffix_start);
+        normalized.replace_range(start..suffix_start + suffix_len, "$TMUX_ROOT");
     }
     normalized
 }

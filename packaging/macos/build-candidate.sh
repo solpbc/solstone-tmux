@@ -172,7 +172,15 @@ scratch_root="$(operator_exec mktemp -d "$output_parent/.solstone-tmux-macos.XXX
 candidate_root="$scratch_root/candidate"
 stage_root="$scratch_root/stage"
 scratch_home="$scratch_root/home"
-scratch_tmux="$scratch_root/tmux"
+# The observer invokes tmux without `-S`, so TMUX_TMPDIR must resolve to the
+# same socket as the explicitly pinned CLI calls below. Keep this root short:
+# macOS tmux rejects a Unix socket path longer than its platform limit, while
+# a candidate output parent may be arbitrarily deep. If creating it fails,
+# remove the already-created candidate root before any trap exists.
+if ! scratch_tmux="$(operator_exec mktemp -d /tmp/solstone-tmux-macos-tmux.XXXXXX)"; then
+    SOLSTONE_TMUX_OPERATOR_CLEANUP=1 operator_exec rm -rf "$scratch_root" || true
+    exit 1
+fi
 
 ###############################################################################
 # !!!  DANGER  —  READ THIS BEFORE TOUCHING ANY tmux CALL IN THIS SCRIPT  !!!
@@ -243,14 +251,14 @@ cleanup() {
             operator_exec sudo pkgutil --forget com.solstone.tmux >/dev/null 2>&1
     fi
     SOLSTONE_TMUX_OPERATOR_CLEANUP=1 operator_exec rm -rf "$scratch_root"
+    SOLSTONE_TMUX_OPERATOR_CLEANUP=1 operator_exec rm -rf "$scratch_tmux"
 }
 trap cleanup EXIT
 
 operator_exec mkdir -m 0700 \
     "$candidate_root" \
     "$stage_root" \
-    "$scratch_home" \
-    "$scratch_tmux"
+    "$scratch_home"
 # tmux creates this directory itself under default resolution, but -S binds the
 # socket at a literal path and creates no parents. The observer reaches the same
 # socket the other way, through TMUX_TMPDIR, so the layout has to match.
