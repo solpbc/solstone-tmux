@@ -3,7 +3,7 @@
 
 SHELL := /bin/bash
 
-.PHONY: all build hopper-install test test-only format ci clean install-service uninstall-service service-status service-logs package-linux release-linux validate-release publish-release
+.PHONY: all build hopper-install test test-only format ci clean install-service uninstall-service service-status service-logs package-linux release-linux validate-release sign-validate-release publish-release
 
 APP := solstone-tmux
 CARGO := cargo
@@ -137,6 +137,17 @@ validate-release:
 	SOLSTONE_TMUX_TEST_COMPLETE_CANDIDATE="$(CANDIDATE_DIRECTORY)" \
 		$(CARGO) test --locked -p $(APP) --test release_validator \
 			validates_real_complete_set_when_requested -- --exact
+
+sign-validate-release:
+	@test -n "$(SOURCE_COMMIT)" || { echo "SOURCE_COMMIT is required" >&2; exit 1; }
+	@test -n "$(CANDIDATE_DIRECTORY)" || { echo "CANDIDATE_DIRECTORY is required" >&2; exit 1; }
+	@test -n "$(MINISIGN_SECRET_KEY)" || { echo "MINISIGN_SECRET_KEY is required" >&2; exit 1; }
+	@test -n "$(SIGNED_CANDIDATE_DIRECTORY)" || { echo "SIGNED_CANDIDATE_DIRECTORY is required" >&2; exit 1; }
+	packaging/publish-release.sh --sign-and-validate-only \
+		"$(SOURCE_COMMIT)" \
+		"$(CANDIDATE_DIRECTORY)" \
+		"$(MINISIGN_SECRET_KEY)" \
+		"$(SIGNED_CANDIDATE_DIRECTORY)"
 
 publish-release:
 	@test -n "$(SOURCE_COMMIT)" || { echo "SOURCE_COMMIT is required" >&2; exit 1; }

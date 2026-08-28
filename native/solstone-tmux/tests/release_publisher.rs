@@ -59,6 +59,35 @@ fn state_none_creates_exact_release() {
 }
 
 #[test]
+fn sign_and_validate_only_produces_a_complete_candidate_without_release_surface_access() {
+    let fixture = PublisherFixture::new();
+
+    assert_success(&fixture.request().sign_and_validate_only().run());
+    fixture.assert_signed_candidate();
+    assert!(
+        fixture.log().is_empty(),
+        "sign-only mode invoked gh:\n{}",
+        fixture.log()
+    );
+    assert_eq!(fixture.state()["remote_tag"], Value::Null);
+    assert_eq!(fixture.state()["releases"], json!([]));
+    assert!(
+        !fixture
+            .candidate
+            .join(package_model::SHA256SUMS_NAME)
+            .exists(),
+        "sign-only mode mutated its unsigned input"
+    );
+    assert!(
+        !fixture
+            .candidate
+            .join(package_model::SIGNATURE_NAME)
+            .exists(),
+        "sign-only mode mutated its unsigned input"
+    );
+}
+
+#[test]
 fn state_exact_tag_without_release_reuses_tag() {
     let fixture = PublisherFixture::new();
     fixture.set_remote_tag_exact();
@@ -459,6 +488,7 @@ struct PublisherFixture {
     root: TestDirectory,
     repo: PathBuf,
     candidate: PathBuf,
+    signed_candidate: PathBuf,
     secret_key: PathBuf,
     fake_bin: PathBuf,
     state: PathBuf,
@@ -466,6 +496,7 @@ struct PublisherFixture {
     log_path: PathBuf,
     cargo_count: PathBuf,
     real_git: PathBuf,
+    real_minisign: PathBuf,
     publisher: PathBuf,
 }
 
@@ -474,6 +505,7 @@ impl PublisherFixture {
         let root = TestDirectory::new("release-publisher");
         let repo = root.path().join("repo");
         let candidate = root.path().join("candidate");
+        let signed_candidate = root.path().join("signed-candidate");
         let fake_bin = root.path().join("bin");
         let remote = root.path().join("remote");
         fs::create_dir_all(repo.join("native/solstone-tmux")).expect("create crate fixture");
@@ -598,11 +630,15 @@ impl PublisherFixture {
         let real_git = PathBuf::from(command_stdout(
             Command::new("sh").args(["-c", "command -v git"]),
         ));
+        let real_minisign = PathBuf::from(command_stdout(
+            Command::new("sh").args(["-c", "command -v minisign"]),
+        ));
 
         fs::write(fake_bin.join("gh"), fake_gh()).expect("write fake gh");
         fs::write(fake_bin.join("cargo"), fake_cargo()).expect("write fake cargo");
         fs::write(fake_bin.join("git"), fake_git()).expect("write fake git");
-        for name in ["gh", "cargo", "git"] {
+        fs::write(fake_bin.join("minisign"), fake_minisign()).expect("write fake minisign");
+        for name in ["gh", "cargo", "git", "minisign"] {
             fs::set_permissions(fake_bin.join(name), fs::Permissions::from_mode(0o755))
                 .expect("chmod fake tool");
         }
@@ -612,6 +648,7 @@ impl PublisherFixture {
             root,
             repo,
             candidate,
+            signed_candidate,
             secret_key,
             fake_bin,
             state,
@@ -619,6 +656,7 @@ impl PublisherFixture {
             log_path,
             cargo_count,
             real_git,
+            real_minisign,
             publisher,
         };
         fixture.rebuild_candidate();
@@ -632,6 +670,7 @@ impl PublisherFixture {
             cargo_fail_at: 0,
             interrupt: None,
             remote_mutation: None,
+            sign_and_validate_only: false,
         }
     }
 
@@ -709,6 +748,25 @@ impl PublisherFixture {
             )
             .expect("write record");
         }
+    }
+
+    fn assert_signed_candidate(&self) {
+        let mut actual = fs::read_dir(&self.signed_candidate)
+            .expect("read signed candidate")
+            .map(|entry| {
+                entry
+                    .expect("read signed candidate entry")
+                    .file_name()
+                    .into_string()
+                    .expect("signed candidate name")
+            })
+            .collect::<Vec<_>>();
+        actual.sort();
+        let mut expected = self.unsigned_names();
+        expected.push(package_model::SHA256SUMS_NAME.to_owned());
+        expected.push(package_model::SIGNATURE_NAME.to_owned());
+        expected.sort();
+        assert_eq!(actual, expected);
     }
 
     fn write_executable_tar(&self, body: &str) {
@@ -924,6 +982,7 @@ struct RunRequest<'a> {
     cargo_fail_at: usize,
     interrupt: Option<String>,
     remote_mutation: Option<String>,
+    sign_and_validate_only: bool,
 }
 
 impl RunRequest<'_> {
@@ -947,6 +1006,11 @@ impl RunRequest<'_> {
         self
     }
 
+    fn sign_and_validate_only(mut self) -> Self {
+        self.sign_and_validate_only = true;
+        self
+    }
+
     fn run(self) -> Output {
         let fixture = self.fixture;
         let _ = fs::remove_file(&fixture.cargo_count);
@@ -956,12 +1020,24 @@ impl RunRequest<'_> {
         )
         .expect("fake PATH");
         let mut command = Command::new(&fixture.publisher);
+        if self.sign_and_validate_only {
+            let _ = fs::remove_dir_all(&fixture.signed_candidate);
+            command
+                .arg("--sign-and-validate-only")
+                .arg(&self.source_commit)
+                .arg(&fixture.candidate)
+                .arg(&fixture.secret_key)
+                .arg(&fixture.signed_candidate);
+        } else {
+            command
+                .arg(&self.source_commit)
+                .arg(&fixture.candidate)
+                .arg(&fixture.secret_key);
+        }
         command
             .current_dir(&fixture.repo)
-            .arg(&self.source_commit)
-            .arg(&fixture.candidate)
-            .arg(&fixture.secret_key)
             .env("PATH", path)
+            .env("MINISIGN_BIN", fixture.fake_bin.join("minisign"))
             .env("HOME", fixture.root.path().join("home"))
             .env("TMPDIR", fixture.root.path().join("tmp"))
             .env("FAKE_GH_STATE", &fixture.state)
@@ -977,6 +1053,7 @@ impl RunRequest<'_> {
             .env("FAKE_CARGO_COUNT", &fixture.cargo_count)
             .env("FAKE_CARGO_FAIL_AT", self.cargo_fail_at.to_string())
             .env("FAKE_REAL_GIT", &fixture.real_git)
+            .env("FAKE_REAL_MINISIGN", &fixture.real_minisign)
             .env("FAKE_REPO", &fixture.repo)
             .env("FAKE_EXPECTED_PUSH_URL", ORIGIN_PUSH_URL);
         fs::create_dir_all(fixture.root.path().join("home")).expect("create fake home");
@@ -1042,6 +1119,18 @@ if [[ "$count" == "1" ]]; then
     done < <(find "$SOLSTONE_TMUX_TEST_UNSIGNED_CANDIDATE" -type f -name '*.tar.gz' | sort)
     $source_binding_found || exit 98
 fi
+"#
+}
+
+fn fake_minisign() -> &'static str {
+    r#"#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "${1:-}" == "-v" ]]; then
+    printf '%s\n' 'minisign 0.11'
+    exit 0
+fi
+exec "$FAKE_REAL_MINISIGN" "$@"
 "#
 }
 

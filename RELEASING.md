@@ -97,7 +97,30 @@ The variable contract is:
 
 - `CANDIDATE_DIRECTORY`: absolute path to the complete signed candidate.
 
-## 4. Sign and publish the aggregate
+## 4. Sign and validate without publication
+
+When a release-validation lane needs canonical aggregate-signing proof without
+touching a GitHub tag, draft, release, asset, or release-state API, use:
+
+```sh
+make sign-validate-release \
+  SOURCE_COMMIT=<exact-commit> \
+  CANDIDATE_DIRECTORY=/absolute/path/to/unsigned-candidate \
+  MINISIGN_SECRET_KEY=/absolute/path/to/out-of-tree-key \
+  SIGNED_CANDIDATE_DIRECTORY=/absolute/path/to/new-signed-candidate
+```
+
+This validates the unsigned aggregate, writes bytewise-sorted `SHA256SUMS`,
+signs and verifies it with the pinned key, validates the exact 13-file signed
+aggregate, and moves it to the new destination. It does not invoke `gh`, inspect
+GitHub, create a tag, or mutate a release surface. The destination must be a new
+absolute directory outside both the source tree and the unsigned candidate.
+
+The signing binary remains pinned to minisign 0.11. Set `MINISIGN_BIN` to an
+absolute executable path only when using a disposable lane-local copy of that
+pinned binary; never change a shared host toolchain just to run this proof.
+
+## 5. Sign and publish the aggregate
 
 Run publication only after all three lane candidates have been collected:
 

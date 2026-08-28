@@ -12,24 +12,44 @@ die() {
     exit 1
 }
 
-if (($# != 3)); then
+mode="publish"
+if [[ "${1:-}" == "--sign-and-validate-only" ]]; then
+    mode="sign-and-validate-only"
+    shift
+fi
+
+if [[ "$mode" == "publish" && $# != 3 ]]; then
     echo "usage: publish-release.sh <source-commit> <unsigned-candidate-directory> <minisign-secret-key>" >&2
+    exit 2
+fi
+if [[ "$mode" == "sign-and-validate-only" && $# != 4 ]]; then
+    echo "usage: publish-release.sh --sign-and-validate-only <source-commit> <unsigned-candidate-directory> <minisign-secret-key> <signed-candidate-directory>" >&2
     exit 2
 fi
 
 source_commit="$1"
 candidate_directory="$2"
 secret_key="$3"
+signed_candidate_directory="${4:-}"
+minisign_bin="${MINISIGN_BIN:-minisign}"
+if [[ -n "${MINISIGN_BIN:-}" && "$minisign_bin" != /* ]]; then
+    die "MINISIGN_BIN must be an absolute executable path"
+fi
 
 required_tools=(
-    awk cargo find gh git grep install jq minisign mktemp realpath rm sed
+    awk basename cargo dirname find git grep install jq mkdir mktemp mv realpath rm sed
     sha256sum sort uniq
 )
+if [[ "$mode" == "publish" ]]; then
+    required_tools+=(gh)
+fi
 for tool in "${required_tools[@]}"; do
     command -v "$tool" >/dev/null 2>&1 ||
         die "required release tool is unavailable: $tool"
 done
-[[ "$(minisign -v 2>&1)" == "minisign 0.11" ]] ||
+command -v "$minisign_bin" >/dev/null 2>&1 ||
+    die "required release tool is unavailable: minisign"
+[[ "$("$minisign_bin" -v 2>&1)" == "minisign 0.11" ]] ||
     die "minisign 0.11 is required"
 
 repo_root="$(git rev-parse --show-toplevel 2>/dev/null)" ||
@@ -50,6 +70,29 @@ candidate_directory="$(realpath "$candidate_directory")" ||
     die "could not resolve the unsigned candidate directory"
 secret_key="$(realpath "$secret_key")" ||
     die "could not resolve the minisign secret key"
+if [[ "$mode" == "sign-and-validate-only" ]]; then
+    [[ "$signed_candidate_directory" = /* ]] ||
+        die "signed candidate directory must be absolute"
+    [[ ! -e "$signed_candidate_directory" && ! -L "$signed_candidate_directory" ]] ||
+        die "signed candidate directory must not already exist"
+    signed_candidate_parent="$(dirname "$signed_candidate_directory")"
+    signed_candidate_leaf="$(basename "$signed_candidate_directory")"
+    [[ "$signed_candidate_leaf" != "." && "$signed_candidate_leaf" != ".." ]] ||
+        die "signed candidate directory name is invalid"
+    [[ -d "$signed_candidate_parent" && ! -L "$signed_candidate_parent" ]] ||
+        die "signed candidate directory parent must be a real directory"
+    signed_candidate_parent="$(realpath "$signed_candidate_parent")" ||
+        die "could not resolve signed candidate directory parent"
+    signed_candidate_directory="$signed_candidate_parent/$signed_candidate_leaf"
+    case "$signed_candidate_directory" in
+        "$repo_root" | "$repo_root"/*)
+            die "signed candidate directory must remain outside the repository"
+            ;;
+        "$candidate_directory" | "$candidate_directory"/*)
+            die "signed candidate directory must not overlap the unsigned candidate"
+            ;;
+    esac
+fi
 case "$secret_key" in
     "$repo_root" | "$repo_root"/*)
         die "minisign secret key must remain outside the repository"
@@ -226,14 +269,14 @@ for name in "${unsigned_names[@]}"; do
         die "could not compute a canonical candidate digest"
     printf '%s  %s\n' "$digest" "$name" >>"$checksum_file"
 done
-minisign -S \
+"$minisign_bin" -S \
     -s "$secret_key" \
     -m "$checksum_file" \
     -x "$publishable/SHA256SUMS.minisig" \
     -c "solstone-tmux release signature" \
     -t "$title SHA256SUMS" ||
     die "could not sign SHA256SUMS"
-minisign -V \
+"$minisign_bin" -V \
     -q \
     -p "$public_key" \
     -m "$checksum_file" \
@@ -246,6 +289,16 @@ assert_exact_files "$publishable" "${publishable_names[@]}"
         cargo test --locked -p solstone-tmux --test release_validator \
         validates_real_complete_set_when_requested -- --exact
 ) || die "complete aggregate candidate validation failed"
+
+if [[ "$mode" == "sign-and-validate-only" ]]; then
+    mkdir -m 0700 "$signed_candidate_directory" ||
+        die "could not reserve signed candidate directory"
+    for name in "${publishable_names[@]}"; do
+        mv "$publishable/$name" "$signed_candidate_directory/$name"
+    done
+    printf '%s\n' "signed candidate validated locally; GitHub and release surfaces were not evaluated"
+    exit 0
+fi
 
 repo_json="$(gh repo view --json nameWithOwner,url,sshUrl)" ||
     die "could not resolve the GitHub repository"
