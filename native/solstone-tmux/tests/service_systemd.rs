@@ -27,7 +27,7 @@ fn systemd_unit_matches_required_sections() {
     let unit = String::from_utf8(bytes).expect("UTF-8 unit");
     assert!(unit.contains(
         "[Unit]\nDescription=Solstone Tmux Observer\nAfter=basic.target\n\
-StartLimitIntervalSec=300\nStartLimitBurst=5\n"
+StartLimitIntervalSec=0\nStartLimitBurst=5\n"
     ));
     assert!(unit.contains(
         "[Service]\nType=simple\nEnvironment=\"PATH=/opt/tmux/bin:/usr/bin:/bin\"\n\

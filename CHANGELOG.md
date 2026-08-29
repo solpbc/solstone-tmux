@@ -4,6 +4,12 @@ All notable changes to solstone-tmux will be documented in this file.
 
 Format adapted from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.0.6] - 2026-08-28
+
+### Fixed
+
+- on linux, solstone-tmux keeps trying to reconnect after a reboot if tmux is not ready yet.
+
 ## [1.0.5] - 2026-08-28
 
 ### Changed

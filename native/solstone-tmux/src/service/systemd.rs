@@ -28,7 +28,7 @@ pub fn render(binary: &Path, service_path: &OsStr) -> Result<Vec<u8>, ServiceErr
         "[Unit]\n\
 Description=Solstone Tmux Observer\n\
 After=basic.target\n\
-StartLimitIntervalSec=300\n\
+StartLimitIntervalSec=0\n\
 StartLimitBurst=5\n\
 \n\
 [Service]\n\
