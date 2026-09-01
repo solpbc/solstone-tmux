@@ -56,6 +56,8 @@ pub struct SyncInstrumentationSnapshot {
     pub candidate_scans: usize,
     pub batches: usize,
     pub batch_yields: usize,
+    /// Points at which sweep progress was published to the health file.
+    pub health_writes: usize,
     pub hashed_files: usize,
     pub hashed_bytes: u64,
 }
@@ -65,6 +67,7 @@ pub struct SyncInstrumentation {
     candidate_scans: Arc<AtomicUsize>,
     batches: Arc<AtomicUsize>,
     batch_yields: Arc<AtomicUsize>,
+    health_writes: Arc<AtomicUsize>,
     hashed_files: Arc<AtomicUsize>,
     hashed_bytes: Arc<AtomicUsize>,
 }
@@ -75,6 +78,7 @@ impl SyncInstrumentation {
             candidate_scans: self.candidate_scans.load(Ordering::Relaxed),
             batches: self.batches.load(Ordering::Relaxed),
             batch_yields: self.batch_yields.load(Ordering::Relaxed),
+            health_writes: self.health_writes.load(Ordering::Relaxed),
             hashed_files: self.hashed_files.load(Ordering::Relaxed),
             hashed_bytes: self.hashed_bytes.load(Ordering::Relaxed) as u64,
         }
@@ -90,6 +94,10 @@ impl SyncInstrumentation {
 
     pub(crate) fn batch_yield(&self) {
         self.batch_yields.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn health_write(&self) {
+        self.health_writes.fetch_add(1, Ordering::Relaxed);
     }
 
     pub(crate) fn hashed_file(&self, bytes: u64) {
@@ -1101,6 +1109,13 @@ impl SyncScheduler {
                     RetentionOutcome::Disabled | RetentionOutcome::Ineligible => {}
                 }
             }
+            // The health file is the only progress signal an operator has, and it
+            // was written once before this loop and once after the sweep. A sweep
+            // of hundreds of candidates therefore held `pending_segments` and
+            // `sync_in_progress` at their starting values for its whole duration,
+            // making a healthy sweep indistinguishable from a wedged one from
+            // outside. Publish after each batch so the count actually moves.
+            self.write_health().await;
             if batch_index + 1 != candidates.chunks(CANDIDATES_PER_BATCH).len() {
                 self.yield_between_batches().await;
                 if shutdown_requested(&mut shutdown) {
@@ -1192,6 +1207,7 @@ impl SyncScheduler {
     }
 
     async fn write_health(&self) {
+        self.instrumentation.health_write();
         if let Some(health) = &self.health {
             let _ = health
                 .write(&self.facts, self.clock.wall_now().unix_timestamp())

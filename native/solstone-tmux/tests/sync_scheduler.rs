@@ -66,6 +66,39 @@ fn one_snapshot_attempts_every_candidate_once_and_yields_between_batches() {
     });
 }
 
+/// The health file is the only progress signal an operator has. It used to be
+/// written once before the batch loop and once after the sweep, so a sweep of
+/// hundreds of candidates held `pending_segments` frozen for its whole duration
+/// and a healthy sweep was indistinguishable from a wedged one.
+#[test]
+fn a_sweep_publishes_progress_after_every_batch_not_only_at_its_boundaries() {
+    paused(async {
+        let temporary = TestDirectory::new("sync-progress-published");
+        for index in 0..17 {
+            create_segment(
+                &temporary,
+                "20260701",
+                &format!("12{index:02}00_300"),
+                b"fixture\n",
+            );
+        }
+        let mut scheduler = scheduler(&temporary, SyncWake::default());
+        let mut journal = FakeJournal::default();
+        scheduler.run_sweep(&mut journal, no_shutdown()).await;
+        let instrumentation = scheduler.instrumentation();
+
+        assert_eq!(instrumentation.batches, 3);
+        // One publish per batch, on top of the sweep's own start/end writes.
+        assert!(
+            instrumentation.health_writes >= instrumentation.batches,
+            "progress published {} times across {} batches -- an operator cannot \
+             tell a working sweep from a stuck one",
+            instrumentation.health_writes,
+            instrumentation.batches
+        );
+    });
+}
+
 #[test]
 fn cached_retained_content_is_not_rehashed_before_required_v3_upload() {
     run(async {
