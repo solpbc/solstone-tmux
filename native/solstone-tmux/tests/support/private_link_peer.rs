@@ -3,6 +3,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::io;
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -103,6 +104,21 @@ pub struct PrivateLinkPeer {
 impl PrivateLinkPeer {
     pub async fn start() -> Self {
         super::authority::verify_client_ingest_authority();
+        Self::start_after_authority_validation(None).await
+    }
+
+    pub async fn start_with_authority_root(
+        repository_root: &Path,
+        bind_attempts: &AtomicUsize,
+    ) -> Result<Self, String> {
+        super::authority::verify_client_ingest_authority_at(repository_root)?;
+        Ok(Self::start_after_authority_validation(Some(bind_attempts)).await)
+    }
+
+    async fn start_after_authority_validation(bind_attempts: Option<&AtomicUsize>) -> Self {
+        if let Some(bind_attempts) = bind_attempts {
+            bind_attempts.fetch_add(1, Ordering::SeqCst);
+        }
         let listener = TcpListener::bind(("127.0.0.1", 0))
             .await
             .expect("bind private-link peer");
