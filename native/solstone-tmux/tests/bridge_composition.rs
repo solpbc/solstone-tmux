@@ -13,6 +13,7 @@ use std::time::Duration;
 
 use reqwest::{Method, StatusCode};
 use solstone_tmux::clock::{Clock, SystemClock};
+use solstone_tmux::config::DEFAULT_SOURCE;
 use solstone_tmux::health::DiagnosticCode;
 use solstone_tmux::journal::{
     INGEST_MANIFEST_DAY_PATH, INGEST_MANIFEST_PATH, INGEST_SEGMENTS_PATH,
@@ -115,14 +116,14 @@ fn journal_response_body_limit_applies_to_success_and_error_responses() {
         peer.enqueue_response(200, oversized.clone());
         let error = session
             .journal()
-            .ingest_manifest_day("20260815")
+            .ingest_manifest_day("20260815", DEFAULT_SOURCE)
             .await
             .expect_err("oversized successful day manifest accepted");
         assert_eq!(error.diagnostic(), DiagnosticCode::JournalResponseTooLarge);
         peer.enqueue_response(403, oversized);
         let error = session
             .journal()
-            .ingest_manifest()
+            .ingest_manifest(DEFAULT_SOURCE)
             .await
             .expect_err("oversized error manifest accepted");
         assert_eq!(error.diagnostic(), DiagnosticCode::JournalResponseTooLarge);
@@ -141,8 +142,19 @@ fn linked_device_session_composes_on_the_production_runtime_shape() {
             .await
             .expect("linked-device session");
         peer.enqueue_response(200, br#"{"days":{}}"#.to_vec());
-        session.journal().ingest_manifest().await.expect("manifest");
-        assert_eq!(peer.requests()[0].path(), INGEST_MANIFEST_PATH);
+        session
+            .journal()
+            .ingest_manifest(DEFAULT_SOURCE)
+            .await
+            .expect("manifest");
+        assert_eq!(
+            peer.requests()[0].path_without_query(),
+            INGEST_MANIFEST_PATH
+        );
+        assert_eq!(
+            peer.requests()[0].query_param("source"),
+            Some(DEFAULT_SOURCE)
+        );
         session.shutdown().await.expect("shutdown");
         peer.shutdown().await;
     });
@@ -172,7 +184,7 @@ fn v3_routes_refuse_unconfined_day_values() {
         assert!(
             session
                 .journal()
-                .ingest_manifest_day("20260815?foreign")
+                .ingest_manifest_day("20260815?foreign", DEFAULT_SOURCE)
                 .await
                 .is_err()
         );
@@ -220,7 +232,7 @@ fn slow_large_multipart_preserves_capture_on_the_production_runtime() {
         let mut upload = Box::pin(
             session
             .journal()
-            .ingest_upload("20260815", "143000_1", vec![capture.clone()]),
+            .ingest_upload("20260815", "143000_1", vec![capture.clone()], DEFAULT_SOURCE),
         );
         tokio::time::timeout(Duration::from_secs(5), async {
             tokio::select! {

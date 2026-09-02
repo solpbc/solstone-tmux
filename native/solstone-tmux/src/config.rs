@@ -7,7 +7,8 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
+use serde_json::Value;
 
 use crate::name::{DerivedName, NameError, derive_component};
 
@@ -15,6 +16,8 @@ pub const CONFIG_FILENAME: &str = "config.json";
 pub const DEFAULT_CAPTURE_INTERVAL_SECONDS: u64 = 5;
 pub const DEFAULT_SEGMENT_INTERVAL_SECONDS: u64 = 300;
 pub const DEFAULT_CACHE_RETENTION_DAYS: i64 = 7;
+pub const DEFAULT_SOURCE: &str = "tmux";
+const MAX_SOURCE_BYTES: usize = 64;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RuntimeConfig {
@@ -23,6 +26,7 @@ pub struct RuntimeConfig {
     pub segment_interval: Duration,
     pub cache_retention_days: i64,
     pub status_indicator: bool,
+    pub source: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -33,6 +37,42 @@ pub(crate) struct ConfigFile {
     segment_interval: u64,
     cache_retention_days: i64,
     status_indicator: bool,
+    #[serde(default, skip_serializing_if = "OptionalJson::is_absent")]
+    source: OptionalJson,
+}
+
+#[derive(Debug, Default)]
+enum OptionalJson {
+    #[default]
+    Absent,
+    Present(Value),
+}
+
+impl OptionalJson {
+    fn is_absent(&self) -> bool {
+        matches!(self, Self::Absent)
+    }
+}
+
+impl<'de> Deserialize<'de> for OptionalJson {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Ok(Self::Present(Value::deserialize(deserializer)?))
+    }
+}
+
+impl Serialize for OptionalJson {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            Self::Absent => serializer.serialize_none(),
+            Self::Present(value) => value.serialize(serializer),
+        }
+    }
 }
 
 impl Default for ConfigFile {
@@ -43,6 +83,7 @@ impl Default for ConfigFile {
             segment_interval: DEFAULT_SEGMENT_INTERVAL_SECONDS,
             cache_retention_days: DEFAULT_CACHE_RETENTION_DAYS,
             status_indicator: true,
+            source: OptionalJson::Absent,
         }
     }
 }
@@ -106,6 +147,7 @@ impl RuntimeConfig {
                 derive_component(&identity)
                     .map_err(|source| ConfigError::InvalidStream { identity, source })
             })?;
+        let source = configured_source(&file.source)?;
 
         Ok(Self {
             stream,
@@ -113,8 +155,33 @@ impl RuntimeConfig {
             segment_interval: Duration::from_secs(file.segment_interval),
             cache_retention_days: file.cache_retention_days,
             status_indicator: file.status_indicator,
+            source,
         })
     }
+}
+
+fn configured_source(value: &OptionalJson) -> Result<String, ConfigError> {
+    match value {
+        OptionalJson::Absent => Ok(DEFAULT_SOURCE.to_owned()),
+        OptionalJson::Present(Value::String(source)) if is_configured_source(source) => {
+            Ok(source.clone())
+        }
+        OptionalJson::Present(_) => Err(ConfigError::InvalidSource),
+    }
+}
+
+fn is_configured_source(source: &str) -> bool {
+    if source.is_empty() || source.len() > MAX_SOURCE_BYTES {
+        return false;
+    }
+    let mut bytes = source.bytes();
+    let Some(first) = bytes.next() else {
+        return false;
+    };
+    (first.is_ascii_lowercase() || first.is_ascii_digit())
+        && bytes.all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'-')
+        })
 }
 
 pub fn system_hostname() -> Result<String, ConfigError> {
@@ -187,6 +254,7 @@ pub enum ConfigError {
     InvalidInterval {
         field: &'static str,
     },
+    InvalidSource,
     InvalidHostname(String),
     Io {
         operation: &'static str,
@@ -216,6 +284,10 @@ impl fmt::Display for ConfigError {
                 formatter,
                 "native config {field} must be greater than zero seconds"
             ),
+            Self::InvalidSource => write!(
+                formatter,
+                "native config source must be a nonempty string matching [a-z0-9][a-z0-9_-]* and at most 64 bytes; update source in config.json"
+            ),
             Self::InvalidHostname(detail) => write!(
                 formatter,
                 "could not derive the default native stream from this hostname: {detail}; set stream in config.json"
@@ -234,3 +306,17 @@ impl fmt::Display for ConfigError {
 }
 
 impl std::error::Error for ConfigError {}
+
+#[cfg(test)]
+mod tests {
+    use super::ConfigFile;
+
+    #[test]
+    fn source_free_config_serialization_omits_the_source_key() {
+        let bytes = serde_json::to_vec(&ConfigFile::default()).expect("serialize default config");
+        assert_eq!(
+            bytes,
+            br#"{"stream":null,"capture_interval":5,"segment_interval":300,"cache_retention_days":7,"status_indicator":true}"#
+        );
+    }
+}

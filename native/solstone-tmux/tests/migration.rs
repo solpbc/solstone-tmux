@@ -222,6 +222,41 @@ fn invalid_legacy_settings_leave_both_locations_unchanged() {
 }
 
 #[test]
+fn legacy_source_key_is_refused_without_writing_native_config() {
+    for (label, body) in [
+        (
+            "valid",
+            br#"{"stream":"extro.tmux","source":"tmux"}"#.as_slice(),
+        ),
+        (
+            "empty",
+            br#"{"stream":"extro.tmux","source":""}"#.as_slice(),
+        ),
+        (
+            "null",
+            br#"{"stream":"extro.tmux","source":null}"#.as_slice(),
+        ),
+        (
+            "number",
+            br#"{"stream":"extro.tmux","source":1}"#.as_slice(),
+        ),
+    ] {
+        let fixture = MigrationFixture::new(&format!("migration-legacy-source-{label}"));
+        fixture.write_legacy(body);
+        let before = FileSnapshot::at(&fixture.legacy_path());
+
+        let error = fixture.migrate_error("ignored.example");
+
+        assert!(
+            error.starts_with("legacy settings include source, which cannot be imported into"),
+            "{label}: {error}"
+        );
+        assert_eq!(FileSnapshot::at(&fixture.legacy_path()), before);
+        assert!(!fixture.native_path().exists());
+    }
+}
+
+#[test]
 fn symlink_special_and_unreadable_legacy_settings_are_refused_unchanged() {
     let symlink_fixture = MigrationFixture::new("migration-legacy-symlink");
     let referent = symlink_fixture.data_root.join("legacy-referent");

@@ -173,7 +173,11 @@ fn production_failure_paths_redact_secrets_and_owner_content() {
             .expect("start redaction session");
 
         peer.enqueue_response(200, RESPONSE_BODY_SENTINEL.as_bytes());
-        let response_error = match owner.journal().ingest_segments("20260728").await {
+        let response_error = match owner
+            .journal()
+            .ingest_segments("20260728", solstone_tmux::config::DEFAULT_SOURCE)
+            .await
+        {
             Err(error) => error,
             Ok(_) => panic!("malformed response was accepted"),
         };
@@ -185,7 +189,12 @@ fn production_failure_paths_redact_secrets_and_owner_content() {
         let capture_path = temporary.path().join(CAPTURE_PATH_SENTINEL);
         let path_error = match owner
             .journal()
-            .ingest_upload("20260728", "120000_300", vec![capture_path])
+            .ingest_upload(
+                "20260728",
+                "120000_300",
+                vec![capture_path],
+                solstone_tmux::config::DEFAULT_SOURCE,
+            )
             .await
         {
             Err(error) => error,

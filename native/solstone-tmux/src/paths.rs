@@ -18,6 +18,15 @@ pub enum PlatformKind {
     Macos,
 }
 
+impl PlatformKind {
+    pub const fn pairing_platform(self) -> &'static str {
+        match self {
+            Self::Linux => "linux",
+            Self::Macos => "macos",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PlatformPaths {
     pub data_root: PathBuf,

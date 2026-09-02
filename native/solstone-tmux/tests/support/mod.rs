@@ -3,6 +3,7 @@
 
 #![allow(dead_code)]
 
+pub mod pairing_peer;
 pub mod private_link_peer;
 
 use std::collections::{HashMap, VecDeque};

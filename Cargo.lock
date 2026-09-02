@@ -1284,6 +1284,7 @@ dependencies = [
  "ar",
  "flate2",
  "futures-core",
+ "futures-util",
  "minisign-verify",
  "rcgen",
  "reqwest",
@@ -1298,6 +1299,7 @@ dependencies = [
  "time",
  "tokio",
  "tokio-rustls",
+ "tokio-tungstenite",
 ]
 
 [[package]]

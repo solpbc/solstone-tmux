@@ -6,18 +6,17 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
-use serde_json::Value;
 use sha2::{Digest, Sha256};
-use solstone_tmux::journal::{
-    INGEST_MANIFEST_DAY_PATH, INGEST_MANIFEST_PATH, INGEST_PATH, INGEST_SEGMENTS_PATH,
-};
 
 const AUTHORITY_REPOSITORY: &str = "https://github.com/solpbc/solstone-journal";
 const AUTHORITY_COMMIT: &str = "460c0c3511ebe29b65fe93f99d2f77c6a1eaa658";
-const BUNDLE_VERSION: &str = "10.0.0";
+const AUTHORITY_CREATION_COMMIT: &str = "c1e9589e60213b39042b92cae94a5d2f0448535e";
+const BUNDLE_VERSION: &str = "1.0.0";
 const MANIFEST_PATH: &str = "manifest.json";
-const VENDORED_ROOT: &str = "native/solstone-tmux/vendor/observer-client-contract";
-const IMPORT_PATH: &str = "contracts/observer-client-import.json";
+const AUTHORITY_INPUT_SHA256: &str =
+    "34a0ca85485e7fbdeb8397fb33a1d0fb6e6d3845d85d0a7f8219dfd335affdda";
+const VENDORED_ROOT: &str = "native/solstone-tmux/vendor/pairing-contract";
+const IMPORT_PATH: &str = "contracts/pairing-contract-import.json";
 const CONTRACT_FILES: [&str; 4] = [
     "consumer-audit.json",
     "fixtures/wire-behavior.json",
@@ -30,21 +29,30 @@ const CONTRACT_FILES: [&str; 4] = [
 struct ImportProvenance {
     authority_repository: String,
     authority_commit: String,
+    authority_creation_commit: String,
     bundle_version: String,
     manifest_path: String,
     manifest_sha256: String,
+    authority_input_sha256: String,
     vendored_root: String,
 }
 
 #[derive(Deserialize)]
 struct Manifest {
+    bundle_semver: String,
     files: Vec<ManifestFile>,
+    generator_inputs: Vec<GeneratorInput>,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ManifestFile {
     path: String,
+    sha256: String,
+}
+
+#[derive(Deserialize)]
+struct GeneratorInput {
     sha256: String,
 }
 
@@ -62,8 +70,13 @@ fn vendored_contract_matches_provenance() {
 
     assert_eq!(provenance.authority_repository, AUTHORITY_REPOSITORY);
     assert_eq!(provenance.authority_commit, AUTHORITY_COMMIT);
+    assert_eq!(
+        provenance.authority_creation_commit,
+        AUTHORITY_CREATION_COMMIT
+    );
     assert_eq!(provenance.bundle_version, BUNDLE_VERSION);
     assert_eq!(provenance.manifest_path, MANIFEST_PATH);
+    assert_eq!(provenance.authority_input_sha256, AUTHORITY_INPUT_SHA256);
     assert_eq!(provenance.vendored_root, VENDORED_ROOT);
 
     let vendored_root = repository_root.join(&provenance.vendored_root);
@@ -77,6 +90,10 @@ fn vendored_contract_matches_provenance() {
 
     let manifest: Manifest =
         serde_json::from_slice(&manifest_bytes).expect("parse vendored manifest");
+    assert_eq!(
+        manifest.bundle_semver, BUNDLE_VERSION,
+        "vendored manifest SemVer differs from pinned fact"
+    );
     let expected = CONTRACT_FILES.into_iter().collect::<BTreeSet<_>>();
     let listed = manifest
         .files
@@ -89,6 +106,15 @@ fn vendored_contract_matches_provenance() {
         "manifest contract file count differs"
     );
     assert_eq!(listed, expected, "manifest contract file inventory differs");
+    assert_eq!(
+        manifest.generator_inputs.len(),
+        1,
+        "pairing authority input count differs"
+    );
+    assert_eq!(
+        manifest.generator_inputs[0].sha256, AUTHORITY_INPUT_SHA256,
+        "vendored manifest authority-input digest differs from pinned fact"
+    );
 
     for entry in &manifest.files {
         let bytes = fs::read(vendored_root.join(&entry.path)).expect("read vendored contract file");
@@ -110,52 +136,6 @@ fn vendored_contract_matches_provenance() {
         actual, expected_with_manifest,
         "vendored contract directory inventory differs"
     );
-}
-
-#[test]
-fn projection_has_only_v3_ingest_operations_and_no_v2_write_route() {
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let repository_root = manifest_dir
-        .parent()
-        .and_then(Path::parent)
-        .expect("native crate has repository root");
-    let projection: Value = serde_json::from_slice(
-        &fs::read(
-            repository_root
-                .join(VENDORED_ROOT)
-                .join("projection.openapi.json"),
-        )
-        .expect("read vendored projection"),
-    )
-    .expect("parse vendored projection");
-
-    let mut actual = BTreeSet::new();
-    for (path, path_item) in projection["paths"]
-        .as_object()
-        .expect("projection paths are an object")
-    {
-        for (method, operation) in path_item.as_object().expect("path item is an object") {
-            if let Some(operation_id) = operation["operationId"].as_str() {
-                actual.insert((method.as_str(), path.as_str(), operation_id));
-            }
-        }
-    }
-    let expected = BTreeSet::from([
-        ("post", INGEST_PATH, "client.ingestUpload"),
-        ("get", INGEST_MANIFEST_PATH, "client.ingestManifest"),
-        ("get", INGEST_MANIFEST_DAY_PATH, "client.ingestManifestDay"),
-        ("get", INGEST_SEGMENTS_PATH, "client.ingestSegments"),
-    ]);
-    assert_eq!(actual, expected, "projection operation set differs from v3");
-
-    for source in collect_rust_files(&manifest_dir.join("src")) {
-        let contents = fs::read_to_string(&source).expect("read shipping source");
-        assert!(
-            !contents.contains("/app/observer/ingest"),
-            "shipping source retains v2 observer-ingest write route: {}",
-            source.display()
-        );
-    }
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -186,18 +166,4 @@ fn collect_vendored_files(root: &Path, directory: &Path, files: &mut BTreeSet<St
             );
         }
     }
-}
-
-fn collect_rust_files(directory: &Path) -> Vec<PathBuf> {
-    let mut files = Vec::new();
-    for entry in fs::read_dir(directory).expect("read source directory") {
-        let entry = entry.expect("read source directory entry");
-        let file_type = entry.file_type().expect("inspect source entry");
-        if file_type.is_dir() {
-            files.extend(collect_rust_files(&entry.path()));
-        } else if file_type.is_file() && entry.path().extension().is_some_and(|ext| ext == "rs") {
-            files.push(entry.path());
-        }
-    }
-    files
 }

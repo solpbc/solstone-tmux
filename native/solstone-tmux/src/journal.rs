@@ -239,6 +239,7 @@ struct PreparedFile {
 struct UploadEnvelope {
     day: String,
     segment: String,
+    source: String,
     files: Vec<UploadEnvelopeFile>,
 }
 
@@ -417,11 +418,21 @@ impl JournalClient {
         Ok(self.client.request(method, url).timeout(REQUEST_TIMEOUT))
     }
 
+    fn ingest_request(
+        &self,
+        method: Method,
+        path: &str,
+        source: &str,
+    ) -> Result<reqwest::RequestBuilder, DiagnosticCode> {
+        Ok(self.request(method, path)?.query(&[("source", source)]))
+    }
+
     pub async fn ingest_upload(
         &self,
         day: &str,
         segment: &str,
         paths: Vec<PathBuf>,
+        source: &str,
     ) -> Result<UploadResult, JournalError> {
         if !valid_day(day) || !valid_component(segment) || paths.is_empty() {
             return Err(JournalError::local(DiagnosticCode::LocalSegmentInvalid));
@@ -432,6 +443,7 @@ impl JournalClient {
         let mut envelope = UploadEnvelope {
             day: day.to_owned(),
             segment: segment.to_owned(),
+            source: source.to_owned(),
             files: Vec::with_capacity(prepared.len()),
         };
         let mut upload_files = Vec::with_capacity(prepared.len());
@@ -474,7 +486,7 @@ impl JournalClient {
         }
 
         let request = self
-            .request(Method::POST, INGEST_PATH)?
+            .ingest_request(Method::POST, INGEST_PATH, source)?
             .multipart(form)
             .build()
             .map_err(|_| JournalError::local(DiagnosticCode::LocalSegmentInvalid))?;
@@ -506,9 +518,9 @@ impl JournalClient {
         decode_upload_response(&body)
     }
 
-    pub async fn ingest_manifest(&self) -> Result<IngestManifest, JournalError> {
+    pub async fn ingest_manifest(&self, source: &str) -> Result<IngestManifest, JournalError> {
         let response = self
-            .request(Method::GET, INGEST_MANIFEST_PATH)?
+            .ingest_request(Method::GET, INGEST_MANIFEST_PATH, source)?
             .send()
             .await
             .map_err(|error| {
@@ -525,13 +537,17 @@ impl JournalClient {
         decode_manifest_response(&body)
     }
 
-    pub async fn ingest_manifest_day(&self, day: &str) -> Result<IngestDayManifest, JournalError> {
+    pub async fn ingest_manifest_day(
+        &self,
+        day: &str,
+        source: &str,
+    ) -> Result<IngestDayManifest, JournalError> {
         if !valid_day(day) {
             return Err(JournalError::local(DiagnosticCode::LocalSegmentInvalid));
         }
         let path = INGEST_MANIFEST_DAY_PATH.replace("{day}", day);
         let response = self
-            .request(Method::GET, &path)?
+            .ingest_request(Method::GET, &path, source)?
             .send()
             .await
             .map_err(|error| {
@@ -548,13 +564,17 @@ impl JournalClient {
         decode_manifest_day_response(&body, day)
     }
 
-    pub async fn ingest_segments(&self, day: &str) -> Result<SegmentsEnvelope, JournalError> {
+    pub async fn ingest_segments(
+        &self,
+        day: &str,
+        source: &str,
+    ) -> Result<SegmentsEnvelope, JournalError> {
         if !valid_day(day) {
             return Err(JournalError::local(DiagnosticCode::LocalSegmentInvalid));
         }
         let path = INGEST_SEGMENTS_PATH.replace("{day}", day);
         let response = self
-            .request(Method::GET, &path)?
+            .ingest_request(Method::GET, &path, source)?
             .send()
             .await
             .map_err(|error| {

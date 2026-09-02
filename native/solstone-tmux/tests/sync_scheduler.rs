@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use solstone_tmux::clock::{Clock, TestClock};
+use solstone_tmux::config::DEFAULT_SOURCE;
 use solstone_tmux::health::{DiagnosticCode, HEALTH_FILENAME, HealthWriter};
 use solstone_tmux::instance_lock::InstanceLock;
 use solstone_tmux::journal::{
@@ -311,6 +312,7 @@ fn retention_uses_fresh_proof_then_deletes_and_evicts_the_cached_inventory() {
         let mut scheduler = SyncScheduler::new(
             temporary.path().join("captures"),
             stream(),
+            DEFAULT_SOURCE.to_owned(),
             0,
             clock(),
             SyncWake::default(),
@@ -371,6 +373,7 @@ fn retention_requires_batch_fresh_proof_and_keeps_a_changed_mismatched_segment()
         let mut scheduler = SyncScheduler::new(
             temporary.path().join("captures"),
             stream(),
+            DEFAULT_SOURCE.to_owned(),
             0,
             clock(),
             SyncWake::default(),
@@ -1049,6 +1052,7 @@ fn startup_finalization_and_periodic_wakes_converge_on_a_rescan() {
         let mut scheduler = SyncScheduler::new(
             temporary.path().join("captures"),
             stream(),
+            DEFAULT_SOURCE.to_owned(),
             -1,
             clock.clone() as Arc<dyn Clock>,
             wake.clone(),
@@ -1105,6 +1109,7 @@ fn one_backoff_owner_advances_holds_resets_and_never_stops_capture() {
         let mut scheduler = SyncScheduler::new(
             temporary.path().join("captures"),
             stream(),
+            DEFAULT_SOURCE.to_owned(),
             -1,
             clock.clone() as Arc<dyn Clock>,
             wake.clone(),
@@ -1223,6 +1228,7 @@ fn a_retained_candidate_keeps_operator_visible_error_truth() {
         let mut scheduler = SyncScheduler::new(
             temporary.path().join("captures"),
             stream(),
+            DEFAULT_SOURCE.to_owned(),
             0,
             clock(),
             SyncWake::default(),
@@ -1265,6 +1271,7 @@ fn health_distinguishes_contact_from_custody_and_decrements_deleted_work() {
         let mut scheduler = SyncScheduler::new(
             deleted.path().join("captures"),
             stream(),
+            DEFAULT_SOURCE.to_owned(),
             0,
             clock(),
             SyncWake::default(),
@@ -1293,6 +1300,7 @@ fn health_distinguishes_contact_from_custody_and_decrements_deleted_work() {
         let mut scheduler = SyncScheduler::new(
             retained.path().join("captures"),
             stream(),
+            DEFAULT_SOURCE.to_owned(),
             0,
             clock(),
             SyncWake::default(),
@@ -1336,6 +1344,164 @@ fn poison_segment_does_not_block_a_later_valid_candidate() {
         );
         scheduler.run_sweep(&mut journal, no_shutdown()).await;
         assert!(journal.uploads().contains(&"120000_300".to_owned()));
+    });
+}
+
+#[test]
+fn empty_candidate_manifest_contact_uses_the_resolved_source() {
+    run(async {
+        let temporary = TestDirectory::new("sync-empty-source");
+        let mut scheduler = scheduler(&temporary, SyncWake::default());
+        let mut journal = FakeJournal::default();
+        let summary = scheduler.run_sweep(&mut journal, no_shutdown()).await;
+        assert_eq!(summary.attempted, 0);
+        assert!(summary.contacted);
+        assert_eq!(journal.calls, vec![Call::Manifest]);
+        journal.assert_sources(DEFAULT_SOURCE);
+    });
+}
+
+#[test]
+fn default_source_sweep_custodies_and_unlinks_a_retention_candidate() {
+    run(async {
+        let temporary = TestDirectory::new("sync-default-source-retention");
+        ensure_private_directory(temporary.path()).expect("prepare data root");
+        create_segment(&temporary, "20260701", "120000_300", b"fixture\n");
+        let lock = InstanceLock::acquire(temporary.path()).expect("instance lock");
+        let health = HealthWriter::new(temporary.path().to_path_buf(), &lock);
+        let (activity, _activity_receiver) = watch::channel(SyncActivity::Idle);
+        let (stop, shutdown) = watch::channel(false);
+        let mut scheduler =
+            scheduler_with_source(&temporary, SyncWake::default(), DEFAULT_SOURCE, 0)
+                .with_observability(activity, health);
+        let mut journal = FakeJournal::default();
+        let task = tokio::spawn(async move {
+            scheduler.run_with_shutdown(&mut journal, shutdown).await;
+            journal
+        });
+        let snapshot = wait_for_idle_snapshot(temporary.path()).await;
+        stop.send_replace(true);
+        let journal = task.await.expect("join scheduler");
+
+        assert_eq!(snapshot["pending_segments"], 0);
+        assert!(!snapshot["last_successful_contact_unix_seconds"].is_null());
+        assert!(!snapshot["last_successful_sync_unix_seconds"].is_null());
+        assert!(!segment_path(&temporary, "20260701", "120000_300").exists());
+        journal.assert_sources(DEFAULT_SOURCE);
+    });
+}
+
+#[test]
+fn configured_source_sweep_sends_the_exact_source_on_every_call() {
+    run(async {
+        let temporary = TestDirectory::new("sync-configured-source");
+        ensure_private_directory(temporary.path()).expect("prepare data root");
+        create_segment(&temporary, "20260701", "120000_300", b"fixture\n");
+        let lock = InstanceLock::acquire(temporary.path()).expect("instance lock");
+        let health = HealthWriter::new(temporary.path().to_path_buf(), &lock);
+        let (activity, _activity_receiver) = watch::channel(SyncActivity::Idle);
+        let (stop, shutdown) = watch::channel(false);
+        let mut scheduler = scheduler_with_source(&temporary, SyncWake::default(), "studio", 0)
+            .with_observability(activity, health);
+        let mut journal = FakeJournal::default();
+        let task = tokio::spawn(async move {
+            scheduler.run_with_shutdown(&mut journal, shutdown).await;
+            journal
+        });
+        let snapshot = wait_for_idle_snapshot(temporary.path()).await;
+        stop.send_replace(true);
+        let journal = task.await.expect("join scheduler");
+
+        assert_eq!(snapshot["pending_segments"], 0);
+        assert!(!snapshot["last_successful_sync_unix_seconds"].is_null());
+        assert!(!segment_path(&temporary, "20260701", "120000_300").exists());
+        journal.assert_sources("studio");
+    });
+}
+
+#[test]
+fn source_mismatch_does_not_custody_or_unlink() {
+    run(async {
+        let temporary = TestDirectory::new("sync-source-mismatch");
+        ensure_private_directory(temporary.path()).expect("prepare data root");
+        create_segment(&temporary, "20260701", "120000_300", b"fixture\n");
+        let files = inventory_files(
+            vec![segment_path(&temporary, "20260701", "120000_300").join(FILE)],
+            None,
+        )
+        .await
+        .expect("inventory fixture");
+        let mut journal = FakeJournal {
+            evidence_for: Some(String::new()),
+            ..FakeJournal::default()
+        };
+        journal
+            .remote
+            .entry("20260701".to_owned())
+            .or_default()
+            .insert("120000_300".to_owned(), files);
+        let lock = InstanceLock::acquire(temporary.path()).expect("instance lock");
+        let health = HealthWriter::new(temporary.path().to_path_buf(), &lock);
+        let (activity, _activity_receiver) = watch::channel(SyncActivity::Idle);
+        let (stop, shutdown) = watch::channel(false);
+        let mut scheduler = scheduler_with_source(&temporary, SyncWake::default(), "studio", 0)
+            .with_observability(activity, health);
+        let segment = segment_path(&temporary, "20260701", "120000_300");
+        let before = snapshot_segment_bytes(&segment);
+        let task = tokio::spawn(async move {
+            scheduler.run_with_shutdown(&mut journal, shutdown).await;
+            journal
+        });
+        let snapshot = wait_for_idle_snapshot(temporary.path()).await;
+        stop.send_replace(true);
+        let journal = task.await.expect("join scheduler");
+
+        assert_eq!(snapshot["pending_segments"], 1);
+        assert!(!snapshot["last_successful_contact_unix_seconds"].is_null());
+        assert!(snapshot["last_successful_sync_unix_seconds"].is_null());
+        assert_segment_bytes_unchanged(&segment, &before);
+        journal.assert_sources("studio");
+    });
+}
+
+#[test]
+fn predates_source_configuration_only_deletes_on_matching_configured_source() {
+    run(async {
+        let temporary = TestDirectory::new("sync-predates-source");
+        create_segment(&temporary, "20260701", "120000_300", b"fixture\n");
+        let files = inventory_files(
+            vec![segment_path(&temporary, "20260701", "120000_300").join(FILE)],
+            None,
+        )
+        .await
+        .expect("inventory fixture");
+        let mut journal = FakeJournal::default();
+        journal
+            .remote
+            .entry("20260701".to_owned())
+            .or_default()
+            .insert("120000_300".to_owned(), files);
+        let mut scheduler = scheduler_with_source(&temporary, SyncWake::default(), "studio", 0);
+        let summary = scheduler.run_sweep(&mut journal, no_shutdown()).await;
+
+        assert_eq!(summary.custodied, 1);
+        assert!(!segment_path(&temporary, "20260701", "120000_300").exists());
+        assert!(journal.remote.contains_key("20260701"));
+        journal.assert_sources("studio");
+    });
+}
+
+#[test]
+fn local_stream_paths_stay_independent_of_configured_source() {
+    run(async {
+        let temporary = TestDirectory::new("sync-stream-vs-source");
+        create_segment(&temporary, "20260701", "120000_300", b"fixture\n");
+        let mut scheduler = scheduler_with_source(&temporary, SyncWake::default(), "studio", -1);
+        let mut journal = FakeJournal::default();
+        scheduler.run_sweep(&mut journal, no_shutdown()).await;
+
+        assert!(segment_path(&temporary, "20260701", "120000_300").is_dir());
+        journal.assert_sources("studio");
     });
 }
 
@@ -1406,10 +1572,20 @@ async fn wait_for_idle_snapshot(root: &Path) -> serde_json::Value {
 }
 
 fn scheduler(temporary: &TestDirectory, wake: SyncWake) -> SyncScheduler {
+    scheduler_with_source(temporary, wake, DEFAULT_SOURCE, -1)
+}
+
+fn scheduler_with_source(
+    temporary: &TestDirectory,
+    wake: SyncWake,
+    source: &str,
+    retention_days: i64,
+) -> SyncScheduler {
     SyncScheduler::new(
         temporary.path().join("captures"),
         stream(),
-        -1,
+        source.to_owned(),
+        retention_days,
         clock(),
         wake,
     )
@@ -1489,6 +1665,8 @@ fn assert_segment_bytes_unchanged(segment: &Path, before: &BTreeMap<PathBuf, Vec
 #[derive(Default)]
 struct FakeJournal {
     calls: Vec<Call>,
+    sources: Vec<String>,
+    evidence_for: Option<String>,
     remote: HashMap<String, HashMap<String, Vec<LocalFile>>>,
     list_outcomes: HashMap<String, VecDeque<Result<SegmentsEnvelope, SyncOperationError>>>,
     upload_outcomes: HashMap<String, VecDeque<Result<UploadResult, SyncOperationError>>>,
@@ -1518,6 +1696,29 @@ impl FakeJournal {
     }
     fn clear_calls(&mut self) {
         self.calls.clear();
+        self.sources.clear();
+    }
+
+    fn record_source(&mut self, source: &str) {
+        self.sources.push(source.to_owned());
+    }
+
+    fn evidence_visible(&self, source: &str) -> bool {
+        self.evidence_for
+            .as_deref()
+            .is_none_or(|expected| expected == source)
+    }
+
+    fn assert_sources(&self, expected: &str) {
+        assert!(
+            !self.sources.is_empty(),
+            "journal received no source-bearing calls"
+        );
+        assert!(
+            self.sources.iter().all(|source| source == expected),
+            "journal sources {:?} did not all equal {expected}",
+            self.sources
+        );
     }
 
     fn uploads(&self) -> Vec<String> {
@@ -1565,8 +1766,10 @@ impl SyncJournal for FakeJournal {
         &'a mut self,
         candidate: &'a SegmentCandidate,
         files: Vec<PathBuf>,
+        source: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<UploadResult, SyncOperationError>> + Send + 'a>> {
         Box::pin(async move {
+            self.record_source(source);
             self.calls
                 .push(Call::Upload(candidate.segment().to_owned()));
             if let Some(outcome) = self
@@ -1579,10 +1782,12 @@ impl SyncJournal for FakeJournal {
             let inventory = inventory_files(files, None).await.map_err(|_| {
                 SyncOperationError::RetainCandidate(DiagnosticCode::LocalSegmentInvalid)
             })?;
-            self.remote
-                .entry(candidate.day().to_owned())
-                .or_default()
-                .insert(candidate.segment().to_owned(), inventory);
+            if self.evidence_visible(source) {
+                self.remote
+                    .entry(candidate.day().to_owned())
+                    .or_default()
+                    .insert(candidate.segment().to_owned(), inventory);
+            }
             Ok(UploadResult {
                 status: UploadStatus::Ok,
                 authoritative_key: Some(candidate.segment().to_owned()),
@@ -1593,10 +1798,15 @@ impl SyncJournal for FakeJournal {
     fn segments<'a>(
         &'a mut self,
         day: &'a str,
+        source: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<SegmentsEnvelope, SyncOperationError>> + Send + 'a>>
     {
         Box::pin(async move {
+            self.record_source(source);
             self.calls.push(Call::Listing(day.to_owned()));
+            if !self.evidence_visible(source) {
+                return Ok(empty_listing());
+            }
             if let Some(outcome) = self
                 .list_outcomes
                 .get_mut(day)
@@ -1635,9 +1845,16 @@ impl SyncJournal for FakeJournal {
 
     fn manifest<'a>(
         &'a mut self,
+        source: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<IngestManifest, SyncOperationError>> + Send + 'a>> {
         Box::pin(async move {
+            self.record_source(source);
             self.calls.push(Call::Manifest);
+            if !self.evidence_visible(source) {
+                return Ok(IngestManifest {
+                    days: HashMap::new().into_iter().collect(),
+                });
+            }
             Ok(IngestManifest {
                 days: self
                     .remote
@@ -1658,10 +1875,19 @@ impl SyncJournal for FakeJournal {
     fn manifest_day<'a>(
         &'a mut self,
         day: &'a str,
+        source: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<IngestDayManifest, SyncOperationError>> + Send + 'a>>
     {
         Box::pin(async move {
+            self.record_source(source);
             self.calls.push(Call::ManifestDay(day.to_owned()));
+            if !self.evidence_visible(source) {
+                return Ok(IngestDayManifest {
+                    version: 1,
+                    day: day.to_owned(),
+                    segments: HashMap::new().into_iter().collect(),
+                });
+            }
             Ok(IngestDayManifest {
                 version: 1,
                 day: day.to_owned(),
@@ -1703,6 +1929,7 @@ impl SyncJournal for BackoffJournal {
         &'a mut self,
         _candidate: &'a SegmentCandidate,
         _files: Vec<PathBuf>,
+        _source: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<UploadResult, SyncOperationError>> + Send + 'a>> {
         Box::pin(async { unreachable!("backoff fixture scans no candidates") })
     }
@@ -1710,6 +1937,7 @@ impl SyncJournal for BackoffJournal {
     fn segments<'a>(
         &'a mut self,
         _day: &'a str,
+        _source: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<SegmentsEnvelope, SyncOperationError>> + Send + 'a>>
     {
         Box::pin(async move {
@@ -1722,6 +1950,7 @@ impl SyncJournal for BackoffJournal {
 
     fn manifest<'a>(
         &'a mut self,
+        _source: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<IngestManifest, SyncOperationError>> + Send + 'a>> {
         Box::pin(async move {
             let _ = self.listings.send(());
@@ -1741,6 +1970,7 @@ impl SyncJournal for BackoffJournal {
     fn manifest_day<'a>(
         &'a mut self,
         day: &'a str,
+        _source: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<IngestDayManifest, SyncOperationError>> + Send + 'a>>
     {
         Box::pin(async move {
@@ -1802,6 +2032,7 @@ impl SyncJournal for GatedJournal {
         &'a mut self,
         candidate: &'a SegmentCandidate,
         files: Vec<PathBuf>,
+        source: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<UploadResult, SyncOperationError>> + Send + 'a>> {
         Box::pin(async move {
             if let Some(entered) = self.entered.take() {
@@ -1810,30 +2041,33 @@ impl SyncJournal for GatedJournal {
             if let Some(release) = self.release.take() {
                 let _ = release.await;
             }
-            self.inner.upload(candidate, files).await
+            self.inner.upload(candidate, files, source).await
         })
     }
 
     fn segments<'a>(
         &'a mut self,
         day: &'a str,
+        source: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<SegmentsEnvelope, SyncOperationError>> + Send + 'a>>
     {
-        self.inner.segments(day)
+        self.inner.segments(day, source)
     }
 
     fn manifest<'a>(
         &'a mut self,
+        source: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<IngestManifest, SyncOperationError>> + Send + 'a>> {
-        self.inner.manifest()
+        self.inner.manifest(source)
     }
 
     fn manifest_day<'a>(
         &'a mut self,
         day: &'a str,
+        source: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<IngestDayManifest, SyncOperationError>> + Send + 'a>>
     {
-        self.inner.manifest_day(day)
+        self.inner.manifest_day(day, source)
     }
 }
 
@@ -1888,6 +2122,7 @@ impl SyncJournal for BlockingJournal {
         &'a mut self,
         candidate: &'a SegmentCandidate,
         _files: Vec<PathBuf>,
+        _source: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<UploadResult, SyncOperationError>> + Send + 'a>> {
         Box::pin(async move {
             self.uploads
@@ -1907,6 +2142,7 @@ impl SyncJournal for BlockingJournal {
     fn segments<'a>(
         &'a mut self,
         _day: &'a str,
+        _source: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<SegmentsEnvelope, SyncOperationError>> + Send + 'a>>
     {
         Box::pin(async move {
@@ -1924,6 +2160,7 @@ impl SyncJournal for BlockingJournal {
 
     fn manifest<'a>(
         &'a mut self,
+        _source: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<IngestManifest, SyncOperationError>> + Send + 'a>> {
         Box::pin(async move {
             if self.stage == BlockingStage::EmptyListing {
@@ -1943,6 +2180,7 @@ impl SyncJournal for BlockingJournal {
     fn manifest_day<'a>(
         &'a mut self,
         day: &'a str,
+        _source: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<IngestDayManifest, SyncOperationError>> + Send + 'a>>
     {
         Box::pin(async move {

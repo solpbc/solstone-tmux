@@ -6,6 +6,7 @@ mod support;
 use std::fs;
 
 use serde_json::Value;
+use solstone_tmux::config::DEFAULT_SOURCE;
 use solstone_tmux::health::DiagnosticCode;
 use solstone_tmux::journal::{
     INGEST_MANIFEST_DAY_PATH, INGEST_MANIFEST_PATH, INGEST_PATH, INGEST_SEGMENTS_PATH,
@@ -41,40 +42,43 @@ fn v3_operations_use_projection_examples_and_exact_multipart_envelope() {
         peer.enqueue_response(200, projection_example("upload_normal"));
         session
             .journal()
-            .ingest_upload(DAY, SEGMENT, vec![first, second])
+            .ingest_upload(DAY, SEGMENT, vec![first, second], DEFAULT_SOURCE)
             .await
             .expect("upload");
         peer.enqueue_response(200, projection_example("manifest"));
         session
             .journal()
-            .ingest_manifest()
+            .ingest_manifest(DEFAULT_SOURCE)
             .await
             .expect("root manifest");
         peer.enqueue_response(200, projection_example("manifest_day"));
         session
             .journal()
-            .ingest_manifest_day(DAY)
+            .ingest_manifest_day(DAY, DEFAULT_SOURCE)
             .await
             .expect("day manifest");
         peer.enqueue_response(200, projection_example("segments"));
         session
             .journal()
-            .ingest_segments(DAY)
+            .ingest_segments(DAY, DEFAULT_SOURCE)
             .await
             .expect("segments");
 
         let requests = peer.requests();
         assert_eq!(requests.len(), 4);
         assert_exact_multipart(&requests[0], &["first.jsonl", "second.jsonl"]);
-        assert_eq!(requests[1].path(), INGEST_MANIFEST_PATH);
+        assert_eq!(requests[1].path_without_query(), INGEST_MANIFEST_PATH);
         assert_eq!(
-            requests[2].path(),
+            requests[2].path_without_query(),
             INGEST_MANIFEST_DAY_PATH.replace("{day}", DAY)
         );
         assert_eq!(
-            requests[3].path(),
+            requests[3].path_without_query(),
             INGEST_SEGMENTS_PATH.replace("{day}", DAY)
         );
+        for request in &requests {
+            assert_eq!(request.query_param("source"), Some(DEFAULT_SOURCE));
+        }
         for request in &requests {
             assert_eq!(
                 request.header(PROTOCOL_VERSION_HEADER_NAME),
@@ -83,6 +87,31 @@ fn v3_operations_use_projection_examples_and_exact_multipart_envelope() {
             assert!(request.header("authorization").is_none());
             assert!(request.header(OBSERVER_HEADER_NAME).is_none());
         }
+        session.shutdown().await.expect("shutdown session");
+        peer.shutdown().await;
+    });
+}
+
+#[test]
+fn unrecognized_source_reason_code_is_a_generic_journal_rejection() {
+    runtime().block_on(async {
+        let peer = PrivateLinkPeer::start().await;
+        let temporary = TestDirectory::new("journal-source-rejection");
+        ensure_private_directory(temporary.path()).expect("private root");
+        let session = JournalSession::start(peer.credential(), temporary.path().to_path_buf())
+            .await
+            .expect("start journal session");
+        peer.enqueue_response(
+            400,
+            br#"{"error":"invalid source","reason_code":"source_too_long","detail":"invalid source"}"#,
+        );
+        let error = session
+            .journal()
+            .ingest_manifest(DEFAULT_SOURCE)
+            .await
+            .expect_err("source rejection accepted");
+        assert_eq!(error.diagnostic(), DiagnosticCode::JournalRejected);
+        assert_eq!(error.reason_code(), None);
         session.shutdown().await.expect("shutdown session");
         peer.shutdown().await;
     });
@@ -135,7 +164,7 @@ fn multipart_limits_reject_before_the_peer_and_admit_newly_supported_parts() {
         assert!(
             session
                 .journal()
-                .ingest_upload(DAY, SEGMENT, vec![admitted])
+                .ingest_upload(DAY, SEGMENT, vec![admitted], DEFAULT_SOURCE)
                 .await
                 .is_ok()
         );
@@ -149,7 +178,7 @@ fn multipart_limits_reject_before_the_peer_and_admit_newly_supported_parts() {
         assert!(
             session
                 .journal()
-                .ingest_upload(DAY, SEGMENT, vec![exact_part])
+                .ingest_upload(DAY, SEGMENT, vec![exact_part], DEFAULT_SOURCE)
                 .await
                 .is_ok()
         );
@@ -161,7 +190,7 @@ fn multipart_limits_reject_before_the_peer_and_admit_newly_supported_parts() {
             .expect("size oversized");
         let error = session
             .journal()
-            .ingest_upload(DAY, SEGMENT, vec![oversized])
+            .ingest_upload(DAY, SEGMENT, vec![oversized], DEFAULT_SOURCE)
             .await
             .expect_err("oversized part accepted");
         assert_eq!(error.diagnostic(), DiagnosticCode::RequestTooLarge);
@@ -176,7 +205,7 @@ fn multipart_limits_reject_before_the_peer_and_admit_newly_supported_parts() {
         }
         let error = session
             .journal()
-            .ingest_upload(DAY, SEGMENT, vec![first, second])
+            .ingest_upload(DAY, SEGMENT, vec![first, second], DEFAULT_SOURCE)
             .await
             .expect_err("over-body multipart accepted");
         assert_eq!(error.diagnostic(), DiagnosticCode::RequestTooLarge);
@@ -272,7 +301,8 @@ fn exact_multipart_checker_rejects_an_extra_file_part() {
 
 fn assert_exact_multipart(request: &PeerRequest, submitted: &[&str]) {
     assert_eq!(request.method(), "POST");
-    assert_eq!(request.path(), INGEST_PATH);
+    assert_eq!(request.path_without_query(), INGEST_PATH);
+    assert_eq!(request.query_param("source"), Some(DEFAULT_SOURCE));
     let content_type = request
         .header("content-type")
         .expect("multipart content type");
@@ -315,9 +345,10 @@ fn assert_exact_multipart_body(
     let envelope_object = envelope
         .as_object()
         .ok_or_else(|| "envelope is not an object".to_owned())?;
-    if envelope_object.len() != 3
+    if envelope_object.len() != 4
         || envelope.get("day") != Some(&Value::String(DAY.to_owned()))
         || envelope.get("segment") != Some(&Value::String(SEGMENT.to_owned()))
+        || envelope.get("source") != Some(&Value::String(DEFAULT_SOURCE.to_owned()))
     {
         return Err("envelope fields differ from the v3 contract".to_owned());
     }
@@ -495,7 +526,7 @@ fn declared_upload_payload(status: &str) -> Value {
         .as_array()
         .expect("fixture array")
         .iter()
-        .find(|fixture| fixture["id"] == format!("declared.observer.ingestUpload.status.{status}"))
+        .find(|fixture| fixture["id"] == format!("declared.client.ingestUpload.status.{status}"))
         .expect("declared status fixture")["payload"]
         .clone()
 }

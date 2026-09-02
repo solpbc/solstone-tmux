@@ -43,6 +43,19 @@ impl PeerRequest {
         &self.path
     }
 
+    pub fn path_without_query(&self) -> &str {
+        self.path
+            .split_once('?')
+            .map_or(self.path.as_str(), |(path, _)| path)
+    }
+
+    pub fn query_param(&self, name: &str) -> Option<&str> {
+        self.path.split_once('?')?.1.split('&').find_map(|pair| {
+            let (key, value) = pair.split_once('=')?;
+            (key == name).then_some(value)
+        })
+    }
+
     pub fn header(&self, name: &str) -> Option<&str> {
         self.headers
             .iter()

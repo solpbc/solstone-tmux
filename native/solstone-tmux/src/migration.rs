@@ -35,6 +35,7 @@ enum MigrationFailure {
     LegacyInspect,
     LegacyRead,
     LegacyInvalid,
+    LegacySource,
     LegacyValidation,
     Write,
 }
@@ -65,6 +66,9 @@ impl fmt::Display for MigrationError {
             }
             MigrationFailure::LegacyRead => "legacy settings could not be read while preparing",
             MigrationFailure::LegacyInvalid => "legacy settings are invalid for",
+            MigrationFailure::LegacySource => {
+                "legacy settings include source, which cannot be imported into"
+            }
             MigrationFailure::LegacyValidation => "legacy settings could not be validated for",
             MigrationFailure::Write => "migrated settings could not be written to",
         };
@@ -128,15 +132,21 @@ pub fn migrate_legacy_config(
     legacy
         .read_to_end(&mut bytes)
         .map_err(|_| MigrationError::new(MigrationFailure::LegacyRead, &native_path))?;
-    let source: Value = serde_json::from_slice(&bytes)
+    let parsed: Value = serde_json::from_slice(&bytes)
         .map_err(|_| MigrationError::new(MigrationFailure::LegacyInvalid, &native_path))?;
-    let source = source
+    let legacy = parsed
         .as_object()
         .ok_or_else(|| MigrationError::new(MigrationFailure::LegacyInvalid, &native_path))?;
+    if legacy.contains_key("source") {
+        return Err(MigrationError::new(
+            MigrationFailure::LegacySource,
+            &native_path,
+        ));
+    }
 
     let mut projected = Map::new();
     for field in IMPORTED_LEGACY_FIELDS {
-        let Some(value) = source.get(field) else {
+        let Some(value) = legacy.get(field) else {
             continue;
         };
         if field == "stream" && value.as_str() == Some("") {

@@ -233,13 +233,15 @@ Native `config.json` accepts:
   "capture_interval": 5,
   "segment_interval": 300,
   "cache_retention_days": 7,
-  "status_indicator": true
+  "status_indicator": true,
+  "source": "tmux"
 }
 ```
 
 Unknown fields are rejected. Missing fields use defaults. Capture and segment
 intervals must be greater than zero. A missing stream derives from the system
-hostname.
+hostname. An omitted `source` defaults to `"tmux"`; an explicit value must be a
+nonempty string matching `[a-z0-9][a-z0-9_-]*` and at most 64 bytes.
 
 On Linux only, when native config is absent, startup reads the single previous
 settings file under the data root and imports exactly `stream`,

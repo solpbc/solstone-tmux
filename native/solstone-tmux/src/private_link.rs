@@ -9,6 +9,7 @@ use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use serde_json::{Map, Value};
 use spl_core::bridge::BridgeNames;
 use spl_transport::TransportError;
 use spl_transport::client::{DialedCarrier, TokenPersistHook, TransportClient};
@@ -133,6 +134,29 @@ impl PrivateLinkBridge {
     }
 }
 
+const MAX_CLIENT_LABEL_BYTES: usize = 253;
+const FALLBACK_DEVICE_LABEL: &str = "tmux";
+
+pub fn pairing_ceremony_identity(
+    platform: PlatformKind,
+    hostname: Result<String, impl std::fmt::Debug>,
+) -> (String, Map<String, Value>) {
+    let platform = Value::String(platform.pairing_platform().to_owned());
+    match hostname {
+        Ok(hostname) if (1..=MAX_CLIENT_LABEL_BYTES).contains(&hostname.len()) => {
+            let mut additional_fields = Map::new();
+            additional_fields.insert("client_label".to_owned(), Value::String(hostname.clone()));
+            additional_fields.insert("platform".to_owned(), platform);
+            (hostname, additional_fields)
+        }
+        Ok(_) | Err(_) => {
+            let mut additional_fields = Map::new();
+            additional_fields.insert("platform".to_owned(), platform);
+            (FALLBACK_DEVICE_LABEL.to_owned(), additional_fields)
+        }
+    }
+}
+
 pub async fn setup<R>(
     platform: PlatformKind,
     environment: &dyn Environment,
@@ -141,12 +165,25 @@ pub async fn setup<R>(
 where
     R: Read,
 {
+    setup_with_identity(platform, environment, input, system_hostname()).await
+}
+
+pub async fn setup_with_identity<R, E>(
+    platform: PlatformKind,
+    environment: &dyn Environment,
+    input: R,
+    hostname: Result<String, E>,
+) -> Result<(), DiagnosticCode>
+where
+    R: Read,
+    E: std::fmt::Debug,
+{
     setup_with_pairer(
         platform,
         environment,
         input,
-        |link, device_label| async move {
-            let additional_fields = serde_json::Map::new();
+        hostname,
+        |link, device_label, additional_fields| async move {
             pair_from_link(&link, &device_label, &additional_fields)
                 .await
                 .map_err(|_| DiagnosticCode::PairingFailed)
@@ -155,15 +192,17 @@ where
     .await
 }
 
-async fn setup_with_pairer<R, F, Fut>(
+async fn setup_with_pairer<R, E, F, Fut>(
     platform: PlatformKind,
     environment: &dyn Environment,
     input: R,
+    hostname: Result<String, E>,
     pairer: F,
 ) -> Result<(), DiagnosticCode>
 where
     R: Read,
-    F: FnOnce(String, String) -> Fut,
+    E: std::fmt::Debug,
+    F: FnOnce(String, String, Map<String, Value>) -> Fut,
     Fut: Future<Output = Result<Credential, DiagnosticCode>>,
 {
     let data_root =
@@ -174,9 +213,9 @@ where
         resolve_config_root(platform, environment).map_err(|_| DiagnosticCode::SetupUnavailable)?;
     ensure_private_directory(&config_root).map_err(|_| DiagnosticCode::SetupUnavailable)?;
     let _private_state_lock = acquire_private_state_lock(&config_root)?;
-    let device_label = system_hostname().map_err(|_| DiagnosticCode::SetupUnavailable)?;
+    let (device_label, additional_fields) = pairing_ceremony_identity(platform, hostname);
     let link = read_pair_link(input)?;
-    let credential = pairer(link, device_label).await?;
+    let credential = pairer(link, device_label, additional_fields).await?;
     persist_credential(&config_root, &credential)
 }
 

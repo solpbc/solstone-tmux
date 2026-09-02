@@ -548,20 +548,24 @@ pub trait SyncJournal: Send {
         &'a mut self,
         candidate: &'a SegmentCandidate,
         files: Vec<PathBuf>,
+        source: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<UploadResult, SyncOperationError>> + Send + 'a>>;
 
     fn manifest<'a>(
         &'a mut self,
+        source: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<IngestManifest, SyncOperationError>> + Send + 'a>>;
 
     fn manifest_day<'a>(
         &'a mut self,
         day: &'a str,
+        source: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<IngestDayManifest, SyncOperationError>> + Send + 'a>>;
 
     fn segments<'a>(
         &'a mut self,
         day: &'a str,
+        source: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<SegmentsEnvelope, SyncOperationError>> + Send + 'a>>;
 }
 
@@ -685,6 +689,7 @@ impl Backoff {
 pub struct SyncScheduler {
     captures_root: PathBuf,
     stream: DerivedName,
+    source: String,
     retention_days: i64,
     clock: Arc<dyn Clock>,
     wake: SyncWake,
@@ -701,6 +706,7 @@ impl SyncScheduler {
     pub fn new(
         captures_root: PathBuf,
         stream: DerivedName,
+        source: String,
         retention_days: i64,
         clock: Arc<dyn Clock>,
         wake: SyncWake,
@@ -708,6 +714,7 @@ impl SyncScheduler {
         Self {
             captures_root,
             stream,
+            source,
             retention_days,
             clock,
             wake,
@@ -851,7 +858,7 @@ impl SyncScheduler {
             .retain(|candidate, _| snapshot.contains(candidate));
         if candidates.is_empty() {
             self.facts.pending_segments = 0;
-            match cancellable(&mut shutdown, journal.manifest()).await {
+            match cancellable(&mut shutdown, journal.manifest(&self.source)).await {
                 Err(()) => return self.cancelled_sweep(summary).await,
                 Ok(Ok(_)) => {
                     summary.contacted = true;
@@ -950,8 +957,11 @@ impl SyncScheduler {
                 if activity.is_none() {
                     activity = Some(ActivityGuard::new(self.activity.as_ref()));
                 }
-                let upload = match cancellable(&mut shutdown, journal.upload(candidate, files))
-                    .await
+                let upload = match cancellable(
+                    &mut shutdown,
+                    journal.upload(candidate, files, &self.source),
+                )
+                .await
                 {
                     Err(()) => return self.cancelled_sweep_with_activity(summary, activity).await,
                     Ok(Ok(upload)) => {
@@ -979,7 +989,9 @@ impl SyncScheduler {
                         SyncOperationError::EndSweep(SyncFailureClass::Contract),
                     );
                 };
-                let root_manifest = match cancellable(&mut shutdown, journal.manifest()).await {
+                let root_manifest = match cancellable(&mut shutdown, journal.manifest(&self.source))
+                    .await
+                {
                     Err(()) => return self.cancelled_sweep_with_activity(summary, activity).await,
                     Ok(Ok(manifest)) => {
                         summary.contacted = true;
@@ -999,33 +1011,40 @@ impl SyncScheduler {
                     summary.diagnostic = Some(DiagnosticCode::LocalSegmentInvalid);
                     continue;
                 }
-                let day_manifest =
-                    match cancellable(&mut shutdown, journal.manifest_day(candidate.day())).await {
-                        Err(()) => {
-                            return self.cancelled_sweep_with_activity(summary, activity).await;
-                        }
-                        Ok(Ok(manifest)) => {
-                            summary.contacted = true;
-                            self.backoff.successful_operation();
-                            manifest
-                        }
-                        Ok(Err(SyncOperationError::RetainCandidate(code))) => {
-                            summary.diagnostic = Some(code);
-                            continue;
-                        }
-                        Ok(Err(error)) => {
-                            drop(activity);
-                            return self.end_sweep(summary, error);
-                        }
-                    };
+                let day_manifest = match cancellable(
+                    &mut shutdown,
+                    journal.manifest_day(candidate.day(), &self.source),
+                )
+                .await
+                {
+                    Err(()) => {
+                        return self.cancelled_sweep_with_activity(summary, activity).await;
+                    }
+                    Ok(Ok(manifest)) => {
+                        summary.contacted = true;
+                        self.backoff.successful_operation();
+                        manifest
+                    }
+                    Ok(Err(SyncOperationError::RetainCandidate(code))) => {
+                        summary.diagnostic = Some(code);
+                        continue;
+                    }
+                    Ok(Err(error)) => {
+                        drop(activity);
+                        return self.end_sweep(summary, error);
+                    }
+                };
                 if day_manifest.day != candidate.day()
                     || !day_manifest.segments.contains_key(&authoritative_key)
                 {
                     summary.diagnostic = Some(DiagnosticCode::LocalSegmentInvalid);
                     continue;
                 }
-                let listing = match cancellable(&mut shutdown, journal.segments(candidate.day()))
-                    .await
+                let listing = match cancellable(
+                    &mut shutdown,
+                    journal.segments(candidate.day(), &self.source),
+                )
+                .await
                 {
                     Err(()) => return self.cancelled_sweep_with_activity(summary, activity).await,
                     Ok(Ok(listing)) => {
@@ -1229,10 +1248,11 @@ impl SyncJournal for JournalSession {
         &'a mut self,
         candidate: &'a SegmentCandidate,
         files: Vec<PathBuf>,
+        source: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<UploadResult, SyncOperationError>> + Send + 'a>> {
         Box::pin(async move {
             self.journal
-                .ingest_upload(candidate.day(), candidate.segment(), files)
+                .ingest_upload(candidate.day(), candidate.segment(), files, source)
                 .await
                 .map_err(map_journal_error)
         })
@@ -1240,10 +1260,11 @@ impl SyncJournal for JournalSession {
 
     fn manifest<'a>(
         &'a mut self,
+        source: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<IngestManifest, SyncOperationError>> + Send + 'a>> {
         Box::pin(async move {
             self.journal
-                .ingest_manifest()
+                .ingest_manifest(source)
                 .await
                 .map_err(map_journal_error)
         })
@@ -1252,11 +1273,12 @@ impl SyncJournal for JournalSession {
     fn manifest_day<'a>(
         &'a mut self,
         day: &'a str,
+        source: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<IngestDayManifest, SyncOperationError>> + Send + 'a>>
     {
         Box::pin(async move {
             self.journal
-                .ingest_manifest_day(day)
+                .ingest_manifest_day(day, source)
                 .await
                 .map_err(map_journal_error)
         })
@@ -1265,11 +1287,12 @@ impl SyncJournal for JournalSession {
     fn segments<'a>(
         &'a mut self,
         day: &'a str,
+        source: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<SegmentsEnvelope, SyncOperationError>> + Send + 'a>>
     {
         Box::pin(async move {
             self.journal
-                .ingest_segments(day)
+                .ingest_segments(day, source)
                 .await
                 .map_err(map_journal_error)
         })
@@ -1360,6 +1383,7 @@ impl SyncTask {
             let mut scheduler = SyncScheduler::new(
                 data_root.join("captures"),
                 config.stream,
+                config.source,
                 config.cache_retention_days,
                 clock,
                 wake,

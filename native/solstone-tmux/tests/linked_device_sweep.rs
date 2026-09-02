@@ -115,7 +115,10 @@ fn linked_device_sweep_uses_exactly_the_four_v3_operations_without_legacy_header
         assert_eq!(
             peer.requests()
                 .iter()
-                .map(|request| (request.method().to_owned(), request.path().to_owned()))
+                .map(|request| (
+                    request.method().to_owned(),
+                    request.path_without_query().to_owned()
+                ))
                 .collect::<Vec<_>>(),
             vec![
                 ("POST".to_owned(), INGEST_PATH.to_owned()),
@@ -132,6 +135,10 @@ fn linked_device_sweep_uses_exactly_the_four_v3_operations_without_legacy_header
             "the real mTLS peer must observe no registration or extra liveness request",
         );
         for request in peer.requests() {
+            assert_eq!(
+                request.query_param("source"),
+                Some(solstone_tmux::config::DEFAULT_SOURCE)
+            );
             assert_eq!(
                 request.header(PROTOCOL_VERSION_HEADER_NAME),
                 Some(PROTOCOL_VERSION)
@@ -189,11 +196,17 @@ fn linked_device_403_and_426_retain_every_candidate_for_each_operation_class() {
                 assert_eq!(
                     peer.requests()
                         .iter()
-                        .map(|request| request.path().to_owned())
+                        .map(|request| request.path_without_query().to_owned())
                         .collect::<Vec<_>>(),
                     v3_paths_through(operation),
                     "a refused {operation} must not populate reconciliation state or mark the day fresh",
                 );
+                for request in peer.requests() {
+                    assert_eq!(
+                        request.query_param("source"),
+                        Some(solstone_tmux::config::DEFAULT_SOURCE)
+                    );
+                }
                 assert!(candidate.parent().expect("segment directory").is_dir());
                 assert_eq!(
                     fs::read(&candidate).expect("retained candidate bytes"),
@@ -468,6 +481,7 @@ fn linked_device_scheduler(temporary: &TestDirectory, retention_days: i64) -> Sy
     SyncScheduler::new(
         temporary.path().join("captures"),
         solstone_tmux::name::derive_component(LINKED_DEVICE_STREAM).expect("derived stream"),
+        solstone_tmux::config::DEFAULT_SOURCE.to_owned(),
         retention_days,
         Arc::new(test_clock()),
         SyncWake::default(),
