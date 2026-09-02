@@ -26,9 +26,13 @@ native/solstone-tmux/
     Cargo.toml                     Product crate and sole binary
     contracts/
         observer-client-import.json
-                                   Vendored-contract provenance
+                                   Vendored client-ingest provenance
+        pairing-contract-import.json
+                                   Vendored pairing-identity provenance
     vendor/observer-client-contract/
-                                   Journal observer-client authority bundle
+                                   Journal client-ingest authority bundle
+    vendor/pairing-contract/
+                                   Journal pairing-identity authority bundle
     src/
         main.rs                    Process startup and command dispatch
         lib.rs                     Shared crate surface
@@ -185,8 +189,11 @@ case-folding, and Unicode-normalization aliases.
 ### Pairing
 
 `setup` reads one pairing link from stdin and persists only the SPL credential.
-`run` verifies the configured stream equals the hostname-derived stream before
-it opens the linked-device bridge. The paired mTLS credential is the Journal
+Pairing also sends a hostname-derived `client_label` and a `linux` or `macos`
+`platform` token; if the hostname is unavailable or grammar-invalid,
+`device_label` falls back to `"tmux"` and `client_label` is omitted. `run`
+verifies the configured stream equals the hostname-derived stream before it
+opens the linked-device bridge. The paired mTLS credential is the Journal
 identity; sync bootstraps the Journal client through that bridge. There is no
 observer registration client or decoder, and sync does not select a
 server-issued ingest URL or read `observer.json`.
@@ -246,18 +253,24 @@ nonempty string matching `[a-z0-9][a-z0-9_-]*` and at most 64 bytes.
 On Linux only, when native config is absent, startup reads the single previous
 settings file under the data root and imports exactly `stream`,
 `capture_interval`, `segment_interval`, `cache_retention_days`, and
-`status_indicator`. It never imports credentials or traverses `captures/`.
+`status_indicator`. A legacy `source` key, valid or invalid, fails adoption
+rather than being silently ignored like other unrecognized legacy fields. It
+never imports credentials or traverses `captures/`.
 
-## Vendored observer contract
+## Vendored contracts
 
 `native/solstone-tmux/vendor/observer-client-contract/` contains the byte-exact
-Journal observer-client authority bundle. Its manifest is the only source for
-bundle digests. The adjacent import record pins authority revision, bundle
-version, manifest digest, and vendored root.
+Journal client-ingest authority bundle. `native/solstone-tmux/vendor/pairing-contract/`
+contains the byte-exact pairing-identity authority bundle. Each adjacent import
+record (`contracts/observer-client-import.json`,
+`contracts/pairing-contract-import.json`) pins authority revision, bundle
+version, manifest digest, and vendored root. Each bundle's manifest is the only
+source for that bundle's digests.
 
-The offline `observer_contract` test verifies provenance first, requires exactly
-the manifest-listed files, and checks every byte. Do not edit, rename, add, or
-remove vendored material without an explicit authority import.
+The offline `observer_contract` and `pairing_contract` tests verify provenance
+first, require exactly the manifest-listed files, and check every byte. Do not
+edit, rename, add, or remove vendored material without an explicit authority
+import.
 
 ## Brand canon
 

@@ -159,6 +159,64 @@ fn linked_device_sweep_uses_exactly_the_four_v3_operations_without_legacy_header
 }
 
 #[test]
+fn linked_device_sweep_sends_the_configured_source_on_every_v3_operation() {
+    linked_device_runtime().block_on(async {
+        let peer = PrivateLinkPeer::start().await;
+        let temporary = TestDirectory::new("linked-device-configured-source");
+        ensure_private_directory(temporary.path()).expect("private root");
+        let candidate = create_linked_device_candidate(&temporary);
+        let mut session = JournalSession::start(peer.credential(), temporary.path().to_path_buf())
+            .await
+            .expect("linked-device session");
+        enqueue_v3_success_chain(&peer);
+        let mut scheduler = linked_device_scheduler_with_source(&temporary, -1, "studio");
+
+        let summary = scheduler
+            .run_sweep(&mut session, linked_device_no_shutdown())
+            .await;
+
+        assert_eq!(summary.attempted, 1);
+        assert_eq!(summary.custodied, 1, "{summary:?}");
+        assert_eq!(
+            peer.requests()
+                .iter()
+                .map(|request| (
+                    request.method().to_owned(),
+                    request.path_without_query().to_owned()
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                ("POST".to_owned(), INGEST_PATH.to_owned()),
+                ("GET".to_owned(), INGEST_MANIFEST_PATH.to_owned()),
+                (
+                    "GET".to_owned(),
+                    INGEST_MANIFEST_DAY_PATH.replace("{day}", LINKED_DEVICE_DAY),
+                ),
+                (
+                    "GET".to_owned(),
+                    INGEST_SEGMENTS_PATH.replace("{day}", LINKED_DEVICE_DAY),
+                ),
+            ],
+            "the real mTLS peer must observe no registration or extra liveness request",
+        );
+        let requests = peer.requests();
+        for request in &requests {
+            assert_eq!(request.query_param("source"), Some("studio"));
+        }
+        assert_eq!(captured_upload_envelope(&requests[0])["source"], "studio");
+        assert_eq!(
+            fs::read(candidate).expect("candidate bytes"),
+            LINKED_DEVICE_BYTES
+        );
+        session
+            .shutdown()
+            .await
+            .expect("shutdown linked-device session");
+        peer.shutdown().await;
+    });
+}
+
+#[test]
 fn linked_device_403_and_426_retain_every_candidate_for_each_operation_class() {
     linked_device_runtime().block_on(async {
         for (status, reason_code) in [
@@ -478,14 +536,40 @@ fn create_linked_device_candidate(temporary: &TestDirectory) -> PathBuf {
 }
 
 fn linked_device_scheduler(temporary: &TestDirectory, retention_days: i64) -> SyncScheduler {
+    linked_device_scheduler_with_source(
+        temporary,
+        retention_days,
+        solstone_tmux::config::DEFAULT_SOURCE,
+    )
+}
+
+fn linked_device_scheduler_with_source(
+    temporary: &TestDirectory,
+    retention_days: i64,
+    source: &str,
+) -> SyncScheduler {
     SyncScheduler::new(
         temporary.path().join("captures"),
         solstone_tmux::name::derive_component(LINKED_DEVICE_STREAM).expect("derived stream"),
-        solstone_tmux::config::DEFAULT_SOURCE.to_owned(),
+        source.to_owned(),
         retention_days,
         Arc::new(test_clock()),
         SyncWake::default(),
     )
+}
+
+fn captured_upload_envelope(request: &support::private_link_peer::PeerRequest) -> Value {
+    let body = request.body();
+    let headers_end = body
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .expect("upload envelope header separator");
+    let rest = &body[headers_end + 4..];
+    let json_end = rest
+        .windows(4)
+        .position(|window| window == b"\r\n--")
+        .expect("upload envelope closing boundary");
+    serde_json::from_slice(&rest[..json_end]).expect("upload envelope JSON")
 }
 
 fn linked_device_no_shutdown() -> watch::Receiver<bool> {

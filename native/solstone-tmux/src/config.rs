@@ -144,8 +144,10 @@ impl RuntimeConfig {
             .as_deref()
             .map_or_else(|| default_stream(hostname), |stream| Ok(stream.to_owned()))
             .and_then(|identity| {
-                derive_component(&identity)
-                    .map_err(|source| ConfigError::InvalidStream { identity, source })
+                derive_component(&identity).map_err(|error| ConfigError::InvalidStream {
+                    identity,
+                    source: error,
+                })
             })?;
         let source = configured_source(&file.source)?;
 
