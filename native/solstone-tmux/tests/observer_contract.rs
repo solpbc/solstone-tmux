@@ -14,6 +14,10 @@ use solstone_tmux::journal::{
 
 const AUTHORITY_REPOSITORY: &str = "https://github.com/solpbc/solstone-journal";
 const AUTHORITY_COMMIT: &str = "460c0c3511ebe29b65fe93f99d2f77c6a1eaa658";
+const AUTHORITY_INPUT_PATH: &str =
+    "core/crates/solstone-core-repository-contracts/src/contracts/client_ingest_authority.json";
+const AUTHORITY_INPUT_SHA256: &str =
+    "277d01ae96da68a5d1c64c2243b65875425031155204cb2710dd7273e71627e5";
 const BUNDLE_VERSION: &str = "10.0.0";
 const MANIFEST_PATH: &str = "manifest.json";
 const VENDORED_ROOT: &str = "native/solstone-tmux/vendor/observer-client-contract";
@@ -39,6 +43,13 @@ struct ImportProvenance {
 #[derive(Deserialize)]
 struct Manifest {
     files: Vec<ManifestFile>,
+    generator_inputs: Vec<GeneratorInput>,
+}
+
+#[derive(Deserialize)]
+struct GeneratorInput {
+    path: String,
+    sha256: String,
 }
 
 #[derive(Deserialize)]
@@ -89,6 +100,19 @@ fn vendored_contract_matches_provenance() {
         "manifest contract file count differs"
     );
     assert_eq!(listed, expected, "manifest contract file inventory differs");
+    assert_eq!(
+        manifest.generator_inputs.len(),
+        1,
+        "client-ingest authority input count differs"
+    );
+    assert_eq!(
+        manifest.generator_inputs[0].path, AUTHORITY_INPUT_PATH,
+        "vendored manifest authority-input path differs from pinned fact"
+    );
+    assert_eq!(
+        manifest.generator_inputs[0].sha256, AUTHORITY_INPUT_SHA256,
+        "vendored manifest authority-input digest differs from pinned fact"
+    );
 
     for entry in &manifest.files {
         let bytes = fs::read(vendored_root.join(&entry.path)).expect("read vendored contract file");

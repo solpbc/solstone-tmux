@@ -33,6 +33,8 @@ native/solstone-tmux/
                                    Journal client-ingest authority bundle
     vendor/pairing-contract/
                                    Journal pairing-identity authority bundle
+    vendor/protocol-schema/
+                                   Journal envelope schema and in-root import record
     src/
         main.rs                    Process startup and command dispatch
         lib.rs                     Shared crate surface
@@ -265,10 +267,15 @@ contains the byte-exact pairing-identity authority bundle. Each adjacent import
 record (`contracts/observer-client-import.json`,
 `contracts/pairing-contract-import.json`) pins authority revision, bundle
 version, manifest digest, and vendored root. Each bundle's manifest is the only
-source for that bundle's digests.
+source for that bundle's digests. `native/solstone-tmux/vendor/protocol-schema/`
+contains the byte-exact envelope schema authority import; its import record lives
+inside that same root rather than under `contracts/`, pinning upstream
+repository, commit, source path, and digest.
 
-The offline `observer_contract` and `pairing_contract` tests verify provenance
-first, require exactly the manifest-listed files, and check every byte. Do not
+The offline `observer_contract`, `pairing_contract`, and
+`protocol_schema_contract` tests verify provenance first, require exactly the
+listed files, and check every byte. `PrivateLinkPeer::start()` also verifies
+protocol-schema provenance before the four source-wire fixtures bind. Do not
 edit, rename, add, or remove vendored material without an explicit authority
 import.
 

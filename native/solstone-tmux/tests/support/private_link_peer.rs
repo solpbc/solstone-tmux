@@ -102,6 +102,7 @@ pub struct PrivateLinkPeer {
 
 impl PrivateLinkPeer {
     pub async fn start() -> Self {
+        super::authority::verify_client_ingest_authority();
         let listener = TcpListener::bind(("127.0.0.1", 0))
             .await
             .expect("bind private-link peer");

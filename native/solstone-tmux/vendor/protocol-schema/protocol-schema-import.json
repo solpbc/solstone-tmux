@@ -1,0 +1,6 @@
+{
+  "authority_repository": "https://github.com/solpbc/solstone-journal",
+  "authority_commit": "460c0c3511ebe29b65fe93f99d2f77c6a1eaa658",
+  "source_path": "core/crates/solstone-core/src/contract/schemas/protocol.schema.json",
+  "source_sha256": "488aed9be35faf359e26bd22ee41f872a1c2647d788e925dd2bb695985fd34d0"
+}
