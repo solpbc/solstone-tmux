@@ -120,7 +120,7 @@ fn run() -> Result<i32, String> {
                             resolve_data_root(platform, &environment),
                         ) {
                             (Ok(config_root), Ok(data_root)) => {
-                                read_journal_version(&config_root, &data_root)
+                                read_journal_version(&config_root, &data_root, now_unix_seconds)
                             }
                             _ => JournalVersionStatus::Unknown,
                         };

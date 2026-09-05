@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use serde::{Deserialize, Serialize};
 
-use crate::health::DiagnosticCode;
+use crate::health::{DiagnosticCode, HealthState, StatusHealth, read_status_health};
 use crate::instance_lock::{ExistingLock, RunIdentity, inspect_existing};
 use crate::journal::JournalClient;
 use crate::private_link::load_credential;
@@ -47,7 +47,11 @@ impl JournalVersionStatus {
     }
 }
 
-pub fn read_journal_version(config_root: &Path, data_root: &Path) -> JournalVersionStatus {
+pub fn read_journal_version(
+    config_root: &Path,
+    data_root: &Path,
+    now_unix_seconds: i64,
+) -> JournalVersionStatus {
     let Some(record) = read_record(config_root) else {
         return JournalVersionStatus::Unknown;
     };
@@ -64,7 +68,11 @@ pub fn read_journal_version(config_root: &Path, data_root: &Path) -> JournalVers
         ExistingLock::Locked(identity)
             if identity.run_id == record.run_id && identity.lock_inode == record.lock_inode
     );
-    if identity_is_live && record.confirmed {
+    let connected = matches!(
+        read_status_health(data_root, now_unix_seconds),
+        StatusHealth::Live(HealthState::Connected | HealthState::Syncing)
+    );
+    if identity_is_live && record.confirmed && connected {
         JournalVersionStatus::Current(record.version)
     } else {
         JournalVersionStatus::LastKnown(record.version)
@@ -199,27 +207,58 @@ impl VersionRefreshState {
         self.spawn_refresh();
     }
 
+    pub(crate) fn note_dial_failed(&self) {
+        let refresh = self.clone();
+        tokio::task::spawn_blocking(move || refresh.begin_refresh());
+    }
+
+    pub(crate) fn note_session_started(&self) {
+        *lock(&self.journal_client) = None;
+        let refresh = self.clone();
+        tokio::task::spawn_blocking(move || refresh.begin_refresh());
+    }
+
+    fn identity_and_credential_live(&self) -> bool {
+        let identity_is_live = matches!(
+            inspect_existing(&self.data_root),
+            ExistingLock::Locked(identity)
+                if identity.run_id == self.run_identity.run_id
+                    && identity.lock_inode == self.run_identity.lock_inode
+        );
+        identity_is_live
+            && matches!(
+                load_credential(&self.config_root),
+                Ok(Some(credential))
+                    if credential.instance_id == self.instance_id
+                        && hex_encode(&credential.ca_fp_prefix) == self.ca_fp_prefix_hex
+            )
+    }
+
+    fn begin_refresh(&self) -> u64 {
+        with_write_lock(&self.config_root, || {
+            let this_generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+            if self.identity_and_credential_live()
+                && let Some(record) = record_for_attempt(
+                    read_record(&self.config_root),
+                    &self.instance_id,
+                    &self.ca_fp_prefix_hex,
+                    &self.run_identity,
+                    None,
+                )
+            {
+                let _ = store_record(&self.config_root, &record);
+            }
+            this_generation
+        })
+        .unwrap_or_else(|| self.generation.fetch_add(1, Ordering::SeqCst) + 1)
+    }
+
     pub(crate) fn validate_and_store(&self, this_generation: u64, fetched: Option<String>) -> bool {
         with_write_lock(&self.config_root, || {
             if self.generation.load(Ordering::SeqCst) != this_generation {
                 return false;
             }
-            let identity_is_live = matches!(
-                inspect_existing(&self.data_root),
-                ExistingLock::Locked(identity)
-                    if identity.run_id == self.run_identity.run_id
-                        && identity.lock_inode == self.run_identity.lock_inode
-            );
-            if !identity_is_live {
-                return false;
-            }
-            let credential_matches = matches!(
-                load_credential(&self.config_root),
-                Ok(Some(credential))
-                    if credential.instance_id == self.instance_id
-                        && hex_encode(&credential.ca_fp_prefix) == self.ca_fp_prefix_hex
-            );
-            if !credential_matches {
+            if !self.identity_and_credential_live() {
                 return false;
             }
             let Some(record) = record_for_attempt(
@@ -239,9 +278,13 @@ impl VersionRefreshState {
     fn spawn_refresh(&self) {
         let client = lock(&self.journal_client).clone();
         let Some(client) = client else { return };
-        let this_generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
         let refresh = self.clone();
         tokio::spawn(async move {
+            let refresh_for_begin = refresh.clone();
+            let this_generation =
+                tokio::task::spawn_blocking(move || refresh_for_begin.begin_refresh())
+                    .await
+                    .unwrap_or(0);
             let fetched = client.system_status().await.ok();
             let _ = tokio::task::spawn_blocking(move || {
                 refresh.validate_and_store(this_generation, fetched)
@@ -249,6 +292,10 @@ impl VersionRefreshState {
             .await;
         });
     }
+}
+
+pub(crate) fn clear_cached_version(config_root: &Path) {
+    let _ = std::fs::remove_file(config_root.join(JOURNAL_VERSION_FILENAME));
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -261,16 +308,18 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::sync::atomic::Ordering;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use spl_transport::credential::Credential;
 
     use super::{
-        JournalVersionRecord, JournalVersionStatus, SCHEMA_VERSION, VersionRefreshState,
-        hex_encode, read_journal_version, read_record, sanitize_for_terminal, store_record,
+        JOURNAL_VERSION_FILENAME, JournalVersionRecord, JournalVersionStatus, SCHEMA_VERSION,
+        VersionRefreshState, clear_cached_version, hex_encode, read_journal_version, read_record,
+        sanitize_for_terminal, store_record,
     };
+    use crate::health::{HealthState, HealthWriter, SyncFacts};
     use crate::instance_lock::{InstanceLock, RunIdentity};
     use crate::paths::ensure_private_directory;
     use crate::private_link::persist_credential;
@@ -284,6 +333,30 @@ mod tests {
             std::env::temp_dir().join(format!("solstone-{prefix}-{}-{suffix}", std::process::id()));
         ensure_private_directory(&path).expect("create test tempdir");
         path
+    }
+
+    fn write_test_health(data_root: &Path, lock: &InstanceLock, state: HealthState, now: i64) {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let writer = HealthWriter::new(data_root.to_path_buf(), lock);
+        let mut facts = SyncFacts {
+            paired: true,
+            ..SyncFacts::default()
+        };
+        match state {
+            HealthState::Connected => {
+                facts.successful_contact(now);
+            }
+            HealthState::Syncing => {
+                facts.successful_contact(now);
+                facts.sync_in_progress = true;
+            }
+            _ => {}
+        }
+        rt.block_on(writer.write(&facts, now))
+            .expect("write health");
     }
 
     fn sample_credential(instance_id: &str, ca_fp_prefix: &[u8]) -> Credential {
@@ -450,11 +523,13 @@ mod tests {
     fn failed_fetch_flips_confirmed_to_false_and_recovers() {
         let config_root = test_tempdir("failed-fetch-config");
         let data_root = test_tempdir("failed-fetch-data");
+        let now = 1_800_000_000;
 
         let cred = sample_credential("inst-1", &[0xaa, 0xbb]);
         persist_credential(&config_root, &cred).expect("persist cred");
         let lock = InstanceLock::acquire(&data_root).expect("lock");
         let identity = lock.identity().clone();
+        write_test_health(&data_root, &lock, HealthState::Connected, now);
 
         let state = VersionRefreshState::new(
             config_root.clone(),
@@ -469,7 +544,7 @@ mod tests {
         let stored = state.validate_and_store(1, Some("2026.8.0".to_owned()));
         assert!(stored);
         assert_eq!(
-            read_journal_version(&config_root, &data_root),
+            read_journal_version(&config_root, &data_root, now),
             JournalVersionStatus::Current("2026.8.0".to_owned())
         );
 
@@ -478,7 +553,7 @@ mod tests {
         let stored = state.validate_and_store(2, None);
         assert!(stored);
         assert_eq!(
-            read_journal_version(&config_root, &data_root),
+            read_journal_version(&config_root, &data_root, now),
             JournalVersionStatus::LastKnown("2026.8.0".to_owned())
         );
 
@@ -487,7 +562,7 @@ mod tests {
         let stored = state.validate_and_store(3, Some("2026.8.1".to_owned()));
         assert!(stored);
         assert_eq!(
-            read_journal_version(&config_root, &data_root),
+            read_journal_version(&config_root, &data_root, now),
             JournalVersionStatus::Current("2026.8.1".to_owned())
         );
 
@@ -499,18 +574,20 @@ mod tests {
     fn read_journal_version_states_and_mismatch() {
         let config_root = test_tempdir("read-version-config");
         let data_root = test_tempdir("read-version-data");
+        let now = 1_800_000_000;
 
         let cred = sample_credential("inst-42", &[0x12, 0x34]);
         persist_credential(&config_root, &cred).expect("persist credential");
 
         // 1. No record -> Unknown
         assert_eq!(
-            read_journal_version(&config_root, &data_root),
+            read_journal_version(&config_root, &data_root, now),
             JournalVersionStatus::Unknown
         );
 
         let lock = InstanceLock::acquire(&data_root).expect("acquire lock");
         let identity = lock.identity().clone();
+        write_test_health(&data_root, &lock, HealthState::Connected, now);
 
         let record = JournalVersionRecord {
             schema_version: SCHEMA_VERSION,
@@ -523,9 +600,9 @@ mod tests {
         };
         store_record(&config_root, &record).expect("store record");
 
-        // 2. Lock held with matching identity and confirmed=true -> Current
+        // 2. Lock held with matching identity and confirmed=true and connected -> Current
         assert_eq!(
-            read_journal_version(&config_root, &data_root),
+            read_journal_version(&config_root, &data_root, now),
             JournalVersionStatus::Current("2026.8.0".to_owned())
         );
 
@@ -536,7 +613,7 @@ mod tests {
         };
         store_record(&config_root, &unconfirmed_record).expect("store record");
         assert_eq!(
-            read_journal_version(&config_root, &data_root),
+            read_journal_version(&config_root, &data_root, now),
             JournalVersionStatus::LastKnown("2026.8.0".to_owned())
         );
 
@@ -544,7 +621,7 @@ mod tests {
         store_record(&config_root, &record).expect("store record");
         drop(lock);
         assert_eq!(
-            read_journal_version(&config_root, &data_root),
+            read_journal_version(&config_root, &data_root, now),
             JournalVersionStatus::LastKnown("2026.8.0".to_owned())
         );
 
@@ -552,7 +629,104 @@ mod tests {
         let mismatched_cred = sample_credential("inst-other", &[0x12, 0x34]);
         persist_credential(&config_root, &mismatched_cred).expect("persist mismatched credential");
         assert_eq!(
-            read_journal_version(&config_root, &data_root),
+            read_journal_version(&config_root, &data_root, now),
+            JournalVersionStatus::Unknown
+        );
+
+        let _ = fs::remove_dir_all(config_root);
+        let _ = fs::remove_dir_all(data_root);
+    }
+
+    #[test]
+    fn read_journal_version_requires_both_confirmed_and_live_health() {
+        let config_root = test_tempdir("both-signals-config");
+        let data_root = test_tempdir("both-signals-data");
+        let now = 1_800_000_000;
+
+        let cred = sample_credential("inst-1", &[0xaa, 0xbb]);
+        persist_credential(&config_root, &cred).expect("persist cred");
+        let lock = InstanceLock::acquire(&data_root).expect("lock");
+        let identity = lock.identity().clone();
+
+        // 1. confirmed: true + live identity + Offline -> LastKnown
+        write_test_health(&data_root, &lock, HealthState::Offline, now);
+        let record = JournalVersionRecord {
+            schema_version: SCHEMA_VERSION,
+            instance_id: "inst-1".to_owned(),
+            ca_fp_prefix_hex: hex_encode(&[0xaa, 0xbb]),
+            version: "2026.8.0".to_owned(),
+            confirmed: true,
+            run_id: identity.run_id.clone(),
+            lock_inode: identity.lock_inode,
+        };
+        store_record(&config_root, &record).expect("store");
+        assert_eq!(
+            read_journal_version(&config_root, &data_root, now),
+            JournalVersionStatus::LastKnown("2026.8.0".to_owned())
+        );
+
+        // 2. confirmed: false + live identity + Connected -> LastKnown
+        write_test_health(&data_root, &lock, HealthState::Connected, now);
+        let unconfirmed_record = JournalVersionRecord {
+            confirmed: false,
+            ..record.clone()
+        };
+        store_record(&config_root, &unconfirmed_record).expect("store");
+        assert_eq!(
+            read_journal_version(&config_root, &data_root, now),
+            JournalVersionStatus::LastKnown("2026.8.0".to_owned())
+        );
+
+        // 3. confirmed: true + live identity + Connected -> Current
+        store_record(&config_root, &record).expect("store");
+        assert_eq!(
+            read_journal_version(&config_root, &data_root, now),
+            JournalVersionStatus::Current("2026.8.0".to_owned())
+        );
+
+        // 4. confirmed: true + live identity + Syncing -> Current
+        write_test_health(&data_root, &lock, HealthState::Syncing, now);
+        assert_eq!(
+            read_journal_version(&config_root, &data_root, now),
+            JournalVersionStatus::Current("2026.8.0".to_owned())
+        );
+
+        let _ = fs::remove_dir_all(config_root);
+        let _ = fs::remove_dir_all(data_root);
+    }
+
+    #[test]
+    fn clear_cached_version_removes_file_and_reports_unknown() {
+        let config_root = test_tempdir("clear-cache-config");
+        let data_root = test_tempdir("clear-cache-data");
+        let now = 1_800_000_000;
+
+        let cred = sample_credential("inst-1", &[0xaa, 0xbb]);
+        persist_credential(&config_root, &cred).expect("persist cred");
+        let lock = InstanceLock::acquire(&data_root).expect("lock");
+        let identity = lock.identity().clone();
+
+        let record = JournalVersionRecord {
+            schema_version: SCHEMA_VERSION,
+            instance_id: "inst-1".to_owned(),
+            ca_fp_prefix_hex: hex_encode(&[0xaa, 0xbb]),
+            version: "2026.8.0".to_owned(),
+            confirmed: true,
+            run_id: identity.run_id.clone(),
+            lock_inode: identity.lock_inode,
+        };
+        store_record(&config_root, &record).expect("store");
+        write_test_health(&data_root, &lock, HealthState::Connected, now);
+        assert_eq!(
+            read_journal_version(&config_root, &data_root, now),
+            JournalVersionStatus::Current("2026.8.0".to_owned())
+        );
+
+        clear_cached_version(&config_root);
+
+        assert!(!config_root.join(JOURNAL_VERSION_FILENAME).exists());
+        assert_eq!(
+            read_journal_version(&config_root, &data_root, now),
             JournalVersionStatus::Unknown
         );
 

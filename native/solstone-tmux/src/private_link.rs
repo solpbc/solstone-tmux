@@ -8,7 +8,6 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use serde_json::{Map, Value};
 use spl_core::bridge::BridgeNames;
@@ -44,7 +43,6 @@ pub const PROTOCOL_VERSION_NUMBER: u64 = 3;
 pub struct PrivateLinkOpener {
     transport: Arc<TransportClient>,
     refresh: VersionRefreshState,
-    dials: AtomicUsize,
 }
 
 impl PrivateLinkOpener {
@@ -52,7 +50,6 @@ impl PrivateLinkOpener {
         Self {
             transport: Arc::new(transport),
             refresh,
-            dials: AtomicUsize::new(0),
         }
     }
 
@@ -78,11 +75,16 @@ impl CarrierOpener for PrivateLinkOpener {
         &self,
     ) -> Pin<Box<dyn Future<Output = Result<DialedCarrier, TransportError>> + Send + '_>> {
         Box::pin(async move {
-            let dialed = self.transport.dial_carrier().await?;
-            if self.dials.fetch_add(1, Ordering::SeqCst) > 0 {
-                self.refresh.note_redial();
+            match self.transport.dial_carrier().await {
+                Ok(dialed) => {
+                    self.refresh.note_redial();
+                    Ok(dialed)
+                }
+                Err(error) => {
+                    self.refresh.note_dial_failed();
+                    Err(error)
+                }
             }
-            Ok(dialed)
         })
     }
 }
@@ -234,7 +236,9 @@ where
     let (device_label, additional_fields) = pairing_ceremony_identity(platform, hostname);
     let link = read_pair_link(input)?;
     let credential = pairer(link, device_label, additional_fields).await?;
-    persist_credential(&config_root, &credential)
+    persist_credential(&config_root, &credential)?;
+    crate::journal_version::clear_cached_version(&config_root);
+    Ok(())
 }
 
 pub fn acquire_private_state_lock(config_root: &Path) -> Result<File, DiagnosticCode> {

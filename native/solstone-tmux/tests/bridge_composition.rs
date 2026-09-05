@@ -49,14 +49,17 @@ fn linked_device_bridge_rejects_caller_auth_and_mints_only_v3_protocol_header() 
         let temporary = TestDirectory::new("bridge-v3");
         ensure_private_directory(temporary.path()).expect("private root");
         let lock = InstanceLock::acquire(temporary.path()).expect("acquire lock");
-        let session = JournalSession::start(
-            peer.credential(),
+        let credential = peer.credential();
+        let refresh = solstone_tmux::journal_version::VersionRefreshState::new(
             temporary.path().to_path_buf(),
             temporary.path().to_path_buf(),
+            credential.instance_id.clone(),
+            &credential.ca_fp_prefix,
             lock.identity().clone(),
-        )
-        .await
-        .expect("session");
+        );
+        let session = JournalSession::start(credential, temporary.path().to_path_buf(), refresh)
+            .await
+            .expect("session");
 
         let rejected = session
             .journal()
@@ -128,14 +131,17 @@ fn journal_response_body_limit_applies_to_success_and_error_responses() {
         let temporary = TestDirectory::new("bridge-response-limit-v3");
         ensure_private_directory(temporary.path()).expect("private root");
         let lock = InstanceLock::acquire(temporary.path()).expect("acquire lock");
-        let session = JournalSession::start(
-            peer.credential(),
+        let credential = peer.credential();
+        let refresh = solstone_tmux::journal_version::VersionRefreshState::new(
             temporary.path().to_path_buf(),
             temporary.path().to_path_buf(),
+            credential.instance_id.clone(),
+            &credential.ca_fp_prefix,
             lock.identity().clone(),
-        )
-        .await
-        .expect("session");
+        );
+        let session = JournalSession::start(credential, temporary.path().to_path_buf(), refresh)
+            .await
+            .expect("session");
         let oversized = vec![b'x'; 4 * 1024 * 1024 + 1];
         peer.enqueue_response(200, oversized.clone());
         let error = session
@@ -163,14 +169,17 @@ fn linked_device_session_composes_on_the_production_runtime_shape() {
         let temporary = TestDirectory::new("bridge-session-composition-v3");
         ensure_private_directory(temporary.path()).expect("private root");
         let lock = InstanceLock::acquire(temporary.path()).expect("acquire lock");
-        let session = JournalSession::start(
-            peer.credential(),
+        let credential = peer.credential();
+        let refresh = solstone_tmux::journal_version::VersionRefreshState::new(
             temporary.path().to_path_buf(),
             temporary.path().to_path_buf(),
+            credential.instance_id.clone(),
+            &credential.ca_fp_prefix,
             lock.identity().clone(),
-        )
-        .await
-        .expect("linked-device session");
+        );
+        let session = JournalSession::start(credential, temporary.path().to_path_buf(), refresh)
+            .await
+            .expect("linked-device session");
         peer.enqueue_response(200, br#"{"days":{}}"#.to_vec());
         session
             .journal()
@@ -197,14 +206,17 @@ fn v3_routes_refuse_unconfined_day_values() {
         let temporary = TestDirectory::new("bridge-route-confinement-v3");
         ensure_private_directory(temporary.path()).expect("private root");
         let lock = InstanceLock::acquire(temporary.path()).expect("acquire lock");
-        let session = JournalSession::start(
-            peer.credential(),
+        let credential = peer.credential();
+        let refresh = solstone_tmux::journal_version::VersionRefreshState::new(
             temporary.path().to_path_buf(),
             temporary.path().to_path_buf(),
+            credential.instance_id.clone(),
+            &credential.ca_fp_prefix,
             lock.identity().clone(),
-        )
-        .await
-        .expect("session");
+        );
+        let session = JournalSession::start(credential, temporary.path().to_path_buf(), refresh)
+            .await
+            .expect("session");
         for path in [
             &format!(
                 "{}?foreign",
@@ -238,11 +250,18 @@ fn slow_large_multipart_preserves_capture_on_the_production_runtime() {
         let temporary = TestDirectory::new("bridge-multipart-backpressure-v3");
         ensure_private_directory(temporary.path()).expect("private root");
         let lock = InstanceLock::acquire(temporary.path()).expect("acquire lock");
-        let session = JournalSession::start(
-            peer.credential(),
+        let credential = peer.credential();
+        let refresh = solstone_tmux::journal_version::VersionRefreshState::new(
             temporary.path().to_path_buf(),
             temporary.path().to_path_buf(),
+            credential.instance_id.clone(),
+            &credential.ca_fp_prefix,
             lock.identity().clone(),
+        );
+        let session = JournalSession::start(
+            credential,
+            temporary.path().to_path_buf(),
+            refresh,
         )
         .await
         .expect("session");

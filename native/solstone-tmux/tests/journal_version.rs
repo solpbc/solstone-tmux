@@ -4,8 +4,10 @@
 mod support;
 
 use std::fs;
+use std::path::Path;
 use std::time::Duration;
 
+use solstone_tmux::health::{HealthState, HealthWriter, SyncFacts};
 use solstone_tmux::instance_lock::InstanceLock;
 use solstone_tmux::journal_version::{
     JOURNAL_VERSION_FILENAME, JournalVersionStatus, read_journal_version,
@@ -16,6 +18,27 @@ use solstone_tmux::sync::JournalSession;
 use spl_transport::journal_bridge::CarrierOpener;
 use support::TestDirectory;
 use support::private_link_peer::PrivateLinkPeer;
+
+const NOW: i64 = 1_800_000_000;
+
+async fn write_test_health(data_root: &Path, lock: &InstanceLock, state: HealthState, now: i64) {
+    let writer = HealthWriter::new(data_root.to_path_buf(), lock);
+    let mut facts = SyncFacts {
+        paired: true,
+        ..SyncFacts::default()
+    };
+    match state {
+        HealthState::Connected => {
+            facts.successful_contact(now);
+        }
+        HealthState::Syncing => {
+            facts.successful_contact(now);
+            facts.sync_in_progress = true;
+        }
+        _ => {}
+    }
+    writer.write(&facts, now).await.expect("write health");
+}
 
 #[test]
 fn initial_fetch_stores_and_live_read_reports_current() {
@@ -29,22 +52,26 @@ fn initial_fetch_stores_and_live_read_reports_current() {
         let lock = InstanceLock::acquire(&data_root).expect("instance lock");
         let peer = PrivateLinkPeer::start().await;
         persist_credential(&config_root, &peer.credential()).expect("persist credential");
+        write_test_health(&data_root, &lock, HealthState::Connected, NOW).await;
         peer.enqueue_system_status_response(
             200,
             br#"{"ok":true,"version":{"current":"2026.8.0"}}"#.to_vec(),
         );
 
-        let session = JournalSession::start(
-            peer.credential(),
+        let credential = peer.credential();
+        let refresh = solstone_tmux::journal_version::VersionRefreshState::new(
             config_root.clone(),
             data_root.clone(),
+            credential.instance_id.clone(),
+            &credential.ca_fp_prefix,
             lock.identity().clone(),
-        )
-        .await
-        .expect("start session");
+        );
+        let session = JournalSession::start(credential, config_root.clone(), refresh)
+            .await
+            .expect("start session");
 
         for _ in 0..50 {
-            if read_journal_version(&config_root, &data_root)
+            if read_journal_version(&config_root, &data_root, NOW)
                 == JournalVersionStatus::Current("2026.8.0".to_owned())
             {
                 break;
@@ -53,7 +80,7 @@ fn initial_fetch_stores_and_live_read_reports_current() {
         }
 
         assert_eq!(
-            read_journal_version(&config_root, &data_root),
+            read_journal_version(&config_root, &data_root, NOW),
             JournalVersionStatus::Current("2026.8.0".to_owned())
         );
 
@@ -85,22 +112,26 @@ fn redial_carrier_fetches_newer_version_and_updates_cache() {
         let lock = InstanceLock::acquire(&data_root).expect("instance lock");
         let peer = PrivateLinkPeer::start().await;
         persist_credential(&config_root, &peer.credential()).expect("persist credential");
+        write_test_health(&data_root, &lock, HealthState::Connected, NOW).await;
         peer.enqueue_system_status_response(
             200,
             br#"{"ok":true,"version":{"current":"2026.8.0"}}"#.to_vec(),
         );
 
-        let session = JournalSession::start(
-            peer.credential(),
+        let credential = peer.credential();
+        let refresh = solstone_tmux::journal_version::VersionRefreshState::new(
             config_root.clone(),
             data_root.clone(),
+            credential.instance_id.clone(),
+            &credential.ca_fp_prefix,
             lock.identity().clone(),
-        )
-        .await
-        .expect("start session");
+        );
+        let session = JournalSession::start(credential, config_root.clone(), refresh)
+            .await
+            .expect("start session");
 
         for _ in 0..50 {
-            if read_journal_version(&config_root, &data_root)
+            if read_journal_version(&config_root, &data_root, NOW)
                 == JournalVersionStatus::Current("2026.8.0".to_owned())
             {
                 break;
@@ -109,7 +140,7 @@ fn redial_carrier_fetches_newer_version_and_updates_cache() {
         }
 
         assert_eq!(
-            read_journal_version(&config_root, &data_root),
+            read_journal_version(&config_root, &data_root, NOW),
             JournalVersionStatus::Current("2026.8.0".to_owned())
         );
 
@@ -121,7 +152,7 @@ fn redial_carrier_fetches_newer_version_and_updates_cache() {
         let _ = session.opener().dial_carrier().await.expect("dial carrier");
 
         for _ in 0..50 {
-            if read_journal_version(&config_root, &data_root)
+            if read_journal_version(&config_root, &data_root, NOW)
                 == JournalVersionStatus::Current("2026.8.1".to_owned())
             {
                 break;
@@ -130,7 +161,7 @@ fn redial_carrier_fetches_newer_version_and_updates_cache() {
         }
 
         assert_eq!(
-            read_journal_version(&config_root, &data_root),
+            read_journal_version(&config_root, &data_root, NOW),
             JournalVersionStatus::Current("2026.8.1".to_owned())
         );
 
@@ -151,22 +182,26 @@ fn malformed_or_failed_response_preserves_existing_cache() {
         let lock = InstanceLock::acquire(&data_root).expect("instance lock");
         let peer = PrivateLinkPeer::start().await;
         persist_credential(&config_root, &peer.credential()).expect("persist credential");
+        write_test_health(&data_root, &lock, HealthState::Connected, NOW).await;
         peer.enqueue_system_status_response(
             200,
             br#"{"ok":true,"version":{"current":"2026.8.0"}}"#.to_vec(),
         );
 
-        let session = JournalSession::start(
-            peer.credential(),
+        let credential = peer.credential();
+        let refresh = solstone_tmux::journal_version::VersionRefreshState::new(
             config_root.clone(),
             data_root.clone(),
+            credential.instance_id.clone(),
+            &credential.ca_fp_prefix,
             lock.identity().clone(),
-        )
-        .await
-        .expect("start session");
+        );
+        let session = JournalSession::start(credential, config_root.clone(), refresh)
+            .await
+            .expect("start session");
 
         for _ in 0..50 {
-            if read_journal_version(&config_root, &data_root)
+            if read_journal_version(&config_root, &data_root, NOW)
                 == JournalVersionStatus::Current("2026.8.0".to_owned())
             {
                 break;
@@ -175,7 +210,7 @@ fn malformed_or_failed_response_preserves_existing_cache() {
         }
 
         assert_eq!(
-            read_journal_version(&config_root, &data_root),
+            read_journal_version(&config_root, &data_root, NOW),
             JournalVersionStatus::Current("2026.8.0".to_owned())
         );
 
@@ -184,7 +219,7 @@ fn malformed_or_failed_response_preserves_existing_cache() {
         let _ = session.opener().dial_carrier().await.expect("dial carrier");
 
         for _ in 0..50 {
-            if read_journal_version(&config_root, &data_root)
+            if read_journal_version(&config_root, &data_root, NOW)
                 == JournalVersionStatus::LastKnown("2026.8.0".to_owned())
             {
                 break;
@@ -193,7 +228,7 @@ fn malformed_or_failed_response_preserves_existing_cache() {
         }
 
         assert_eq!(
-            read_journal_version(&config_root, &data_root),
+            read_journal_version(&config_root, &data_root, NOW),
             JournalVersionStatus::LastKnown("2026.8.0".to_owned())
         );
 
@@ -210,6 +245,81 @@ fn malformed_or_failed_response_preserves_existing_cache() {
 }
 
 #[test]
+fn dial_failure_invalidates_confirmed_and_reports_last_known() {
+    runtime().block_on(async {
+        let temporary = TestDirectory::new("jv-dial-failure");
+        let config_root = temporary.path().join("config");
+        let data_root = temporary.path().join("data");
+        ensure_private_directory(&config_root).expect("config root");
+        ensure_private_directory(&data_root).expect("data root");
+
+        let lock = InstanceLock::acquire(&data_root).expect("instance lock");
+        let peer = PrivateLinkPeer::start().await;
+        persist_credential(&config_root, &peer.credential()).expect("persist credential");
+        write_test_health(&data_root, &lock, HealthState::Connected, NOW).await;
+        peer.enqueue_system_status_response(
+            200,
+            br#"{"ok":true,"version":{"current":"2026.8.0"}}"#.to_vec(),
+        );
+
+        let credential = peer.credential();
+        let refresh = solstone_tmux::journal_version::VersionRefreshState::new(
+            config_root.clone(),
+            data_root.clone(),
+            credential.instance_id.clone(),
+            &credential.ca_fp_prefix,
+            lock.identity().clone(),
+        );
+        let session = JournalSession::start(credential, config_root.clone(), refresh)
+            .await
+            .expect("start session");
+
+        for _ in 0..50 {
+            if read_journal_version(&config_root, &data_root, NOW)
+                == JournalVersionStatus::Current("2026.8.0".to_owned())
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+
+        assert_eq!(
+            read_journal_version(&config_root, &data_root, NOW),
+            JournalVersionStatus::Current("2026.8.0".to_owned())
+        );
+
+        // Shut down peer so carrier dial fails
+        peer.shutdown().await;
+
+        let dial_result = session.opener().dial_carrier().await;
+        assert!(dial_result.is_err());
+
+        for _ in 0..50 {
+            if read_journal_version(&config_root, &data_root, NOW)
+                == JournalVersionStatus::LastKnown("2026.8.0".to_owned())
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+
+        assert_eq!(
+            read_journal_version(&config_root, &data_root, NOW),
+            JournalVersionStatus::LastKnown("2026.8.0".to_owned())
+        );
+
+        let version_path = config_root.join(JOURNAL_VERSION_FILENAME);
+        let content = fs::read_to_string(&version_path).expect("read version file");
+        let record: serde_json::Value =
+            serde_json::from_str(&content).expect("parse version record");
+        assert_eq!(record["version"], "2026.8.0");
+        assert_eq!(record["confirmed"], false);
+
+        session.shutdown().await.expect("shutdown session");
+    });
+}
+
+#[test]
 fn credential_mismatch_invalidates_cached_version() {
     runtime().block_on(async {
         let temporary = TestDirectory::new("jv-cred-mismatch");
@@ -221,22 +331,26 @@ fn credential_mismatch_invalidates_cached_version() {
         let lock = InstanceLock::acquire(&data_root).expect("instance lock");
         let peer = PrivateLinkPeer::start().await;
         persist_credential(&config_root, &peer.credential()).expect("persist credential");
+        write_test_health(&data_root, &lock, HealthState::Connected, NOW).await;
         peer.enqueue_system_status_response(
             200,
             br#"{"ok":true,"version":{"current":"2026.8.0"}}"#.to_vec(),
         );
 
-        let session = JournalSession::start(
-            peer.credential(),
+        let credential = peer.credential();
+        let refresh = solstone_tmux::journal_version::VersionRefreshState::new(
             config_root.clone(),
             data_root.clone(),
+            credential.instance_id.clone(),
+            &credential.ca_fp_prefix,
             lock.identity().clone(),
-        )
-        .await
-        .expect("start session");
+        );
+        let session = JournalSession::start(credential, config_root.clone(), refresh)
+            .await
+            .expect("start session");
 
         for _ in 0..50 {
-            if read_journal_version(&config_root, &data_root)
+            if read_journal_version(&config_root, &data_root, NOW)
                 == JournalVersionStatus::Current("2026.8.0".to_owned())
             {
                 break;
@@ -245,7 +359,7 @@ fn credential_mismatch_invalidates_cached_version() {
         }
 
         assert_eq!(
-            read_journal_version(&config_root, &data_root),
+            read_journal_version(&config_root, &data_root, NOW),
             JournalVersionStatus::Current("2026.8.0".to_owned())
         );
 
@@ -259,7 +373,7 @@ fn credential_mismatch_invalidates_cached_version() {
         persist_credential(&config_root, &modified_cred).expect("persist modified credential");
 
         assert_eq!(
-            read_journal_version(&config_root, &data_root),
+            read_journal_version(&config_root, &data_root, NOW),
             JournalVersionStatus::Unknown
         );
     });

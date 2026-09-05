@@ -69,6 +69,7 @@ impl PeerRequest {
     }
 }
 
+#[derive(Clone)]
 enum PeerResponse {
     Structured { status: u16, body: Vec<u8> },
     Raw(Vec<u8>),
@@ -365,7 +366,8 @@ async fn handle_carrier(
                         }
                         let response = if is_system_status {
                             lock(&state.system_status_responses)
-                                .pop_front()
+                                .back()
+                                .cloned()
                                 .unwrap_or(PeerResponse::Structured {
                                     status: 500,
                                     body: Vec::new(),

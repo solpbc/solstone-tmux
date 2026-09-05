@@ -28,6 +28,7 @@ use crate::journal::{
     ListingFileStatus, LocalFile, SegmentsEnvelope, UploadResult, UploadStatus, inventory_files,
     stream_sha256_hex,
 };
+use crate::journal_version::VersionRefreshState;
 use crate::name::{DerivedName, derive_component};
 use crate::private_link::{
     PrivateLinkBridge, PrivateLinkOpener, load_credential, persist_credential,
@@ -201,18 +202,11 @@ impl JournalSession {
     pub async fn start(
         credential: Credential,
         config_root: PathBuf,
-        data_root: PathBuf,
-        run_identity: RunIdentity,
+        refresh: VersionRefreshState,
     ) -> Result<Self, DiagnosticCode> {
+        refresh.note_session_started();
         let (token_persistence, hook) =
             TokenPersistence::new(config_root.clone(), credential.clone());
-        let refresh = crate::journal_version::VersionRefreshState::new(
-            config_root.clone(),
-            data_root,
-            credential.instance_id.clone(),
-            &credential.ca_fp_prefix,
-            run_identity,
-        );
         let bridge = PrivateLinkBridge::start(credential, Some(hook), refresh).await?;
         let journal = match JournalClient::bootstrap(&bridge).await {
             Ok(journal) => journal,
@@ -1387,6 +1381,13 @@ impl SyncTask {
             refresh_waiting_health(&health, &facts, clock.as_ref(), &mut shutdown).await;
             return Ok(());
         }
+        let refresh = VersionRefreshState::new(
+            config_root.clone(),
+            data_root.clone(),
+            credential.instance_id.clone(),
+            &credential.ca_fp_prefix,
+            identity,
+        );
         let mut reconnect = Backoff::new();
         let mut reconnect_facts = SyncFacts {
             paired: true,
@@ -1399,8 +1400,7 @@ impl SyncTask {
             let mut journal = match JournalSession::start(
                 credential.clone(),
                 config_root.clone(),
-                data_root.clone(),
-                identity.clone(),
+                refresh.clone(),
             )
             .await
             {

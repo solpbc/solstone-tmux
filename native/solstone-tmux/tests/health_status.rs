@@ -170,14 +170,16 @@ fn production_failure_paths_redact_secrets_and_owner_content() {
         let mut credential = peer.credential();
         credential.device_token = Some(RELAY_TOKEN_SENTINEL.to_owned());
         credential.device_token_expires_at = Some(NOW + 300);
-        let owner = JournalSession::start(
-            credential,
-            config_root,
+        let refresh = solstone_tmux::journal_version::VersionRefreshState::new(
+            config_root.clone(),
             data_root.clone(),
+            credential.instance_id.clone(),
+            &credential.ca_fp_prefix,
             lock.identity().clone(),
-        )
-        .await
-        .expect("start redaction session");
+        );
+        let owner = JournalSession::start(credential, config_root, refresh)
+            .await
+            .expect("start redaction session");
 
         peer.enqueue_response(200, RESPONSE_BODY_SENTINEL.as_bytes());
         let response_error = match owner
@@ -357,17 +359,20 @@ fn offline_and_stale_journal_version_snapshot_reads_last_known() {
             200,
             br#"{"ok":true,"version":{"current":"2026.8.0"}}"#.to_vec(),
         );
-        let session = JournalSession::start(
-            peer.credential(),
+        let credential = peer.credential();
+        let refresh = solstone_tmux::journal_version::VersionRefreshState::new(
             config_root.clone(),
             data_root.clone(),
+            credential.instance_id.clone(),
+            &credential.ca_fp_prefix,
             lock.identity().clone(),
-        )
-        .await
-        .expect("start session");
+        );
+        let session = JournalSession::start(credential, config_root.clone(), refresh)
+            .await
+            .expect("start session");
 
         for _ in 0..50 {
-            if read_journal_version(&config_root, &data_root)
+            if read_journal_version(&config_root, &data_root, NOW)
                 == JournalVersionStatus::Current("2026.8.0".to_owned())
             {
                 break;
@@ -376,7 +381,7 @@ fn offline_and_stale_journal_version_snapshot_reads_last_known() {
         }
 
         assert_eq!(
-            read_journal_version(&config_root, &data_root),
+            read_journal_version(&config_root, &data_root, NOW),
             JournalVersionStatus::Current("2026.8.0".to_owned())
         );
 
@@ -385,7 +390,7 @@ fn offline_and_stale_journal_version_snapshot_reads_last_known() {
 
         drop(lock);
         assert_eq!(
-            read_journal_version(&config_root, &data_root),
+            read_journal_version(&config_root, &data_root, NOW),
             JournalVersionStatus::LastKnown("2026.8.0".to_owned())
         );
     });

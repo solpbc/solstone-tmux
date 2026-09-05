@@ -33,14 +33,17 @@ fn v3_operations_use_projection_examples_and_exact_multipart_envelope() {
         let temporary = TestDirectory::new("journal-contract-v3");
         ensure_private_directory(temporary.path()).expect("private root");
         let lock = InstanceLock::acquire(temporary.path()).expect("acquire lock");
-        let session = JournalSession::start(
-            peer.credential(),
+        let credential = peer.credential();
+        let refresh = solstone_tmux::journal_version::VersionRefreshState::new(
             temporary.path().to_path_buf(),
             temporary.path().to_path_buf(),
+            credential.instance_id.clone(),
+            &credential.ca_fp_prefix,
             lock.identity().clone(),
-        )
-        .await
-        .expect("start journal session");
+        );
+        let session = JournalSession::start(credential, temporary.path().to_path_buf(), refresh)
+            .await
+            .expect("start journal session");
         let first = temporary.path().join("first.jsonl");
         let second = temporary.path().join("second.jsonl");
         fs::write(&first, b"first\n").expect("first file");
@@ -106,11 +109,18 @@ fn unrecognized_source_reason_code_is_a_generic_journal_rejection() {
         let temporary = TestDirectory::new("journal-source-rejection");
         ensure_private_directory(temporary.path()).expect("private root");
         let lock = InstanceLock::acquire(temporary.path()).expect("acquire lock");
-        let session = JournalSession::start(
-            peer.credential(),
+        let credential = peer.credential();
+        let refresh = solstone_tmux::journal_version::VersionRefreshState::new(
             temporary.path().to_path_buf(),
             temporary.path().to_path_buf(),
+            credential.instance_id.clone(),
+            &credential.ca_fp_prefix,
             lock.identity().clone(),
+        );
+        let session = JournalSession::start(
+            credential,
+            temporary.path().to_path_buf(),
+            refresh,
         )
         .await
         .expect("start journal session");
@@ -165,14 +175,17 @@ fn multipart_limits_reject_before_the_peer_and_admit_newly_supported_parts() {
         let temporary = TestDirectory::new("journal-limits-v3");
         ensure_private_directory(temporary.path()).expect("private root");
         let lock = InstanceLock::acquire(temporary.path()).expect("acquire lock");
-        let session = JournalSession::start(
-            peer.credential(),
+        let credential = peer.credential();
+        let refresh = solstone_tmux::journal_version::VersionRefreshState::new(
             temporary.path().to_path_buf(),
             temporary.path().to_path_buf(),
+            credential.instance_id.clone(),
+            &credential.ca_fp_prefix,
             lock.identity().clone(),
-        )
-        .await
-        .expect("start session");
+        );
+        let session = JournalSession::start(credential, temporary.path().to_path_buf(), refresh)
+            .await
+            .expect("start session");
 
         let admitted = temporary.path().join("admitted.jsonl");
         fs::File::create(&admitted)

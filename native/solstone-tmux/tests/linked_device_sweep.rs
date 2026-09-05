@@ -101,14 +101,18 @@ fn linked_device_sweep_uses_exactly_the_four_v3_operations_without_legacy_header
         ensure_private_directory(temporary.path()).expect("private root");
         let lock = InstanceLock::acquire(temporary.path()).expect("acquire lock");
         let candidate = create_linked_device_candidate(&temporary);
-        let mut session = JournalSession::start(
-            peer.credential(),
+        let credential = peer.credential();
+        let refresh = solstone_tmux::journal_version::VersionRefreshState::new(
             temporary.path().to_path_buf(),
             temporary.path().to_path_buf(),
+            credential.instance_id.clone(),
+            &credential.ca_fp_prefix,
             lock.identity().clone(),
-        )
-        .await
-        .expect("linked-device session");
+        );
+        let mut session =
+            JournalSession::start(credential, temporary.path().to_path_buf(), refresh)
+                .await
+                .expect("linked-device session");
         enqueue_v3_success_chain(&peer);
         let mut scheduler = linked_device_scheduler(&temporary, -1);
 
@@ -172,14 +176,18 @@ fn linked_device_sweep_sends_the_configured_source_on_every_v3_operation() {
         ensure_private_directory(temporary.path()).expect("private root");
         let lock = InstanceLock::acquire(temporary.path()).expect("acquire lock");
         let candidate = create_linked_device_candidate(&temporary);
-        let mut session = JournalSession::start(
-            peer.credential(),
+        let credential = peer.credential();
+        let refresh = solstone_tmux::journal_version::VersionRefreshState::new(
             temporary.path().to_path_buf(),
             temporary.path().to_path_buf(),
+            credential.instance_id.clone(),
+            &credential.ca_fp_prefix,
             lock.identity().clone(),
-        )
-        .await
-        .expect("linked-device session");
+        );
+        let mut session =
+            JournalSession::start(credential, temporary.path().to_path_buf(), refresh)
+                .await
+                .expect("linked-device session");
         enqueue_v3_success_chain(&peer);
         let mut scheduler = linked_device_scheduler_with_source(&temporary, -1, "studio");
 
@@ -244,11 +252,18 @@ fn linked_device_403_and_426_retain_every_candidate_for_each_operation_class() {
                 ensure_private_directory(temporary.path()).expect("private root");
                 let lock = InstanceLock::acquire(temporary.path()).expect("acquire lock");
                 let candidate = create_linked_device_candidate(&temporary);
-                let mut session = JournalSession::start(
-                    peer.credential(),
+                let credential = peer.credential();
+                let refresh = solstone_tmux::journal_version::VersionRefreshState::new(
                     temporary.path().to_path_buf(),
                     temporary.path().to_path_buf(),
+                    credential.instance_id.clone(),
+                    &credential.ca_fp_prefix,
                     lock.identity().clone(),
+                );
+                let mut session = JournalSession::start(
+                    credential,
+                    temporary.path().to_path_buf(),
+                    refresh,
                 )
                 .await
                 .expect("linked-device session");
