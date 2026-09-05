@@ -79,8 +79,8 @@ work_root="$(mktemp -d "$output_parent/.solstone-tmux-release.XXXXXX")"
 # -S "$lane_tmux_socket". Not TMUX_TMPDIR. Not a bare `tmux`. -S.
 #
 # TMUX_TMPDIR IS NOT ISOLATION. When $TMUX is set in the environment — which it
-# is any time this lane runs inside a tmux pane, i.e. every hopper lane, every
-# `tmux-run`, every operator shell — tmux reads its socket path out of $TMUX and
+# is any time this lane runs inside a tmux pane, i.e. every automated build,
+# every `tmux-run`, every operator shell — tmux reads its socket path out of $TMUX and
 # ignores TMUX_TMPDIR completely. In that context
 #
 #     TMUX_TMPDIR=/some/scratch tmux kill-server

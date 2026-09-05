@@ -191,7 +191,7 @@ fi
 # TMUX_TMPDIR IS NOT ISOLATION. When $TMUX is set in the environment — which it
 # is any time this script runs inside a tmux pane, and it always does: the
 # release playbook drives it as
-#     ssh -tt pro5e.local 'tmux-run hopper:solstone-tmux-NNN ... build-candidate.sh ...'
+#     ssh -tt pro5e.local 'tmux-run some-window-name ... build-candidate.sh ...'
 # and `tmux-run` executes it inside a tmux session — tmux reads its socket path
 # out of $TMUX and ignores TMUX_TMPDIR completely. In that context
 #
