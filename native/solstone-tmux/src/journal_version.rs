@@ -176,6 +176,7 @@ pub struct VersionRefreshState {
     ca_fp_prefix_hex: String,
     run_identity: RunIdentity,
     generation: Arc<AtomicU64>,
+    generation_guard: Arc<Mutex<()>>,
     journal_client: Arc<Mutex<Option<JournalClient>>>,
 }
 
@@ -194,6 +195,7 @@ impl VersionRefreshState {
             ca_fp_prefix_hex: hex_encode(ca_fp_prefix),
             run_identity,
             generation: Arc::new(AtomicU64::new(0)),
+            generation_guard: Arc::new(Mutex::new(())),
             journal_client: Arc::new(Mutex::new(None)),
         }
     }
@@ -208,14 +210,14 @@ impl VersionRefreshState {
     }
 
     pub(crate) fn note_dial_failed(&self) {
+        let generation = self.begin_refresh();
         let refresh = self.clone();
-        tokio::task::spawn_blocking(move || refresh.begin_refresh());
+        tokio::task::spawn_blocking(move || refresh.validate_and_store(generation, None));
     }
 
     pub(crate) fn note_session_started(&self) {
         *lock(&self.journal_client) = None;
-        let refresh = self.clone();
-        tokio::task::spawn_blocking(move || refresh.begin_refresh());
+        self.note_dial_failed();
     }
 
     fn identity_and_credential_live(&self) -> bool {
@@ -235,25 +237,12 @@ impl VersionRefreshState {
     }
 
     fn begin_refresh(&self) -> u64 {
-        with_write_lock(&self.config_root, || {
-            let this_generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
-            if self.identity_and_credential_live()
-                && let Some(record) = record_for_attempt(
-                    read_record(&self.config_root),
-                    &self.instance_id,
-                    &self.ca_fp_prefix_hex,
-                    &self.run_identity,
-                    None,
-                )
-            {
-                let _ = store_record(&self.config_root, &record);
-            }
-            this_generation
-        })
-        .unwrap_or_else(|| self.generation.fetch_add(1, Ordering::SeqCst) + 1)
+        let _guard = lock(&self.generation_guard);
+        self.generation.fetch_add(1, Ordering::SeqCst) + 1
     }
 
     pub(crate) fn validate_and_store(&self, this_generation: u64, fetched: Option<String>) -> bool {
+        let _guard = lock(&self.generation_guard);
         with_write_lock(&self.config_root, || {
             if self.generation.load(Ordering::SeqCst) != this_generation {
                 return false;
@@ -278,13 +267,16 @@ impl VersionRefreshState {
     fn spawn_refresh(&self) {
         let client = lock(&self.journal_client).clone();
         let Some(client) = client else { return };
+        // Claim the generation at the lifecycle event, before queued work can
+        // race a subsequent session or dial. Only the network read is deferred.
+        let this_generation = self.begin_refresh();
         let refresh = self.clone();
         tokio::spawn(async move {
-            let refresh_for_begin = refresh.clone();
-            let this_generation =
-                tokio::task::spawn_blocking(move || refresh_for_begin.begin_refresh())
-                    .await
-                    .unwrap_or(0);
+            let invalidator = refresh.clone();
+            let _ = tokio::task::spawn_blocking(move || {
+                invalidator.validate_and_store(this_generation, None)
+            })
+            .await;
             let fetched = client.system_status().await.ok();
             let _ = tokio::task::spawn_blocking(move || {
                 refresh.validate_and_store(this_generation, fetched)
