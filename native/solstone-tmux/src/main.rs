@@ -12,6 +12,7 @@ use solstone_tmux::config::{RuntimeConfig, system_hostname};
 use solstone_tmux::health::{HealthWriter, StatusHealth, emit_diagnostic, read_status_health};
 use solstone_tmux::indicator::{CommandIndicatorIo, IndicatorOwnership};
 use solstone_tmux::instance_lock::InstanceLock;
+use solstone_tmux::journal_version::{JournalVersionStatus, read_journal_version};
 use solstone_tmux::migration::migrate_legacy_config;
 use solstone_tmux::observer::{
     NoopShutdownIndicator, ObserverConfig, SegmentManager, ShutdownIndicator, SupervisionControl,
@@ -110,16 +111,22 @@ fn run() -> Result<i32, String> {
                             Ok(ServiceStatus::Absent) => "absent",
                             Err(_) => "error",
                         };
+                        let now_unix_seconds = time::OffsetDateTime::now_utc().unix_timestamp();
                         let sync_health = resolve_data_root(platform, &environment)
-                            .map(|data_root| {
-                                read_status_health(
-                                    &data_root,
-                                    time::OffsetDateTime::now_utc().unix_timestamp(),
-                                )
-                            })
+                            .map(|data_root| read_status_health(&data_root, now_unix_seconds))
                             .unwrap_or(StatusHealth::Unknown);
+                        let journal_version = match (
+                            resolve_config_root(platform, &environment),
+                            resolve_data_root(platform, &environment),
+                        ) {
+                            (Ok(config_root), Ok(data_root)) => {
+                                read_journal_version(&config_root, &data_root)
+                            }
+                            _ => JournalVersionStatus::Unknown,
+                        };
                         println!("service: {service_line}");
                         println!("sync-health: {}", sync_health.as_str());
+                        println!("journal-version: {}", journal_version.render());
                         if let Err(error) = &status {
                             eprintln!("solstone-tmux: {error}");
                         }
@@ -257,6 +264,7 @@ fn run_native(
         activity: activity_sender,
         health,
         retention_fence: Arc::clone(&retention_fence),
+        identity: instance_lock.identity().clone(),
     }
     .run(sync_shutdown);
     let exit = runtime.block_on(supervise_observer(

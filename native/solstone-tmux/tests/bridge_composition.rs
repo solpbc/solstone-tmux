@@ -15,6 +15,7 @@ use reqwest::{Method, StatusCode};
 use solstone_tmux::clock::{Clock, SystemClock};
 use solstone_tmux::config::DEFAULT_SOURCE;
 use solstone_tmux::health::DiagnosticCode;
+use solstone_tmux::instance_lock::InstanceLock;
 use solstone_tmux::journal::{
     INGEST_MANIFEST_DAY_PATH, INGEST_MANIFEST_PATH, INGEST_SEGMENTS_PATH,
 };
@@ -47,9 +48,15 @@ fn linked_device_bridge_rejects_caller_auth_and_mints_only_v3_protocol_header() 
         }));
         let temporary = TestDirectory::new("bridge-v3");
         ensure_private_directory(temporary.path()).expect("private root");
-        let session = JournalSession::start(peer.credential(), temporary.path().to_path_buf())
-            .await
-            .expect("session");
+        let lock = InstanceLock::acquire(temporary.path()).expect("acquire lock");
+        let session = JournalSession::start(
+            peer.credential(),
+            temporary.path().to_path_buf(),
+            temporary.path().to_path_buf(),
+            lock.identity().clone(),
+        )
+        .await
+        .expect("session");
 
         let rejected = session
             .journal()
@@ -95,7 +102,18 @@ fn relay_only_credential_starts_the_private_link_bridge() {
         credential.relay_origin = Some("https://relay.example.invalid".to_owned());
         credential.device_token = Some("relay-only-test-token".to_owned());
 
-        let bridge = PrivateLinkBridge::start(credential, None)
+        let temporary = TestDirectory::new("bridge-relay-only");
+        ensure_private_directory(temporary.path()).expect("private root");
+        let lock = InstanceLock::acquire(temporary.path()).expect("acquire lock");
+        let refresh = solstone_tmux::journal_version::VersionRefreshState::new(
+            temporary.path().to_path_buf(),
+            temporary.path().to_path_buf(),
+            credential.instance_id.clone(),
+            &credential.ca_fp_prefix,
+            lock.identity().clone(),
+        );
+
+        let bridge = PrivateLinkBridge::start(credential, None, refresh)
             .await
             .expect("start relay-only bridge");
         bridge.shutdown().await;
@@ -109,9 +127,15 @@ fn journal_response_body_limit_applies_to_success_and_error_responses() {
         let peer = PrivateLinkPeer::start().await;
         let temporary = TestDirectory::new("bridge-response-limit-v3");
         ensure_private_directory(temporary.path()).expect("private root");
-        let session = JournalSession::start(peer.credential(), temporary.path().to_path_buf())
-            .await
-            .expect("session");
+        let lock = InstanceLock::acquire(temporary.path()).expect("acquire lock");
+        let session = JournalSession::start(
+            peer.credential(),
+            temporary.path().to_path_buf(),
+            temporary.path().to_path_buf(),
+            lock.identity().clone(),
+        )
+        .await
+        .expect("session");
         let oversized = vec![b'x'; 4 * 1024 * 1024 + 1];
         peer.enqueue_response(200, oversized.clone());
         let error = session
@@ -138,9 +162,15 @@ fn linked_device_session_composes_on_the_production_runtime_shape() {
         let peer = PrivateLinkPeer::start().await;
         let temporary = TestDirectory::new("bridge-session-composition-v3");
         ensure_private_directory(temporary.path()).expect("private root");
-        let session = JournalSession::start(peer.credential(), temporary.path().to_path_buf())
-            .await
-            .expect("linked-device session");
+        let lock = InstanceLock::acquire(temporary.path()).expect("acquire lock");
+        let session = JournalSession::start(
+            peer.credential(),
+            temporary.path().to_path_buf(),
+            temporary.path().to_path_buf(),
+            lock.identity().clone(),
+        )
+        .await
+        .expect("linked-device session");
         peer.enqueue_response(200, br#"{"days":{}}"#.to_vec());
         session
             .journal()
@@ -166,9 +196,15 @@ fn v3_routes_refuse_unconfined_day_values() {
         let peer = PrivateLinkPeer::start().await;
         let temporary = TestDirectory::new("bridge-route-confinement-v3");
         ensure_private_directory(temporary.path()).expect("private root");
-        let session = JournalSession::start(peer.credential(), temporary.path().to_path_buf())
-            .await
-            .expect("session");
+        let lock = InstanceLock::acquire(temporary.path()).expect("acquire lock");
+        let session = JournalSession::start(
+            peer.credential(),
+            temporary.path().to_path_buf(),
+            temporary.path().to_path_buf(),
+            lock.identity().clone(),
+        )
+        .await
+        .expect("session");
         for path in [
             &format!(
                 "{}?foreign",
@@ -201,9 +237,15 @@ fn slow_large_multipart_preserves_capture_on_the_production_runtime() {
         peer.withhold_upload_credit();
         let temporary = TestDirectory::new("bridge-multipart-backpressure-v3");
         ensure_private_directory(temporary.path()).expect("private root");
-        let session = JournalSession::start(peer.credential(), temporary.path().to_path_buf())
-            .await
-            .expect("session");
+        let lock = InstanceLock::acquire(temporary.path()).expect("acquire lock");
+        let session = JournalSession::start(
+            peer.credential(),
+            temporary.path().to_path_buf(),
+            temporary.path().to_path_buf(),
+            lock.identity().clone(),
+        )
+        .await
+        .expect("session");
         let capture = temporary.path().join("capture.jsonl");
         fs::write(&capture, vec![b'x'; 1024 * 1024]).expect("capture bytes");
         peer.enqueue_response(200, br#"{"status":"ok","segment":"143000_1"}"#.to_vec());

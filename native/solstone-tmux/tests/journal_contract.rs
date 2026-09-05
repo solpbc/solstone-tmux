@@ -8,6 +8,7 @@ use std::fs;
 use serde_json::Value;
 use solstone_tmux::config::DEFAULT_SOURCE;
 use solstone_tmux::health::DiagnosticCode;
+use solstone_tmux::instance_lock::InstanceLock;
 use solstone_tmux::journal::{
     INGEST_MANIFEST_DAY_PATH, INGEST_MANIFEST_PATH, INGEST_PATH, INGEST_SEGMENTS_PATH,
     MAX_MULTIPART_PART_BYTES, UploadStatus, decode_manifest_day_response, decode_manifest_response,
@@ -31,9 +32,15 @@ fn v3_operations_use_projection_examples_and_exact_multipart_envelope() {
         let peer = PrivateLinkPeer::start().await;
         let temporary = TestDirectory::new("journal-contract-v3");
         ensure_private_directory(temporary.path()).expect("private root");
-        let session = JournalSession::start(peer.credential(), temporary.path().to_path_buf())
-            .await
-            .expect("start journal session");
+        let lock = InstanceLock::acquire(temporary.path()).expect("acquire lock");
+        let session = JournalSession::start(
+            peer.credential(),
+            temporary.path().to_path_buf(),
+            temporary.path().to_path_buf(),
+            lock.identity().clone(),
+        )
+        .await
+        .expect("start journal session");
         let first = temporary.path().join("first.jsonl");
         let second = temporary.path().join("second.jsonl");
         fs::write(&first, b"first\n").expect("first file");
@@ -98,9 +105,15 @@ fn unrecognized_source_reason_code_is_a_generic_journal_rejection() {
         let peer = PrivateLinkPeer::start().await;
         let temporary = TestDirectory::new("journal-source-rejection");
         ensure_private_directory(temporary.path()).expect("private root");
-        let session = JournalSession::start(peer.credential(), temporary.path().to_path_buf())
-            .await
-            .expect("start journal session");
+        let lock = InstanceLock::acquire(temporary.path()).expect("acquire lock");
+        let session = JournalSession::start(
+            peer.credential(),
+            temporary.path().to_path_buf(),
+            temporary.path().to_path_buf(),
+            lock.identity().clone(),
+        )
+        .await
+        .expect("start journal session");
         peer.enqueue_response(
             400,
             br#"{"error":"invalid source","reason_code":"source_too_long","detail":"invalid source"}"#,
@@ -151,9 +164,15 @@ fn multipart_limits_reject_before_the_peer_and_admit_newly_supported_parts() {
         let peer = PrivateLinkPeer::start().await;
         let temporary = TestDirectory::new("journal-limits-v3");
         ensure_private_directory(temporary.path()).expect("private root");
-        let session = JournalSession::start(peer.credential(), temporary.path().to_path_buf())
-            .await
-            .expect("start session");
+        let lock = InstanceLock::acquire(temporary.path()).expect("acquire lock");
+        let session = JournalSession::start(
+            peer.credential(),
+            temporary.path().to_path_buf(),
+            temporary.path().to_path_buf(),
+            lock.identity().clone(),
+        )
+        .await
+        .expect("start session");
 
         let admitted = temporary.path().join("admitted.jsonl");
         fs::File::create(&admitted)

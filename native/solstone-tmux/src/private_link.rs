@@ -8,6 +8,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use serde_json::{Map, Value};
 use spl_core::bridge::BridgeNames;
@@ -22,6 +23,8 @@ use spl_transport::pairing::pair_from_link;
 use crate::config::system_hostname;
 use crate::health::DiagnosticCode;
 use crate::instance_lock::InstanceLock;
+use crate::journal::JournalClient;
+use crate::journal_version::VersionRefreshState;
 use crate::paths::{
     Environment, PlatformKind, ensure_private_directory, resolve_config_root, resolve_data_root,
 };
@@ -40,13 +43,21 @@ pub const PROTOCOL_VERSION_NUMBER: u64 = 3;
 
 pub struct PrivateLinkOpener {
     transport: Arc<TransportClient>,
+    refresh: VersionRefreshState,
+    dials: AtomicUsize,
 }
 
 impl PrivateLinkOpener {
-    fn new(transport: TransportClient) -> Self {
+    fn new(transport: TransportClient, refresh: VersionRefreshState) -> Self {
         Self {
             transport: Arc::new(transport),
+            refresh,
+            dials: AtomicUsize::new(0),
         }
+    }
+
+    pub(crate) fn attach_journal_client(&self, client: JournalClient) {
+        self.refresh.attach_client(client);
     }
 }
 
@@ -66,7 +77,13 @@ impl CarrierOpener for PrivateLinkOpener {
     fn dial_carrier(
         &self,
     ) -> Pin<Box<dyn Future<Output = Result<DialedCarrier, TransportError>> + Send + '_>> {
-        Box::pin(self.transport.dial_carrier())
+        Box::pin(async move {
+            let dialed = self.transport.dial_carrier().await?;
+            if self.dials.fetch_add(1, Ordering::SeqCst) > 0 {
+                self.refresh.note_redial();
+            }
+            Ok(dialed)
+        })
     }
 }
 
@@ -79,6 +96,7 @@ impl PrivateLinkBridge {
     pub async fn start(
         credential: Credential,
         token_persist: Option<TokenPersistHook>,
+        refresh: VersionRefreshState,
     ) -> Result<Self, DiagnosticCode> {
         let endpoint_hosts = credential
             .endpoints
@@ -91,7 +109,7 @@ impl PrivateLinkBridge {
             TransportClient::new(credential, token_persist)
         }
         .map_err(|_| DiagnosticCode::BridgeUnavailable)?;
-        let opener = Arc::new(PrivateLinkOpener::new(transport));
+        let opener = Arc::new(PrivateLinkOpener::new(transport, refresh));
         let bridge_names = BridgeNames {
             capability_cookie_name: CAPABILITY_COOKIE_NAME.to_owned(),
             upstream_cookie_prefix: UPSTREAM_COOKIE_PREFIX.to_owned(),

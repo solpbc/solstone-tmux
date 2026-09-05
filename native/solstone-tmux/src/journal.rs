@@ -33,6 +33,8 @@ pub const INGEST_PATH: &str = "/app/devices/ingest";
 pub const INGEST_MANIFEST_PATH: &str = "/app/devices/ingest/manifest";
 pub const INGEST_MANIFEST_DAY_PATH: &str = "/app/devices/ingest/manifest/{day}";
 pub const INGEST_SEGMENTS_PATH: &str = "/app/devices/ingest/segments/{day}";
+pub const SYSTEM_STATUS_PATH: &str = "/api/system/status";
+const SYSTEM_STATUS_TIMEOUT: Duration = Duration::from_secs(5);
 const LOOPBACK_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const FILE_STAGE_CAPACITY: usize = UPLOAD_BODY_STAGE_CAPACITY / RECOMMENDED_CHUNK;
@@ -590,6 +592,26 @@ impl JournalClient {
         }
         decode_segments_response(&body)
     }
+
+    pub async fn system_status(&self) -> Result<String, JournalError> {
+        let response = self
+            .request(Method::GET, SYSTEM_STATUS_PATH)?
+            .timeout(SYSTEM_STATUS_TIMEOUT)
+            .send()
+            .await
+            .map_err(|error| {
+                JournalError::local(request_diagnostic(
+                    &error,
+                    DiagnosticCode::JournalUnavailable,
+                ))
+            })?;
+        let status = response.status();
+        let body = collect_response_body(response).await?;
+        if status != StatusCode::OK {
+            return Err(classify_error_response(status.as_u16(), &body));
+        }
+        decode_system_status_response(&body)
+    }
 }
 
 async fn collect_response_body(mut response: reqwest::Response) -> Result<Vec<u8>, JournalError> {
@@ -642,6 +664,24 @@ pub fn decode_manifest_response(body: &[u8]) -> Result<IngestManifest, JournalEr
         return Err(JournalError::local(DiagnosticCode::JournalContractInvalid));
     }
     Ok(response)
+}
+
+pub fn decode_system_status_response(body: &[u8]) -> Result<String, JournalError> {
+    #[derive(Deserialize)]
+    struct Response {
+        ok: bool,
+        version: VersionField,
+    }
+    #[derive(Deserialize)]
+    struct VersionField {
+        current: String,
+    }
+    let response = serde_json::from_slice::<Response>(body)
+        .map_err(|_| JournalError::local(DiagnosticCode::JournalContractInvalid))?;
+    if !response.ok || response.version.current.is_empty() {
+        return Err(JournalError::local(DiagnosticCode::JournalContractInvalid));
+    }
+    Ok(response.version.current)
 }
 
 pub fn decode_manifest_day_response(

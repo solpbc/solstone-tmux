@@ -14,7 +14,9 @@ use solstone_tmux::health::{
     read_status_health,
 };
 use solstone_tmux::instance_lock::{InstanceLock, LOCK_FILENAME};
+use solstone_tmux::journal_version::{JournalVersionStatus, read_journal_version};
 use solstone_tmux::paths::ensure_private_directory;
+use solstone_tmux::private_link::persist_credential;
 use solstone_tmux::sync::{JournalSession, SyncFailureClass, SyncOperationError};
 use support::private_link_peer::PrivateLinkPeer;
 use support::{IsolatedRoots, TestDirectory};
@@ -168,9 +170,14 @@ fn production_failure_paths_redact_secrets_and_owner_content() {
         let mut credential = peer.credential();
         credential.device_token = Some(RELAY_TOKEN_SENTINEL.to_owned());
         credential.device_token_expires_at = Some(NOW + 300);
-        let owner = JournalSession::start(credential, config_root)
-            .await
-            .expect("start redaction session");
+        let owner = JournalSession::start(
+            credential,
+            config_root,
+            data_root.clone(),
+            lock.identity().clone(),
+        )
+        .await
+        .expect("start redaction session");
 
         peer.enqueue_response(200, RESPONSE_BODY_SENTINEL.as_bytes());
         let response_error = match owner
@@ -319,11 +326,69 @@ fn status_is_read_only_when_native_state_is_absent() {
     assert_eq!(output.status.code(), Some(4));
     assert_eq!(
         String::from_utf8(output.stdout).expect("status stdout"),
-        "service: absent\nsync-health: unknown\n"
+        "service: absent\nsync-health: unknown\njournal-version: unknown\n"
     );
     assert!(!roots.data_root().exists());
     assert!(!roots.data_root().join(LOCK_FILENAME).exists());
     assert!(!roots.data_root().join(HEALTH_FILENAME).exists());
+}
+
+#[test]
+fn offline_and_stale_journal_version_snapshot_reads_last_known() {
+    runtime().block_on(async {
+        let temporary = TestDirectory::new("journal-version-stale");
+        let config_root = temporary.path().join("config");
+        let data_root = temporary.path().join("data");
+        ensure_private_directory(&config_root).expect("config root");
+        ensure_private_directory(&data_root).expect("data root");
+
+        let lock = InstanceLock::acquire(&data_root).expect("instance lock");
+        let writer = HealthWriter::new(data_root.clone(), &lock);
+        let mut facts = SyncFacts {
+            paired: true,
+            ..SyncFacts::default()
+        };
+        facts.successful_contact(NOW);
+        writer.write(&facts, NOW).await.expect("write health");
+
+        let peer = PrivateLinkPeer::start().await;
+        persist_credential(&config_root, &peer.credential()).expect("persist credential");
+        peer.enqueue_system_status_response(
+            200,
+            br#"{"ok":true,"version":{"current":"2026.8.0"}}"#.to_vec(),
+        );
+        let session = JournalSession::start(
+            peer.credential(),
+            config_root.clone(),
+            data_root.clone(),
+            lock.identity().clone(),
+        )
+        .await
+        .expect("start session");
+
+        for _ in 0..50 {
+            if read_journal_version(&config_root, &data_root)
+                == JournalVersionStatus::Current("2026.8.0".to_owned())
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+
+        assert_eq!(
+            read_journal_version(&config_root, &data_root),
+            JournalVersionStatus::Current("2026.8.0".to_owned())
+        );
+
+        session.shutdown().await.expect("shutdown session");
+        peer.shutdown().await;
+
+        drop(lock);
+        assert_eq!(
+            read_journal_version(&config_root, &data_root),
+            JournalVersionStatus::LastKnown("2026.8.0".to_owned())
+        );
+    });
 }
 
 fn runtime() -> tokio::runtime::Runtime {

@@ -22,13 +22,16 @@ use tokio::time::Instant;
 use crate::clock::Clock;
 use crate::config::{RuntimeConfig, default_stream};
 use crate::health::{DiagnosticCode, HealthWriter, SyncFacts};
+use crate::instance_lock::RunIdentity;
 use crate::journal::{
     IngestDayManifest, IngestManifest, JournalClient, JournalError, JournalReasonCode,
     ListingFileStatus, LocalFile, SegmentsEnvelope, UploadResult, UploadStatus, inventory_files,
     stream_sha256_hex,
 };
 use crate::name::{DerivedName, derive_component};
-use crate::private_link::{PrivateLinkBridge, load_credential, persist_credential};
+use crate::private_link::{
+    PrivateLinkBridge, PrivateLinkOpener, load_credential, persist_credential,
+};
 use crate::segment::SegmentClose;
 use crate::storage::{
     atomic_write_bytes, open_directory_readonly, open_regular_readonly, open_regular_readonly_at,
@@ -198,10 +201,19 @@ impl JournalSession {
     pub async fn start(
         credential: Credential,
         config_root: PathBuf,
+        data_root: PathBuf,
+        run_identity: RunIdentity,
     ) -> Result<Self, DiagnosticCode> {
         let (token_persistence, hook) =
             TokenPersistence::new(config_root.clone(), credential.clone());
-        let bridge = PrivateLinkBridge::start(credential, Some(hook)).await?;
+        let refresh = crate::journal_version::VersionRefreshState::new(
+            config_root.clone(),
+            data_root,
+            credential.instance_id.clone(),
+            &credential.ca_fp_prefix,
+            run_identity,
+        );
+        let bridge = PrivateLinkBridge::start(credential, Some(hook), refresh).await?;
         let journal = match JournalClient::bootstrap(&bridge).await {
             Ok(journal) => journal,
             Err(code) => {
@@ -209,6 +221,7 @@ impl JournalSession {
                 return Err(code);
             }
         };
+        bridge.opener().attach_journal_client(journal.clone());
         Ok(Self {
             bridge,
             journal,
@@ -218,6 +231,10 @@ impl JournalSession {
 
     pub fn journal(&self) -> &JournalClient {
         &self.journal
+    }
+
+    pub fn opener(&self) -> &Arc<PrivateLinkOpener> {
+        self.bridge.opener()
     }
 
     pub async fn shutdown(self) -> Result<(), DiagnosticCode> {
@@ -1325,6 +1342,7 @@ pub struct SyncTask {
     pub activity: watch::Sender<SyncActivity>,
     pub health: HealthWriter,
     pub retention_fence: Arc<RetentionFence>,
+    pub identity: RunIdentity,
 }
 
 impl SyncTask {
@@ -1339,6 +1357,7 @@ impl SyncTask {
             activity,
             health,
             retention_fence,
+            identity,
         } = self;
         let load_root = config_root.clone();
         let loaded = tokio::task::spawn_blocking(move || load_credential(&load_root))
@@ -1377,25 +1396,31 @@ impl SyncTask {
             if shutdown_requested(&mut shutdown) {
                 return Ok(());
             }
-            let mut journal =
-                match JournalSession::start(credential.clone(), config_root.clone()).await {
-                    Ok(journal) => journal,
-                    Err(code) => {
-                        reconnect_facts.failed(code);
-                        let _ = health
-                            .write(&reconnect_facts, clock.wall_now().unix_timestamp())
-                            .await;
-                        reconnect.failed_operation();
-                        let deadline = reconnect
-                            .deadline()
-                            .expect("failed reconnect has a retry deadline");
-                        if !wait_for_retry_or_shutdown(&mut shutdown, deadline).await {
-                            return Ok(());
-                        }
-                        reconnect.deadline_reached();
-                        continue;
+            let mut journal = match JournalSession::start(
+                credential.clone(),
+                config_root.clone(),
+                data_root.clone(),
+                identity.clone(),
+            )
+            .await
+            {
+                Ok(journal) => journal,
+                Err(code) => {
+                    reconnect_facts.failed(code);
+                    let _ = health
+                        .write(&reconnect_facts, clock.wall_now().unix_timestamp())
+                        .await;
+                    reconnect.failed_operation();
+                    let deadline = reconnect
+                        .deadline()
+                        .expect("failed reconnect has a retry deadline");
+                    if !wait_for_retry_or_shutdown(&mut shutdown, deadline).await {
+                        return Ok(());
                     }
-                };
+                    reconnect.deadline_reached();
+                    continue;
+                }
+            };
             let mut scheduler = SyncScheduler::new(
                 data_root.join("captures"),
                 config.stream,

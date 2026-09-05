@@ -22,7 +22,7 @@ use spl_core::mux::INITIAL_WINDOW;
 use spl_transport::credential::{Credential, EndpointAddr};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, WriteHalf};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{Notify, mpsc};
+use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 use tokio_rustls::TlsAcceptor;
 use tokio_rustls::server::TlsStream;
@@ -80,6 +80,7 @@ struct OutboundResponse {
     credit: usize,
 }
 
+#[derive(Clone)]
 enum Control {
     GrantUploadCredit(u32),
 }
@@ -87,6 +88,7 @@ enum Control {
 #[derive(Clone)]
 struct PeerState {
     responses: Arc<Mutex<VecDeque<PeerResponse>>>,
+    system_status_responses: Arc<Mutex<VecDeque<PeerResponse>>>,
     requests: Arc<Mutex<Vec<PeerRequest>>>,
     withhold_credit: Arc<AtomicBool>,
     upload_stalled: Arc<Notify>,
@@ -97,7 +99,7 @@ struct PeerState {
 pub struct PrivateLinkPeer {
     credential: Credential,
     state: PeerState,
-    controls: mpsc::UnboundedSender<Control>,
+    controls: tokio::sync::broadcast::Sender<Control>,
     task: JoinHandle<()>,
 }
 
@@ -128,14 +130,15 @@ impl PrivateLinkPeer {
         let (credential, acceptor) = credential_and_acceptor(address.port());
         let state = PeerState {
             responses: Arc::new(Mutex::new(VecDeque::new())),
+            system_status_responses: Arc::new(Mutex::new(VecDeque::new())),
             requests: Arc::new(Mutex::new(Vec::new())),
             withhold_credit: Arc::new(AtomicBool::new(false)),
             upload_stalled: Arc::new(Notify::new()),
             current_stream: Arc::new(AtomicU32::new(0)),
             accepted: Arc::new(AtomicUsize::new(0)),
         };
-        let (controls, control_receiver) = mpsc::unbounded_channel();
-        let task = tokio::spawn(serve(listener, acceptor, state.clone(), control_receiver));
+        let (controls, _) = tokio::sync::broadcast::channel(16);
+        let task = tokio::spawn(serve(listener, acceptor, state.clone(), controls.clone()));
 
         Self {
             credential,
@@ -151,6 +154,13 @@ impl PrivateLinkPeer {
 
     pub fn enqueue_response(&self, status: u16, body: impl Into<Vec<u8>>) {
         lock(&self.state.responses).push_back(PeerResponse::Structured {
+            status,
+            body: body.into(),
+        });
+    }
+
+    pub fn enqueue_system_status_response(&self, status: u16, body: impl Into<Vec<u8>>) {
+        lock(&self.state.system_status_responses).push_back(PeerResponse::Structured {
             status,
             body: body.into(),
         });
@@ -258,7 +268,7 @@ async fn serve(
     listener: TcpListener,
     acceptor: TlsAcceptor,
     state: PeerState,
-    mut controls: mpsc::UnboundedReceiver<Control>,
+    controls: tokio::sync::broadcast::Sender<Control>,
 ) {
     loop {
         let Ok((tcp, _)) = listener.accept().await else {
@@ -268,16 +278,18 @@ async fn serve(
         let Ok(tls) = acceptor.accept(tcp).await else {
             continue;
         };
-        if handle_carrier(tls, &state, &mut controls).await.is_err() {
-            continue;
-        }
+        let state = state.clone();
+        let control_rx = controls.subscribe();
+        tokio::spawn(async move {
+            let _ = handle_carrier(tls, state, control_rx).await;
+        });
     }
 }
 
 async fn handle_carrier(
     tls: TlsStream<TcpStream>,
-    state: &PeerState,
-    controls: &mut mpsc::UnboundedReceiver<Control>,
+    state: PeerState,
+    mut controls: tokio::sync::broadcast::Receiver<Control>,
 ) -> io::Result<()> {
     let (mut reader, mut writer) = tokio::io::split(tls);
     let mut decoder = FrameDecoder::new();
@@ -344,16 +356,28 @@ async fn handle_carrier(
                             Ordering::SeqCst,
                         );
                         let raw = request_bytes.remove(&stream_id).unwrap_or_default();
-                        if let Some(request) = parse_request(&raw) {
+                        let parsed = parse_request(&raw);
+                        let is_system_status = parsed
+                            .as_ref()
+                            .is_some_and(|req| req.path_without_query() == "/api/system/status");
+                        if let (Some(request), false) = (parsed, is_system_status) {
                             lock(&state.requests).push(request);
                         }
-                        let response =
+                        let response = if is_system_status {
+                            lock(&state.system_status_responses)
+                                .pop_front()
+                                .unwrap_or(PeerResponse::Structured {
+                                    status: 500,
+                                    body: Vec::new(),
+                                })
+                        } else {
                             lock(&state.responses)
                                 .pop_front()
                                 .unwrap_or(PeerResponse::Structured {
                                     status: 500,
                                     body: Vec::new(),
-                                });
+                                })
+                        };
                         let mut output = OutboundResponse {
                             bytes: match response {
                                 PeerResponse::Structured { status, body } => {
@@ -382,7 +406,7 @@ async fn handle_carrier(
                 }
             }
             control = controls.recv() => {
-                let Some(Control::GrantUploadCredit(credit)) = control else {
+                let Ok(Control::GrantUploadCredit(credit)) = control else {
                     return Ok(());
                 };
                 let stream_id = state.current_stream.load(Ordering::SeqCst);

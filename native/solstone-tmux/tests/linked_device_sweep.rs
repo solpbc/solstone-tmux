@@ -99,10 +99,16 @@ fn linked_device_sweep_uses_exactly_the_four_v3_operations_without_legacy_header
         let peer = PrivateLinkPeer::start().await;
         let temporary = TestDirectory::new("linked-device-four-v3-operations");
         ensure_private_directory(temporary.path()).expect("private root");
+        let lock = InstanceLock::acquire(temporary.path()).expect("acquire lock");
         let candidate = create_linked_device_candidate(&temporary);
-        let mut session = JournalSession::start(peer.credential(), temporary.path().to_path_buf())
-            .await
-            .expect("linked-device session");
+        let mut session = JournalSession::start(
+            peer.credential(),
+            temporary.path().to_path_buf(),
+            temporary.path().to_path_buf(),
+            lock.identity().clone(),
+        )
+        .await
+        .expect("linked-device session");
         enqueue_v3_success_chain(&peer);
         let mut scheduler = linked_device_scheduler(&temporary, -1);
 
@@ -164,10 +170,16 @@ fn linked_device_sweep_sends_the_configured_source_on_every_v3_operation() {
         let peer = PrivateLinkPeer::start().await;
         let temporary = TestDirectory::new("linked-device-configured-source");
         ensure_private_directory(temporary.path()).expect("private root");
+        let lock = InstanceLock::acquire(temporary.path()).expect("acquire lock");
         let candidate = create_linked_device_candidate(&temporary);
-        let mut session = JournalSession::start(peer.credential(), temporary.path().to_path_buf())
-            .await
-            .expect("linked-device session");
+        let mut session = JournalSession::start(
+            peer.credential(),
+            temporary.path().to_path_buf(),
+            temporary.path().to_path_buf(),
+            lock.identity().clone(),
+        )
+        .await
+        .expect("linked-device session");
         enqueue_v3_success_chain(&peer);
         let mut scheduler = linked_device_scheduler_with_source(&temporary, -1, "studio");
 
@@ -230,10 +242,13 @@ fn linked_device_403_and_426_retain_every_candidate_for_each_operation_class() {
                     "linked-device-{status}-{reason_code}-{operation}"
                 ));
                 ensure_private_directory(temporary.path()).expect("private root");
+                let lock = InstanceLock::acquire(temporary.path()).expect("acquire lock");
                 let candidate = create_linked_device_candidate(&temporary);
                 let mut session = JournalSession::start(
                     peer.credential(),
                     temporary.path().to_path_buf(),
+                    temporary.path().to_path_buf(),
+                    lock.identity().clone(),
                 )
                 .await
                 .expect("linked-device session");
@@ -343,6 +358,7 @@ async fn run_binding_failure(
             activity,
             health: HealthWriter::new(fixture.data_root.clone(), &lock),
             retention_fence: Arc::new(solstone_tmux::sync::RetentionFence::new()),
+            identity: lock.identity().clone(),
         }
         .run(sync_shutdown),
     );
@@ -402,6 +418,7 @@ fn unavailable_bridge_at_start_stays_supervised_with_bounded_retry() {
                 activity,
                 health: HealthWriter::new(fixture.data_root.clone(), &lock),
                 retention_fence: Arc::new(solstone_tmux::sync::RetentionFence::new()),
+                identity: lock.identity().clone(),
             }
             .run(shutdown),
         );

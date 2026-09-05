@@ -278,6 +278,13 @@ impl Drop for TestDirectory {
     }
 }
 
+pub fn test_identity(label: &str) -> solstone_tmux::instance_lock::RunIdentity {
+    solstone_tmux::instance_lock::RunIdentity {
+        run_id: format!("test-{label}"),
+        lock_inode: 1,
+    }
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct ObserverWireFixture {
     pub id: String,
