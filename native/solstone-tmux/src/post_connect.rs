@@ -6,12 +6,13 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use sha2::{Digest, Sha256};
+use tokio::sync::Notify;
 
 use crate::client_metadata::run_metadata_job;
 use crate::clock::{Clock, SystemClock};
 use crate::config::system_hostname;
 use crate::journal::{JournalClient, OPTIONAL_JOB_TIMEOUT};
-use crate::journal_version::{PostConnectTrigger, VersionRefreshState};
+use crate::journal_version::VersionRefreshState;
 use crate::paths::PlatformKind;
 use crate::private_link::PrivateLinkOpener;
 use crate::relay_access::run_relay_access_job;
@@ -23,19 +24,32 @@ pub fn compute_pairing_generation(client_cert_pem: &str) -> [u8; 32] {
     hasher.finalize().into()
 }
 
+/// One lane may run its first pass and one coalesced pass. A burst is shared
+/// so a carrier opened by one optional job cannot manufacture work in another.
 #[derive(Default)]
-struct JobSlot {
+struct LaneBurst {
+    pass_count: u8,
     in_flight: bool,
-    pending: bool,
-    current_job_id: u64,
+    follow_up_requested: bool,
+    attempt_id: u64,
+}
+
+#[derive(Default)]
+struct BurstState {
+    active: bool,
+    burst_id: u64,
+    metadata: LaneBurst,
+    access: LaneBurst,
+    // A description arriving after pass two is retained as a marker. The next
+    // real trigger samples it from the hostname source.
+    deferred_metadata: bool,
 }
 
 pub struct PostConnectCoordinator {
     pairing_generation: [u8; 32],
     alive: AtomicBool,
-    job_counter: AtomicU64,
-    metadata_slot: Mutex<JobSlot>,
-    access_slot: Mutex<JobSlot>,
+    attempt_counter: AtomicU64,
+    burst: Mutex<BurstState>,
     journal_client: Arc<JournalClient>,
     store: Arc<CredentialStore>,
     opener: Arc<PrivateLinkOpener>,
@@ -44,6 +58,7 @@ pub struct PostConnectCoordinator {
     platform: PlatformKind,
     clock: Arc<dyn Clock>,
     timeout: Duration,
+    quiesced: Notify,
 }
 
 impl PostConnectCoordinator {
@@ -87,9 +102,8 @@ impl PostConnectCoordinator {
         Arc::new(Self {
             pairing_generation,
             alive: AtomicBool::new(true),
-            job_counter: AtomicU64::new(0),
-            metadata_slot: Mutex::new(JobSlot::default()),
-            access_slot: Mutex::new(JobSlot::default()),
+            attempt_counter: AtomicU64::new(0),
+            burst: Mutex::new(BurstState::default()),
             journal_client,
             store,
             opener,
@@ -98,6 +112,7 @@ impl PostConnectCoordinator {
             platform,
             clock,
             timeout,
+            quiesced: Notify::new(),
         })
     }
 
@@ -108,158 +123,213 @@ impl PostConnectCoordinator {
     pub fn shutdown(&self) {
         self.alive.store(false, Ordering::SeqCst);
         self.store.invalidate();
-        let mut meta = self.metadata_slot.lock().unwrap_or_else(|e| e.into_inner());
-        meta.pending = false;
-        let mut access = self.access_slot.lock().unwrap_or_else(|e| e.into_inner());
-        access.pending = false;
+        self.version_refresh.invalidate();
+        let mut burst = self.burst.lock().unwrap_or_else(|e| e.into_inner());
+        burst.metadata.follow_up_requested = false;
+        burst.access.follow_up_requested = false;
     }
 
     pub fn is_alive(&self) -> bool {
         self.alive.load(Ordering::SeqCst)
     }
 
-    pub fn trigger_metadata(self: &Arc<Self>) {
+    pub async fn wait_for_quiescence(&self, timeout: Duration) {
+        tokio::time::timeout(timeout, async {
+            loop {
+                let quiescent = {
+                    let burst = self.burst.lock().unwrap_or_else(|e| e.into_inner());
+                    !burst.active
+                };
+                if quiescent {
+                    return;
+                }
+                self.quiesced.notified().await;
+            }
+        })
+        .await
+        .expect("post-connect burst did not quiesce");
+    }
+
+    /// A bootstrap/attach/manual event is external. During a burst it only
+    /// asks each lane for its single legal follow-up; after quiescence it starts
+    /// a fresh two-lane burst.
+    pub fn trigger_external(self: &Arc<Self>) {
         if !self.is_alive() {
             return;
         }
-        let (should_spawn, job_id) = {
-            let mut slot = self.metadata_slot.lock().unwrap_or_else(|e| e.into_inner());
-            if slot.in_flight {
-                slot.pending = true;
-                (false, 0)
+        let (metadata, access) = {
+            let mut burst = self.burst.lock().unwrap_or_else(|e| e.into_inner());
+            if !burst.active {
+                burst.active = true;
+                burst.burst_id = burst.burst_id.wrapping_add(1);
+                burst.deferred_metadata = false;
+                burst.metadata = LaneBurst::default();
+                burst.access = LaneBurst::default();
+                (
+                    Self::start_lane(&mut burst.metadata, &self.attempt_counter),
+                    Self::start_lane(&mut burst.access, &self.attempt_counter),
+                )
             } else {
-                slot.in_flight = true;
-                slot.pending = false;
-                let job_id = self.job_counter.fetch_add(1, Ordering::SeqCst) + 1;
-                slot.current_job_id = job_id;
-                (true, job_id)
+                (
+                    Self::request_follow_up(&mut burst.metadata, &self.attempt_counter),
+                    Self::request_follow_up(&mut burst.access, &self.attempt_counter),
+                )
             }
         };
-        if should_spawn {
-            self.spawn_metadata_job(job_id);
+        if let Some(attempt) = metadata {
+            self.spawn_metadata_job(attempt);
+        }
+        if let Some(attempt) = access {
+            self.spawn_relay_access_job(attempt);
         }
     }
 
-    pub fn trigger_relay_access(self: &Arc<Self>) {
-        if !self.is_alive() {
-            return;
-        }
-        let (should_spawn, job_id) = {
-            let mut slot = self.access_slot.lock().unwrap_or_else(|e| e.into_inner());
-            if slot.in_flight {
-                slot.pending = true;
-                (false, 0)
-            } else {
-                slot.in_flight = true;
-                slot.pending = false;
-                let job_id = self.job_counter.fetch_add(1, Ordering::SeqCst) + 1;
-                slot.current_job_id = job_id;
-                (true, job_id)
-            }
+    pub fn trigger_post_bootstrap(self: &Arc<Self>) {
+        self.trigger_external();
+    }
+
+    /// A bridge dial is job-induced while a burst is active. Once quiescent it
+    /// is an external reconnect and starts exactly one new burst.
+    pub(crate) fn note_successful_dial(self: &Arc<Self>) {
+        let quiescent = {
+            let burst = self.burst.lock().unwrap_or_else(|e| e.into_inner());
+            !burst.active
         };
-        if should_spawn {
-            self.spawn_relay_access_job(job_id);
+        if quiescent {
+            self.trigger_external();
         }
     }
 
-    fn spawn_metadata_job(self: &Arc<Self>, job_id: u64) {
+    fn start_lane(lane: &mut LaneBurst, counter: &AtomicU64) -> Option<u64> {
+        if lane.in_flight || lane.pass_count >= 2 {
+            return None;
+        }
+        lane.pass_count += 1;
+        lane.in_flight = true;
+        lane.attempt_id = counter.fetch_add(1, Ordering::SeqCst) + 1;
+        Some(lane.attempt_id)
+    }
+
+    fn request_follow_up(lane: &mut LaneBurst, counter: &AtomicU64) -> Option<u64> {
+        if lane.pass_count >= 2 {
+            return None;
+        }
+        if lane.in_flight {
+            lane.follow_up_requested = true;
+            return None;
+        }
+        Self::start_lane(lane, counter)
+    }
+
+    fn spawn_metadata_job(self: &Arc<Self>, attempt_id: u64) {
         let coordinator = Arc::clone(self);
         tokio::spawn(async move {
             let client = Arc::clone(&coordinator.journal_client);
             let refresh = coordinator.version_refresh.clone();
             let hostname_source = Arc::clone(&coordinator.hostname_source);
-            let platform = coordinator.platform;
-            let timeout = coordinator.timeout;
-
-            let result = tokio::time::timeout(
-                timeout,
-                run_metadata_job(
-                    &client,
-                    &refresh,
-                    move || hostname_source(),
-                    platform,
-                    timeout,
-                ),
+            // Each metadata request carries the optional-job timeout. The
+            // owner-held cache publication is intentionally outside it.
+            let result = run_metadata_job(
+                &client,
+                Some(&coordinator.store),
+                &refresh,
+                move || hostname_source(),
+                coordinator.platform,
+                coordinator.timeout,
             )
             .await;
-
-            coordinator.on_metadata_complete(job_id, result.is_ok());
+            coordinator.on_metadata_complete(attempt_id, result.is_ok());
         });
     }
 
-    fn on_metadata_complete(self: &Arc<Self>, job_id: u64, _completed_within_timeout: bool) {
-        if !self.is_alive() {
-            return;
-        }
-        let next_job_id = {
-            let mut slot = self.metadata_slot.lock().unwrap_or_else(|e| e.into_inner());
-            if slot.current_job_id != job_id {
-                return;
-            }
-            if slot.pending {
-                slot.pending = false;
-                slot.in_flight = true;
-                let new_id = self.job_counter.fetch_add(1, Ordering::SeqCst) + 1;
-                slot.current_job_id = new_id;
-                Some(new_id)
-            } else {
-                slot.in_flight = false;
-                None
-            }
-        };
-        if let Some(new_id) = next_job_id {
-            self.spawn_metadata_job(new_id);
-        }
-    }
-
-    fn spawn_relay_access_job(self: &Arc<Self>, job_id: u64) {
+    fn spawn_relay_access_job(self: &Arc<Self>, attempt_id: u64) {
         let coordinator = Arc::clone(self);
         tokio::spawn(async move {
-            let client = Arc::clone(&coordinator.journal_client);
-            let store = Arc::clone(&coordinator.store);
-            let opener = Arc::clone(&coordinator.opener);
-            let now = coordinator.clock.wall_now().unix_timestamp();
-            let timeout = coordinator.timeout;
-
-            let result = tokio::time::timeout(
-                timeout,
-                run_relay_access_job(&client, &store, &opener, now, timeout),
+            // The relay request itself is bounded by `timeout`; publication is
+            // deliberately outside that deadline and remains owner-held.
+            let result = run_relay_access_job(
+                &coordinator.journal_client,
+                &coordinator.store,
+                &coordinator.opener,
+                attempt_id,
+                coordinator.clock.as_ref(),
+                coordinator.timeout,
             )
             .await;
-
-            coordinator.on_relay_access_complete(job_id, result.is_ok());
+            coordinator.on_access_complete(attempt_id, result.is_ok());
         });
     }
 
-    fn on_relay_access_complete(self: &Arc<Self>, job_id: u64, _completed_within_timeout: bool) {
-        if !self.is_alive() {
-            return;
-        }
-        let next_job_id = {
-            let mut slot = self.access_slot.lock().unwrap_or_else(|e| e.into_inner());
-            if slot.current_job_id != job_id {
-                return;
+    fn on_metadata_complete(self: &Arc<Self>, attempt_id: u64, _within_timeout: bool) {
+        let (next, quiesced) = {
+            let mut burst = self.burst.lock().unwrap_or_else(|e| e.into_inner());
+            let deferred = {
+                let lane = &mut burst.metadata;
+                if lane.attempt_id != attempt_id {
+                    return;
+                }
+                lane.in_flight = false;
+                let deferred = lane.follow_up_requested && lane.pass_count >= 2;
+                let next = if lane.follow_up_requested && lane.pass_count < 2 && self.is_alive() {
+                    lane.follow_up_requested = false;
+                    Self::start_lane(lane, &self.attempt_counter)
+                } else {
+                    lane.follow_up_requested = false;
+                    None
+                };
+                (next, deferred)
+            };
+            let (next, deferred) = deferred;
+            if deferred {
+                burst.deferred_metadata = true;
             }
-            if slot.pending {
-                slot.pending = false;
-                slot.in_flight = true;
-                let new_id = self.job_counter.fetch_add(1, Ordering::SeqCst) + 1;
-                slot.current_job_id = new_id;
-                Some(new_id)
-            } else {
-                slot.in_flight = false;
-                None
-            }
+            let quiesced = Self::finish_if_quiescent(&mut burst);
+            (next, quiesced)
         };
-        if let Some(new_id) = next_job_id {
-            self.spawn_relay_access_job(new_id);
+        if quiesced {
+            self.quiesced.notify_waiters();
+        }
+        if let Some(attempt) = next {
+            self.spawn_metadata_job(attempt);
         }
     }
-}
 
-impl PostConnectTrigger for Arc<PostConnectCoordinator> {
-    fn trigger_all(&self) {
-        self.trigger_metadata();
-        self.trigger_relay_access();
+    fn on_access_complete(self: &Arc<Self>, attempt_id: u64, _within_timeout: bool) {
+        let (next, quiesced) = {
+            let mut burst = self.burst.lock().unwrap_or_else(|e| e.into_inner());
+            let lane = &mut burst.access;
+            if lane.attempt_id != attempt_id {
+                return;
+            }
+            lane.in_flight = false;
+            let next = if lane.follow_up_requested && lane.pass_count < 2 && self.is_alive() {
+                lane.follow_up_requested = false;
+                Self::start_lane(lane, &self.attempt_counter)
+            } else {
+                lane.follow_up_requested = false;
+                None
+            };
+            let quiesced = Self::finish_if_quiescent(&mut burst);
+            (next, quiesced)
+        };
+        if quiesced {
+            self.quiesced.notify_waiters();
+        }
+        if let Some(attempt) = next {
+            self.spawn_relay_access_job(attempt);
+        }
+    }
+
+    fn finish_if_quiescent(burst: &mut BurstState) -> bool {
+        if !burst.metadata.in_flight
+            && !burst.access.in_flight
+            && !burst.metadata.follow_up_requested
+            && !burst.access.follow_up_requested
+        {
+            burst.active = false;
+            true
+        } else {
+            false
+        }
     }
 }

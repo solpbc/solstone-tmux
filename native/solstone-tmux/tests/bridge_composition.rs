@@ -129,6 +129,97 @@ fn relay_only_credential_starts_the_private_link_bridge() {
 }
 
 #[test]
+fn loopback_capability_gate_allows_only_authenticated_clients_self_put() {
+    runtime().block_on(async {
+        let peer = PrivateLinkPeer::start().await;
+        let temporary = TestDirectory::new("bridge-capability-put");
+        ensure_private_directory(temporary.path()).expect("private root");
+        let lock = InstanceLock::acquire(temporary.path()).expect("acquire lock");
+        let credential = peer.credential();
+        let refresh = solstone_tmux::journal_version::VersionRefreshState::new(
+            temporary.path().to_path_buf(),
+            temporary.path().to_path_buf(),
+            credential.instance_id.clone(),
+            &credential.ca_fp_prefix,
+            lock.identity().clone(),
+        );
+        let bridge = PrivateLinkBridge::start(credential, None, refresh)
+            .await
+            .expect("bridge");
+        let origin = bridge.loopback_origin();
+        let anonymous = reqwest::Client::new();
+        let no_capability = anonymous
+            .put(format!("{origin}/app/network/api/clients/self"))
+            .body("{}")
+            .send()
+            .await
+            .expect("local response");
+        assert_eq!(no_capability.status(), StatusCode::FORBIDDEN);
+        let wrong_capability = anonymous
+            .put(format!("{origin}/app/network/api/clients/self"))
+            .header("cookie", "solstone_tmux_cap=wrong")
+            .body("{}")
+            .send()
+            .await
+            .expect("local response");
+        assert_eq!(wrong_capability.status(), StatusCode::FORBIDDEN);
+        assert!(peer.requests().is_empty(), "local rejects reach peer");
+
+        let cookie_jar = Arc::new(reqwest::cookie::Jar::default());
+        let authenticated = reqwest::Client::builder()
+            .cookie_provider(Arc::clone(&cookie_jar))
+            .redirect(reqwest::redirect::Policy::none())
+            .no_proxy()
+            .build()
+            .expect("raw client");
+        let bootstrap = authenticated
+            .get(bridge.bootstrap_url().expect("bootstrap url"))
+            .send()
+            .await
+            .expect("bootstrap");
+        assert_eq!(bootstrap.status(), StatusCode::FOUND);
+
+        peer.enqueue_clients_self_response(200, br#"{}"#.to_vec());
+        let admitted = authenticated
+            .put(format!("{origin}/app/network/api/clients/self"))
+            .body("{}")
+            .send()
+            .await
+            .expect("forwarded put");
+        assert_eq!(admitted.status(), StatusCode::OK);
+        assert_eq!(peer.requests().len(), 1);
+
+        let blocked = authenticated
+            .put(format!("{origin}/app/network/api/other"))
+            .body("{}")
+            .send()
+            .await
+            .expect("local rejection");
+        assert_eq!(blocked.status(), StatusCode::METHOD_NOT_ALLOWED);
+        let reserved = authenticated
+            .put(format!("{origin}/app/network/api/clients/self"))
+            .header("authorization", "Bearer caller")
+            .body("{}")
+            .send()
+            .await
+            .expect("local rejection");
+        assert_eq!(reserved.status(), StatusCode::FORBIDDEN);
+        let reserved_observer = authenticated
+            .put(format!("{origin}/app/network/api/clients/self"))
+            .header("x-solstone-observer", "caller")
+            .body("{}")
+            .send()
+            .await
+            .expect("local rejection");
+        assert_eq!(reserved_observer.status(), StatusCode::FORBIDDEN);
+        assert_eq!(peer.requests().len(), 1, "rejected requests reach peer");
+
+        bridge.shutdown().await;
+        peer.shutdown().await;
+    });
+}
+
+#[test]
 fn journal_response_body_limit_applies_to_success_and_error_responses() {
     runtime().block_on(async {
         let peer = PrivateLinkPeer::start().await;

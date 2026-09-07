@@ -89,6 +89,64 @@ struct OutboundResponse {
 #[derive(Clone)]
 enum Control {
     GrantUploadCredit(u32),
+    CloseCarriers,
+}
+
+#[derive(Default)]
+struct PathHold {
+    enabled: AtomicBool,
+    arrivals: AtomicUsize,
+    releases: AtomicUsize,
+    arrived: Notify,
+    release: Notify,
+}
+
+impl PathHold {
+    fn hold(&self) {
+        self.arrivals.store(0, Ordering::SeqCst);
+        self.releases.store(0, Ordering::SeqCst);
+        self.enabled.store(true, Ordering::SeqCst);
+    }
+
+    fn release_one(&self) {
+        self.releases.fetch_add(1, Ordering::SeqCst);
+        self.release.notify_waiters();
+    }
+
+    fn release(&self) {
+        self.enabled.store(false, Ordering::SeqCst);
+        self.release.notify_waiters();
+    }
+
+    async fn wait_if_held(&self) {
+        if !self.enabled.load(Ordering::SeqCst) {
+            return;
+        }
+        while self.enabled.load(Ordering::SeqCst) {
+            if self
+                .releases
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |count| {
+                    count.checked_sub(1)
+                })
+                .is_ok()
+            {
+                return;
+            }
+            self.arrivals.fetch_add(1, Ordering::SeqCst);
+            self.arrived.notify_waiters();
+            self.release.notified().await;
+        }
+    }
+
+    async fn wait_for_arrivals(&self, target: usize, timeout: std::time::Duration) {
+        tokio::time::timeout(timeout, async {
+            while self.arrivals.load(Ordering::SeqCst) < target {
+                self.arrived.notified().await;
+            }
+        })
+        .await
+        .expect("peer path hold arrival timed out");
+    }
 }
 
 #[derive(Clone)]
@@ -98,6 +156,14 @@ struct PeerState {
     clients_self_responses: Arc<Mutex<VecDeque<PeerResponse>>>,
     relay_access_responses: Arc<Mutex<VecDeque<PeerResponse>>>,
     requests: Arc<Mutex<Vec<PeerRequest>>>,
+    request_count: Arc<AtomicUsize>,
+    clients_self_request_count: Arc<AtomicUsize>,
+    relay_access_request_count: Arc<AtomicUsize>,
+    system_status_request_count: Arc<AtomicUsize>,
+    request_arrived: Arc<Notify>,
+    clients_self_hold: Arc<PathHold>,
+    relay_access_hold: Arc<PathHold>,
+    system_status_hold: Arc<PathHold>,
     withhold_credit: Arc<AtomicBool>,
     upload_stalled: Arc<Notify>,
     current_stream: Arc<AtomicU32>,
@@ -142,6 +208,14 @@ impl PrivateLinkPeer {
             clients_self_responses: Arc::new(Mutex::new(VecDeque::new())),
             relay_access_responses: Arc::new(Mutex::new(VecDeque::new())),
             requests: Arc::new(Mutex::new(Vec::new())),
+            request_count: Arc::new(AtomicUsize::new(0)),
+            clients_self_request_count: Arc::new(AtomicUsize::new(0)),
+            relay_access_request_count: Arc::new(AtomicUsize::new(0)),
+            system_status_request_count: Arc::new(AtomicUsize::new(0)),
+            request_arrived: Arc::new(Notify::new()),
+            clients_self_hold: Arc::new(PathHold::default()),
+            relay_access_hold: Arc::new(PathHold::default()),
+            system_status_hold: Arc::new(PathHold::default()),
             withhold_credit: Arc::new(AtomicBool::new(false)),
             upload_stalled: Arc::new(Notify::new()),
             current_stream: Arc::new(AtomicU32::new(0)),
@@ -239,6 +313,140 @@ impl PrivateLinkPeer {
 
     pub fn requests(&self) -> Vec<PeerRequest> {
         lock(&self.state.requests).clone()
+    }
+
+    pub fn request_count(&self) -> usize {
+        self.state.request_count.load(Ordering::SeqCst)
+    }
+
+    pub async fn wait_for_request_count(&self, target: usize, timeout: std::time::Duration) {
+        tokio::time::timeout(timeout, async {
+            while self.request_count() < target {
+                self.state.request_arrived.notified().await;
+            }
+        })
+        .await
+        .expect("peer request receipt timed out");
+    }
+
+    pub fn clients_self_request_count(&self) -> usize {
+        self.state.clients_self_request_count.load(Ordering::SeqCst)
+    }
+
+    pub async fn wait_for_clients_self_request_count(
+        &self,
+        target: usize,
+        timeout: std::time::Duration,
+    ) {
+        tokio::time::timeout(timeout, async {
+            while self.clients_self_request_count() < target {
+                self.state.request_arrived.notified().await;
+            }
+        })
+        .await
+        .expect("clients/self request receipt timed out");
+    }
+
+    pub fn relay_access_request_count(&self) -> usize {
+        self.state.relay_access_request_count.load(Ordering::SeqCst)
+    }
+
+    pub async fn wait_for_relay_access_request_count(
+        &self,
+        target: usize,
+        timeout: std::time::Duration,
+    ) {
+        tokio::time::timeout(timeout, async {
+            while self.relay_access_request_count() < target {
+                self.state.request_arrived.notified().await;
+            }
+        })
+        .await
+        .expect("relay access request receipt timed out");
+    }
+
+    pub fn system_status_request_count(&self) -> usize {
+        self.state
+            .system_status_request_count
+            .load(Ordering::SeqCst)
+    }
+
+    pub async fn wait_for_system_status_request_count(
+        &self,
+        target: usize,
+        timeout: std::time::Duration,
+    ) {
+        tokio::time::timeout(timeout, async {
+            while self.system_status_request_count() < target {
+                self.state.request_arrived.notified().await;
+            }
+        })
+        .await
+        .expect("system status request receipt timed out");
+    }
+
+    pub fn hold_clients_self(&self) {
+        self.state.clients_self_hold.hold();
+    }
+
+    pub async fn wait_for_clients_self_hold(&self, timeout: std::time::Duration) {
+        self.state
+            .clients_self_hold
+            .wait_for_arrivals(1, timeout)
+            .await;
+    }
+
+    pub fn release_one_clients_self(&self) {
+        self.state.clients_self_hold.release_one();
+    }
+
+    pub async fn wait_for_clients_self_hold_count(
+        &self,
+        target: usize,
+        timeout: std::time::Duration,
+    ) {
+        self.state
+            .clients_self_hold
+            .wait_for_arrivals(target, timeout)
+            .await;
+    }
+
+    pub fn release_clients_self(&self) {
+        self.state.clients_self_hold.release();
+    }
+
+    pub fn hold_relay_access(&self) {
+        self.state.relay_access_hold.hold();
+    }
+
+    pub async fn wait_for_relay_access_hold(&self, timeout: std::time::Duration) {
+        self.state
+            .relay_access_hold
+            .wait_for_arrivals(1, timeout)
+            .await;
+    }
+
+    pub fn release_relay_access(&self) {
+        self.state.relay_access_hold.release();
+    }
+
+    pub fn hold_system_status(&self) {
+        self.state.system_status_hold.hold();
+    }
+
+    pub async fn wait_for_system_status_hold(&self, timeout: std::time::Duration) {
+        self.state
+            .system_status_hold
+            .wait_for_arrivals(1, timeout)
+            .await;
+    }
+
+    pub fn release_system_status(&self) {
+        self.state.system_status_hold.release();
+    }
+
+    pub fn close_accepted_carriers(&self) {
+        let _ = self.controls.send(Control::CloseCarriers);
     }
 
     pub fn withhold_upload_credit(&self) {
@@ -461,6 +669,28 @@ async fn handle_carrier(
                         if let (Some(request), false) = (parsed, is_system_status) {
                             lock(&state.requests).push(request);
                         }
+                        state.request_count.fetch_add(1, Ordering::SeqCst);
+                        if is_clients_self {
+                            state
+                                .clients_self_request_count
+                                .fetch_add(1, Ordering::SeqCst);
+                        } else if is_relay_access {
+                            state
+                                .relay_access_request_count
+                                .fetch_add(1, Ordering::SeqCst);
+                        } else if is_system_status {
+                            state
+                                .system_status_request_count
+                                .fetch_add(1, Ordering::SeqCst);
+                        }
+                        state.request_arrived.notify_waiters();
+                        if is_clients_self {
+                            state.clients_self_hold.wait_if_held().await;
+                        } else if is_relay_access {
+                            state.relay_access_hold.wait_if_held().await;
+                        } else if is_system_status {
+                            state.system_status_hold.wait_if_held().await;
+                        }
                         let response = if is_system_status {
                             lock(&state.system_status_responses)
                                 .back()
@@ -532,14 +762,19 @@ async fn handle_carrier(
                 }
             }
             control = controls.recv() => {
-                let Ok(Control::GrantUploadCredit(credit)) = control else {
+                let Ok(control) = control else {
                     return Ok(());
                 };
-                let stream_id = state.current_stream.load(Ordering::SeqCst);
-                if stream_id == 0 {
-                    pending_upload_credit = pending_upload_credit.saturating_add(credit);
-                } else {
-                    write_frame(&mut writer, Frame::window(stream_id, credit)).await?;
+                match control {
+                    Control::GrantUploadCredit(credit) => {
+                        let stream_id = state.current_stream.load(Ordering::SeqCst);
+                        if stream_id == 0 {
+                            pending_upload_credit = pending_upload_credit.saturating_add(credit);
+                        } else {
+                            write_frame(&mut writer, Frame::window(stream_id, credit)).await?;
+                        }
+                    }
+                    Control::CloseCarriers => return Ok(()),
                 }
             }
         }

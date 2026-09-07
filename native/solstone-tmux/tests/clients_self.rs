@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 sol pbc
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde_json::json;
@@ -55,6 +55,9 @@ fn decode_get_response_handles_null_and_populated_reported() {
         "protocol_version": 1,
         "revision": 1,
         "reported": null,
+        "owner_label": null,
+        "display_label": null,
+        "updated_at": null,
         "journal": {
             "name": "my-journal",
             "version": "2026.8.0"
@@ -63,7 +66,7 @@ fn decode_get_response_handles_null_and_populated_reported() {
     let decoded =
         decode_get_response(&serde_json::to_vec(&empty_payload).expect("json")).expect("decode");
     assert!(decoded.reported.is_none());
-    assert_eq!(decoded.journal.version.as_deref(), Some("2026.8.0"));
+    assert_eq!(decoded.journal.version, "2026.8.0");
 
     let populated_payload = json!({
         "protocol_version": 1,
@@ -75,6 +78,9 @@ fn decode_get_response_handles_null_and_populated_reported() {
             "app_id": "solstone-tmux",
             "app_version": "1.0.6"
         },
+        "owner_label": null,
+        "display_label": null,
+        "updated_at": null,
         "journal": {
             "name": "my-journal",
             "version": "2026.8.0"
@@ -123,7 +129,11 @@ fn clients_self_publishes_when_reported_is_null() {
                 "protocol_version": 1,
                 "revision": 1,
                 "reported": null,
+                "owner_label": null,
+                "display_label": null,
+                "updated_at": null,
                 "journal": {
+                    "name": "test-journal",
                     "version": "2026.8.0"
                 }
             }))
@@ -138,14 +148,20 @@ fn clients_self_publishes_when_reported_is_null() {
                     "name": "test-box",
                     "platform": "linux",
                     "device_type": "terminal",
-                    "app_id": "solstone-tmux"
-                }
+                    "app_id": "solstone-tmux",
+                    "app_version": "1.0.6"
+                },
+                "owner_label": null,
+                "display_label": null,
+                "updated_at": null,
+                "journal": { "name": "test-journal", "version": "2026.8.0" }
             }))
             .expect("json"),
         );
 
         let result = run_metadata_job(
             &client,
+            None,
             &refresh,
             || Some("test-box".to_owned()),
             PlatformKind::Linux,
@@ -206,13 +222,17 @@ fn clients_self_noops_when_reported_already_matches() {
                 "protocol_version": 1,
                 "revision": 3,
                 "reported": current,
-                "journal": {}
+                "owner_label": null,
+                "display_label": null,
+                "updated_at": null,
+                "journal": { "name": "test-journal", "version": "2026.8.0" }
             }))
             .expect("json"),
         );
 
         let result = run_metadata_job(
             &client,
+            None,
             &refresh,
             || Some("test-box".to_owned()),
             PlatformKind::Linux,
@@ -264,7 +284,10 @@ fn clients_self_handles_409_conflict_with_refetch_and_retry() {
                 "protocol_version": 1,
                 "revision": 1,
                 "reported": null,
-                "journal": {}
+                "owner_label": null,
+                "display_label": null,
+                "updated_at": null,
+                "journal": { "name": "test-journal", "version": "2026.8.0" }
             }))
             .expect("json"),
         );
@@ -277,9 +300,16 @@ fn clients_self_handles_409_conflict_with_refetch_and_retry() {
                 "protocol_version": 1,
                 "revision": 2,
                 "reported": {
-                    "name": "old-name"
+                    "name": "old-name",
+                    "platform": null,
+                    "device_type": null,
+                    "app_id": null,
+                    "app_version": null
                 },
-                "journal": {}
+                "owner_label": null,
+                "display_label": null,
+                "updated_at": null,
+                "journal": { "name": "test-journal", "version": "2026.8.0" }
             }))
             .expect("json"),
         );
@@ -289,13 +319,18 @@ fn clients_self_handles_409_conflict_with_refetch_and_retry() {
             serde_json::to_vec(&json!({
                 "protocol_version": 1,
                 "revision": 3,
-                "reported": null
+                "reported": null,
+                "owner_label": null,
+                "display_label": null,
+                "updated_at": null,
+                "journal": { "name": "test-journal", "version": "2026.8.0" }
             }))
             .expect("json"),
         );
 
         let result = run_metadata_job(
             &client,
+            None,
             &refresh,
             || Some("test-box".to_owned()),
             PlatformKind::Linux,
@@ -351,6 +386,7 @@ fn clients_self_404_is_tolerated_as_unsupported() {
 
         let result = run_metadata_job(
             &client,
+            None,
             &refresh,
             || Some("test-box".to_owned()),
             PlatformKind::Linux,
@@ -401,7 +437,8 @@ fn clients_self_integrates_with_journal_session() {
                 "protocol_version": 1,
                 "revision": 1,
                 "reported": null,
-                "journal": {}
+                "owner_label": null, "display_label": null, "updated_at": null,
+                "journal": { "name": "test-journal", "version": "2026.8.0" }
             }))
             .expect("json"),
         );
@@ -411,8 +448,11 @@ fn clients_self_integrates_with_journal_session() {
                 "protocol_version": 1,
                 "revision": 2,
                 "reported": {
-                    "name": "session-host"
-                }
+                    "name": "session-host", "platform": "linux", "device_type": "terminal",
+                    "app_id": "solstone-tmux", "app_version": solstone_tmux::cli::version()
+                },
+                "owner_label": null, "display_label": null, "updated_at": null,
+                "journal": { "name": "test-journal", "version": "2026.8.0" }
             }))
             .expect("json"),
         );
@@ -429,7 +469,9 @@ fn clients_self_integrates_with_journal_session() {
         .await
         .expect("start session");
 
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        session
+            .wait_for_post_connect_quiescence(Duration::from_secs(5))
+            .await;
 
         let requests = peer
             .requests()
@@ -452,14 +494,18 @@ fn clients_self_integrates_with_journal_session() {
                     "device_type": "terminal",
                     "app_id": "solstone-tmux",
                     "app_version": solstone_tmux::cli::version()
-                }
+                },
+                "owner_label": null, "display_label": null, "updated_at": null,
+                "journal": { "name": "test-journal", "version": "2026.8.0" }
             }))
             .expect("json"),
         );
 
         let count_before = requests.len();
         session.trigger_post_connect();
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        session
+            .wait_for_post_connect_quiescence(Duration::from_secs(5))
+            .await;
 
         let requests_after = peer
             .requests()
@@ -470,6 +516,108 @@ fn clients_self_integrates_with_journal_session() {
         assert_eq!(requests_after.last().unwrap().method(), "GET");
 
         session.shutdown().await.expect("session shutdown");
+        peer.shutdown().await;
+    });
+}
+
+#[test]
+fn clients_self_description_b_during_a_is_published_on_one_follow_up() {
+    runtime().block_on(async {
+        let peer = PrivateLinkPeer::start().await;
+        let temporary = TestDirectory::new("clients-self-description-follow-up");
+        let config_root = temporary.path().join("config");
+        let data_root = temporary.path().join("data");
+        ensure_private_directory(&config_root).expect("config root");
+        ensure_private_directory(&data_root).expect("data root");
+        let lock = InstanceLock::acquire(&data_root).expect("acquire lock");
+        let credential = peer.credential();
+        persist_credential(&config_root, &credential).expect("persist credential");
+        let refresh = VersionRefreshState::new(
+            config_root.clone(),
+            data_root.clone(),
+            credential.instance_id.clone(),
+            &credential.ca_fp_prefix,
+            lock.identity().clone(),
+        );
+
+        let reported_a = json!({
+            "name": "description-a", "platform": "linux", "device_type": "terminal",
+            "app_id": "solstone-tmux", "app_version": solstone_tmux::cli::version()
+        });
+        let reported_b = json!({
+            "name": "description-b", "platform": "linux", "device_type": "terminal",
+            "app_id": "solstone-tmux", "app_version": solstone_tmux::cli::version()
+        });
+        for (revision, reported) in [
+            (1, serde_json::Value::Null),
+            (2, reported_a.clone()),
+            (2, reported_a),
+            (3, reported_b.clone()),
+        ] {
+            peer.enqueue_clients_self_response(
+                200,
+                serde_json::to_vec(&json!({
+                    "protocol_version": 1,
+                    "revision": revision,
+                    "reported": reported,
+                    "owner_label": null, "display_label": null, "updated_at": null,
+                    "journal": { "name": "test-journal", "version": "2026.8.0" }
+                }))
+                .expect("json"),
+            );
+        }
+
+        let hostname = Arc::new(Mutex::new("description-a".to_owned()));
+        let hostname_source = {
+            let hostname = Arc::clone(&hostname);
+            Arc::new(move || {
+                Some(
+                    hostname
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .clone(),
+                )
+            })
+        };
+        peer.hold_clients_self();
+        let session = JournalSession::start_with(
+            credential,
+            config_root,
+            refresh,
+            Duration::from_secs(5),
+            hostname_source,
+            PlatformKind::Linux,
+            Arc::new(solstone_tmux::clock::SystemClock::new(time::UtcOffset::UTC)),
+        )
+        .await
+        .expect("start session");
+
+        peer.wait_for_clients_self_hold(Duration::from_secs(5))
+            .await;
+        peer.release_one_clients_self();
+        peer.wait_for_clients_self_hold_count(2, Duration::from_secs(5))
+            .await;
+        *hostname.lock().unwrap_or_else(|error| error.into_inner()) = "description-b".to_owned();
+        session.trigger_post_connect();
+        peer.release_clients_self();
+        session
+            .wait_for_post_connect_quiescence(Duration::from_secs(5))
+            .await;
+
+        let requests = peer
+            .requests()
+            .into_iter()
+            .filter(|request| request.path_without_query() == "/app/network/api/clients/self")
+            .collect::<Vec<_>>();
+        assert_eq!(requests.len(), 4, "one metadata follow-up is permitted");
+        let first_put: serde_json::Value =
+            serde_json::from_slice(requests[1].body()).expect("first put json");
+        let follow_up_put: serde_json::Value =
+            serde_json::from_slice(requests[3].body()).expect("follow-up put json");
+        assert_eq!(first_put["reported"]["name"], "description-a");
+        assert_eq!(follow_up_put["reported"]["name"], "description-b");
+
+        session.shutdown().await.expect("shutdown session");
         peer.shutdown().await;
     });
 }
@@ -502,7 +650,8 @@ fn clients_self_invalid_name_nulls_field_without_tmux_fallback() {
                 "protocol_version": 1,
                 "revision": 1,
                 "reported": null,
-                "journal": {}
+                "owner_label": null, "display_label": null, "updated_at": null,
+                "journal": { "name": "test-journal", "version": "2026.8.0" }
             }))
             .expect("json"),
         );
@@ -512,7 +661,8 @@ fn clients_self_invalid_name_nulls_field_without_tmux_fallback() {
                 "protocol_version": 1,
                 "revision": 2,
                 "reported": null,
-                "journal": {}
+                "owner_label": null, "display_label": null, "updated_at": null,
+                "journal": { "name": "test-journal", "version": "2026.8.0" }
             }))
             .expect("json"),
         );
@@ -531,7 +681,9 @@ fn clients_self_invalid_name_nulls_field_without_tmux_fallback() {
         .await
         .expect("start session");
 
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        session
+            .wait_for_post_connect_quiescence(Duration::from_secs(5))
+            .await;
 
         let requests = peer
             .requests()
@@ -593,7 +745,8 @@ fn clients_self_redirect_is_refused() {
         .await
         .expect("start session");
 
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        peer.wait_for_clients_self_request_count(1, Duration::from_secs(5))
+            .await;
 
         let requests = peer
             .requests()
@@ -646,7 +799,8 @@ fn clients_self_timeout_releases_slot_and_fences_late_io() {
                 "protocol_version": 1,
                 "revision": 1,
                 "reported": null,
-                "journal": {}
+                "owner_label": null, "display_label": null, "updated_at": null,
+                "journal": { "name": "test-journal", "version": "2026.8.0" }
             }))
             .expect("json"),
         );
@@ -663,8 +817,8 @@ fn clients_self_timeout_releases_slot_and_fences_late_io() {
         .await
         .expect("start session");
 
-        // Wait for the first job to time out (~100ms > 50ms)
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        peer.wait_for_clients_self_request_count(1, Duration::from_secs(5))
+            .await;
 
         // Enqueue responses for the second trigger
         peer.enqueue_clients_self_response(
@@ -673,7 +827,8 @@ fn clients_self_timeout_releases_slot_and_fences_late_io() {
                 "protocol_version": 1,
                 "revision": 1,
                 "reported": null,
-                "journal": {}
+                "owner_label": null, "display_label": null, "updated_at": null,
+                "journal": { "name": "test-journal", "version": "2026.8.0" }
             }))
             .expect("json"),
         );
@@ -682,18 +837,19 @@ fn clients_self_timeout_releases_slot_and_fences_late_io() {
             serde_json::to_vec(&json!({
                 "protocol_version": 1,
                 "revision": 2,
-                "reported": { "name": "session-host" },
-                "journal": {}
+                "reported": { "name": "session-host", "platform": null, "device_type": null,
+                    "app_id": null, "app_version": null },
+                "owner_label": null, "display_label": null, "updated_at": null,
+                "journal": { "name": "test-journal", "version": "2026.8.0" }
             }))
             .expect("json"),
         );
 
         // Trigger post connect again: slot must be available and accept the trigger
         session.trigger_post_connect();
-        tokio::time::sleep(Duration::from_millis(150)).await;
-
-        // Wait past the delayed first response duration (total > 350ms)
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        session
+            .wait_for_post_connect_quiescence(Duration::from_secs(5))
+            .await;
 
         let put_requests = peer
             .requests()
@@ -757,7 +913,8 @@ fn clients_self_optional_failure_preserves_upload_progress() {
         .await
         .expect("start session");
 
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        peer.wait_for_clients_self_request_count(1, Duration::from_secs(5))
+            .await;
 
         let part_path = temporary.path().join("000.jsonl");
         std::fs::write(&part_path, b"{\"test\":\"data\"}\n").expect("write part");

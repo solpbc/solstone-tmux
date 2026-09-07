@@ -3,14 +3,13 @@
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use serde::{Deserialize, Serialize};
 
 use crate::health::{DiagnosticCode, HealthState, StatusHealth, read_status_health};
 use crate::instance_lock::{ExistingLock, RunIdentity, inspect_existing};
-use crate::journal::JournalClient;
 use crate::private_link::load_credential;
 use crate::storage::{StorageError, atomic_write_bytes, open_regular_readonly};
 
@@ -25,6 +24,8 @@ struct JournalVersionRecord {
     instance_id: String,
     ca_fp_prefix_hex: String,
     version: String,
+    #[serde(default)]
+    journal_name: Option<String>,
     confirmed: bool,
     run_id: String,
     lock_inode: u64,
@@ -135,6 +136,7 @@ fn with_write_lock<T>(config_root: &Path, action: impl FnOnce() -> T) -> Option<
     Some(result)
 }
 
+#[cfg(test)]
 fn record_for_attempt(
     existing: Option<JournalVersionRecord>,
     instance_id: &str,
@@ -148,6 +150,7 @@ fn record_for_attempt(
             instance_id: instance_id.to_owned(),
             ca_fp_prefix_hex: ca_fp_prefix_hex.to_owned(),
             version,
+            journal_name: existing.and_then(|record| record.journal_name),
             confirmed: true,
             run_id: run_identity.run_id.clone(),
             lock_inode: run_identity.lock_inode,
@@ -168,10 +171,6 @@ fn record_for_attempt(
     }
 }
 
-pub trait PostConnectTrigger: Send + Sync {
-    fn trigger_all(&self);
-}
-
 #[derive(Clone)]
 pub struct VersionRefreshState {
     config_root: PathBuf,
@@ -181,9 +180,6 @@ pub struct VersionRefreshState {
     run_identity: RunIdentity,
     generation: Arc<AtomicU64>,
     generation_guard: Arc<Mutex<()>>,
-    journal_client: Arc<Mutex<Option<JournalClient>>>,
-    post_connect_trigger: Arc<Mutex<Option<Arc<dyn PostConnectTrigger>>>>,
-    has_dialed: Arc<AtomicBool>,
 }
 
 impl VersionRefreshState {
@@ -202,63 +198,55 @@ impl VersionRefreshState {
             run_identity,
             generation: Arc::new(AtomicU64::new(0)),
             generation_guard: Arc::new(Mutex::new(())),
-            journal_client: Arc::new(Mutex::new(None)),
-            post_connect_trigger: Arc::new(Mutex::new(None)),
-            has_dialed: Arc::new(AtomicBool::new(false)),
         }
-    }
-
-    pub fn attach_client(&self, client: JournalClient) {
-        *lock(&self.journal_client) = Some(client);
-        self.spawn_refresh();
-        let trigger = lock(&self.post_connect_trigger).clone();
-        if let Some(trigger) = trigger {
-            trigger.trigger_all();
-        }
-    }
-
-    pub fn attach_post_connect_trigger(&self, trigger: Arc<dyn PostConnectTrigger>) {
-        *lock(&self.post_connect_trigger) = Some(trigger);
-    }
-
-    pub(crate) fn note_redial(&self) {
-        self.spawn_refresh();
-        if self.has_dialed.swap(true, Ordering::SeqCst) {
-            let trigger = lock(&self.post_connect_trigger).clone();
-            if let Some(trigger) = trigger {
-                trigger.trigger_all();
-            }
-        }
-    }
-
-    pub(crate) fn note_dial_failed(&self) {
-        let generation = self.begin_refresh();
-        let refresh = self.clone();
-        tokio::task::spawn_blocking(move || refresh.validate_and_store(generation, None));
     }
 
     pub(crate) fn note_session_started(&self) {
-        *lock(&self.journal_client) = None;
-        *lock(&self.post_connect_trigger) = None;
-        self.has_dialed.store(false, Ordering::SeqCst);
-        self.note_dial_failed();
+        // Invalidate any in-flight cache publication from the preceding
+        // session. The metadata lane owns all subsequent refreshes.
+        self.begin_refresh();
     }
 
-    pub(crate) fn apply_validated_version(&self, version: &str) -> bool {
+    pub(crate) fn capture_metadata_attempt(&self) -> u64 {
+        self.begin_refresh()
+    }
+
+    pub(crate) fn invalidate(&self) {
+        self.begin_refresh();
+    }
+
+    pub(crate) fn metadata_attempt_is_current(&self, attempt: u64) -> bool {
+        self.generation.load(Ordering::SeqCst) == attempt
+    }
+
+    pub(crate) fn apply_validated_journal_info_for_attempt(
+        &self,
+        attempt: u64,
+        journal_name: Option<&str>,
+        version: &str,
+    ) -> bool {
         let trimmed = version.trim();
         if trimmed.is_empty() {
             return false;
         }
         let _guard = lock(&self.generation_guard);
         with_write_lock(&self.config_root, || {
+            if self.generation.load(Ordering::SeqCst) != attempt {
+                return false;
+            }
             if !self.identity_and_credential_live() {
                 return false;
             }
+            let existing = read_record(&self.config_root);
+            let previous_name = existing
+                .as_ref()
+                .and_then(|record| record.journal_name.clone());
             let record = JournalVersionRecord {
                 schema_version: SCHEMA_VERSION,
                 instance_id: self.instance_id.clone(),
                 ca_fp_prefix_hex: self.ca_fp_prefix_hex.clone(),
                 version: trimmed.to_owned(),
+                journal_name: journal_name.map(ToOwned::to_owned).or(previous_name),
                 confirmed: true,
                 run_id: self.run_identity.run_id.clone(),
                 lock_inode: self.run_identity.lock_inode,
@@ -289,6 +277,7 @@ impl VersionRefreshState {
         self.generation.fetch_add(1, Ordering::SeqCst) + 1
     }
 
+    #[cfg(test)]
     pub(crate) fn validate_and_store(&self, this_generation: u64, fetched: Option<String>) -> bool {
         let _guard = lock(&self.generation_guard);
         with_write_lock(&self.config_root, || {
@@ -310,27 +299,6 @@ impl VersionRefreshState {
             store_record(&self.config_root, &record).is_ok()
         })
         .unwrap_or(false)
-    }
-
-    fn spawn_refresh(&self) {
-        let client = lock(&self.journal_client).clone();
-        let Some(client) = client else { return };
-        // Claim the generation at the lifecycle event, before queued work can
-        // race a subsequent session or dial. Only the network read is deferred.
-        let this_generation = self.begin_refresh();
-        let refresh = self.clone();
-        tokio::spawn(async move {
-            let invalidator = refresh.clone();
-            let _ = tokio::task::spawn_blocking(move || {
-                invalidator.validate_and_store(this_generation, None)
-            })
-            .await;
-            let fetched = client.system_status().await.ok();
-            let _ = tokio::task::spawn_blocking(move || {
-                refresh.validate_and_store(this_generation, fetched)
-            })
-            .await;
-        });
     }
 }
 
@@ -634,6 +602,7 @@ mod tests {
             instance_id: "inst-42".to_owned(),
             ca_fp_prefix_hex: hex_encode(&[0x12, 0x34]),
             version: "2026.8.0".to_owned(),
+            journal_name: Some("test-journal".to_owned()),
             confirmed: true,
             run_id: identity.run_id.clone(),
             lock_inode: identity.lock_inode,
@@ -695,6 +664,7 @@ mod tests {
             instance_id: "inst-1".to_owned(),
             ca_fp_prefix_hex: hex_encode(&[0xaa, 0xbb]),
             version: "2026.8.0".to_owned(),
+            journal_name: Some("test-journal".to_owned()),
             confirmed: true,
             run_id: identity.run_id.clone(),
             lock_inode: identity.lock_inode,
@@ -751,6 +721,7 @@ mod tests {
             instance_id: "inst-1".to_owned(),
             ca_fp_prefix_hex: hex_encode(&[0xaa, 0xbb]),
             version: "2026.8.0".to_owned(),
+            journal_name: Some("test-journal".to_owned()),
             confirmed: true,
             run_id: identity.run_id.clone(),
             lock_inode: identity.lock_inode,

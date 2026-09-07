@@ -9,14 +9,14 @@ use std::io::{Read, Seek, SeekFrom};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use spl_transport::client::TokenPersistHook;
 use spl_transport::credential::Credential;
 use time::{Date, Month};
-use tokio::sync::{Mutex as AsyncMutex, Notify, OwnedSemaphorePermit, Semaphore, watch};
+use tokio::sync::{Mutex as AsyncMutex, Notify, OwnedSemaphorePermit, Semaphore, oneshot, watch};
 use tokio::time::Instant;
 
 use crate::clock::Clock;
@@ -118,8 +118,26 @@ use crate::post_connect::{PostConnectCoordinator, compute_pairing_generation};
 
 #[derive(Clone, Eq, PartialEq)]
 struct TokenUpdate {
-    token: String,
-    expires_at: i64,
+    id: u64,
+    expected_mutation_gen: u64,
+}
+
+/// Ownership captured before an access GET begins.  A response may publish
+/// only while this exact accepted credential revision remains current.
+#[derive(Clone)]
+pub struct AccessAttempt {
+    pairing_generation: [u8; 32],
+    lane_attempt_id: u64,
+    owner_attempt_id: u64,
+    access_revision: u64,
+    relay_origin: Option<String>,
+    device_token: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ReadyPublication {
+    Confirmed,
+    Uncertain,
 }
 
 struct CredentialStoreState {
@@ -128,12 +146,18 @@ struct CredentialStoreState {
     pending: Option<TokenUpdate>,
     durable_clear_pending_gen: Option<u64>,
     shutdown: bool,
+    current_access_attempt_id: u64,
 }
 
 pub struct CredentialStore {
     config_root: PathBuf,
     pairing_generation: [u8; 32],
     state: Mutex<CredentialStoreState>,
+    next_pending_id: AtomicU64,
+    next_access_attempt_id: AtomicU64,
+    // Each optional publication is chained behind this task. Dropping its
+    // waiter cannot drop the blocking write already owned by the store.
+    owner_tail: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 impl CredentialStore {
@@ -151,7 +175,11 @@ impl CredentialStore {
                 pending: None,
                 durable_clear_pending_gen: None,
                 shutdown: false,
+                current_access_attempt_id: 0,
             }),
+            next_pending_id: AtomicU64::new(0),
+            next_access_attempt_id: AtomicU64::new(0),
+            owner_tail: Mutex::new(None),
         });
         let hook = store.token_persist_hook(0);
         (store, hook)
@@ -171,6 +199,34 @@ impl CredentialStore {
         state.credential.clone()
     }
 
+    pub fn capture_access_attempt(&self, lane_attempt_id: u64) -> AccessAttempt {
+        let owner_attempt_id = self.next_access_attempt_id.fetch_add(1, Ordering::SeqCst) + 1;
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.current_access_attempt_id = owner_attempt_id;
+        AccessAttempt {
+            pairing_generation: self.pairing_generation,
+            lane_attempt_id,
+            owner_attempt_id,
+            access_revision: state.mutation_generation,
+            relay_origin: state.credential.relay_origin.clone(),
+            device_token: state.credential.device_token.clone(),
+        }
+    }
+
+    fn access_attempt_is_current(
+        &self,
+        state: &CredentialStoreState,
+        attempt: &AccessAttempt,
+    ) -> bool {
+        attempt.pairing_generation == self.pairing_generation
+            && attempt.lane_attempt_id != 0
+            && state.current_access_attempt_id == attempt.owner_attempt_id
+            && !state.shutdown
+            && state.mutation_generation == attempt.access_revision
+            && state.credential.relay_origin == attempt.relay_origin
+            && state.credential.device_token == attempt.device_token
+    }
+
     pub fn invalidate(&self) {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         state.shutdown = true;
@@ -187,136 +243,263 @@ impl CredentialStore {
             if store.pairing_generation != expected_pairing_gen {
                 return;
             }
-            let mut state = store.state.lock().unwrap_or_else(|e| e.into_inner());
-            if state.shutdown || state.mutation_generation != for_mutation_gen {
-                return;
-            }
-            state.credential.device_token = Some(token.to_owned());
-            state.credential.device_token_expires_at = Some(expires_at);
-            state.pending = Some(TokenUpdate {
-                token: token.to_owned(),
-                expires_at,
-            });
+            store.enqueue_token_refresh(for_mutation_gen, token.to_owned(), expires_at);
         })
     }
 
-    pub async fn commit_ready_access(
-        &self,
+    fn enqueue_owned<T, F>(self: &Arc<Self>, action: F) -> oneshot::Receiver<T>
+    where
+        T: Send + 'static,
+        F: Future<Output = T> + Send + 'static,
+    {
+        let mut owner_tail = self.owner_tail.lock().unwrap_or_else(|e| e.into_inner());
+        let previous = owner_tail.take();
+        let (sender, receiver) = oneshot::channel();
+        let handle = tokio::spawn(async move {
+            if let Some(previous) = previous {
+                let _ = previous.await;
+            }
+            let _ = sender.send(action.await);
+        });
+        *owner_tail = Some(handle);
+        receiver
+    }
+
+    /// A transport callback has no async return path. It leases the accepted
+    /// adapter generation and queues publication; it never mutates state in
+    /// the callback itself.
+    pub fn enqueue_token_refresh(
+        self: &Arc<Self>,
+        expected_mutation_gen: u64,
+        token: String,
+        expires_at: i64,
+    ) {
+        let store = Arc::clone(self);
+        drop(self.enqueue_owned(async move {
+            let (candidate, pending_id) = {
+                let mut state = store.state.lock().unwrap_or_else(|e| e.into_inner());
+                if state.shutdown || state.mutation_generation != expected_mutation_gen {
+                    return;
+                }
+                state.credential.device_token = Some(token.clone());
+                state.credential.device_token_expires_at = Some(expires_at);
+                let id = store.next_pending_id.fetch_add(1, Ordering::SeqCst) + 1;
+                state.pending = Some(TokenUpdate {
+                    id,
+                    expected_mutation_gen,
+                });
+                (state.credential.clone(), id)
+            };
+            let config_root = store.config_root.clone();
+            let persisted =
+                tokio::task::spawn_blocking(move || persist_credential(&config_root, &candidate))
+                    .await
+                    .ok()
+                    .and_then(Result::ok)
+                    .is_some();
+            if persisted {
+                let mut state = store.state.lock().unwrap_or_else(|e| e.into_inner());
+                if state.mutation_generation == expected_mutation_gen
+                    && state
+                        .pending
+                        .as_ref()
+                        .is_some_and(|pending| pending.id == pending_id)
+                {
+                    state.pending = None;
+                }
+            }
+        }));
+    }
+
+    /// Persist and install Ready as a single ordered owner operation.  The
+    /// receiver may be dropped by a caller timeout; the queued write and the
+    /// corresponding opener replacement continue to completion.
+    pub async fn submit_ready(
+        self: &Arc<Self>,
+        opener: Arc<PrivateLinkOpener>,
+        attempt: AccessAttempt,
         relay_origin: String,
         device_token: String,
         expires_at: i64,
-    ) -> Result<(Credential, u64), ()> {
-        let (updated, expected_mutation_gen) = {
-            let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-            if state.shutdown {
+    ) -> Result<ReadyPublication, ()> {
+        let store = Arc::clone(self);
+        self.enqueue_owned(async move {
+            let (updated, next_revision) = {
+                let state = store.state.lock().unwrap_or_else(|e| e.into_inner());
+                if !store.access_attempt_is_current(&state, &attempt) {
+                    return Err(());
+                }
+                let mut updated = state.credential.clone();
+                updated.relay_origin = Some(relay_origin);
+                updated.device_token = Some(device_token);
+                updated.device_token_expires_at = Some(expires_at);
+                (updated, state.mutation_generation.wrapping_add(1))
+            };
+
+            let hook = store.token_persist_hook(next_revision);
+            let transport = if updated.endpoints.is_empty() {
+                spl_transport::client::TransportClient::new_relay_only(updated.clone(), Some(hook))
+            } else {
+                spl_transport::client::TransportClient::new(updated.clone(), Some(hook))
+            }
+            .map_err(|_| ())?;
+
+            let config_root = store.config_root.clone();
+            let to_persist = updated.clone();
+            let persisted =
+                tokio::task::spawn_blocking(move || persist_credential(&config_root, &to_persist))
+                    .await;
+            let (confirmed, disk_matches) = match persisted {
+                Ok(Ok(())) => (true, true),
+                _ => {
+                    let config_root = store.config_root.clone();
+                    let candidate = updated.clone();
+                    let loaded = tokio::task::spawn_blocking(move || {
+                        crate::private_link::load_credential(&config_root)
+                    })
+                    .await
+                    .ok()
+                    .and_then(Result::ok)
+                    .flatten();
+                    let matches = loaded.is_some_and(|loaded| {
+                        loaded.relay_origin == candidate.relay_origin
+                            && loaded.device_token == candidate.device_token
+                            && loaded.device_token_expires_at == candidate.device_token_expires_at
+                            && loaded.client_cert_pem == candidate.client_cert_pem
+                    });
+                    (false, matches)
+                }
+            };
+            if !disk_matches {
                 return Err(());
             }
-            let mut updated = state.credential.clone();
-            updated.relay_origin = Some(relay_origin);
-            updated.device_token = Some(device_token);
-            updated.device_token_expires_at = Some(expires_at);
-            (updated, state.mutation_generation)
-        };
 
-        let config_root = self.config_root.clone();
-        let to_persist = updated.clone();
-        let persist_result =
-            tokio::task::spawn_blocking(move || persist_credential(&config_root, &to_persist))
-                .await
-                .map_err(|_| ());
-
-        let (persist_ok, disk_ok) = match persist_result {
-            Ok(Ok(())) => (true, true),
-            _ => {
-                let config_root_read = self.config_root.clone();
-                let loaded = tokio::task::spawn_blocking(move || {
-                    crate::private_link::load_credential(&config_root_read)
-                })
-                .await
-                .ok()
-                .and_then(|r| r.ok())
-                .flatten();
-
-                let matched = if let Some(loaded) = loaded {
-                    loaded.relay_origin == updated.relay_origin
-                        && loaded.device_token == updated.device_token
-                        && loaded.device_token_expires_at == updated.device_token_expires_at
-                        && loaded.client_cert_pem == updated.client_cert_pem
-                } else {
-                    false
-                };
-                (false, matched)
-            }
-        };
-
-        if !disk_ok {
-            return Err(());
-        }
-
-        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        if state.shutdown || state.mutation_generation != expected_mutation_gen {
-            return Err(());
-        }
-        state.credential = updated.clone();
-        state.pending = None;
-        state.durable_clear_pending_gen = None;
-        state.mutation_generation += 1;
-        let new_gen = state.mutation_generation;
-        if persist_ok {
-            Ok((updated, new_gen))
-        } else {
-            Err(())
-        }
-    }
-
-    pub fn live_clear_relay_credential(&self) -> (Credential, u64) {
-        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        let mut direct = state.credential.clone();
-        direct.relay_origin = None;
-        direct.device_token = None;
-        direct.device_token_expires_at = None;
-        state.credential = direct.clone();
-        state.pending = None;
-        state.mutation_generation += 1;
-        let new_gen = state.mutation_generation;
-        state.durable_clear_pending_gen = Some(new_gen);
-        (direct, new_gen)
-    }
-
-    pub async fn commit_durable_clear(&self, intent_mutation_gen: u64) -> Result<(), ()> {
-        let to_persist = {
-            let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-            if state.shutdown
-                || state.mutation_generation != intent_mutation_gen
-                || state.durable_clear_pending_gen != Some(intent_mutation_gen)
-            {
-                return Ok(());
-            }
-            state.credential.clone()
-        };
-
-        let config_root = self.config_root.clone();
-        let persist_result =
-            tokio::task::spawn_blocking(move || persist_credential(&config_root, &to_persist))
-                .await
-                .map_err(|_| ())
-                .and_then(|res| res.map_err(|_| ()));
-
-        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        if state.mutation_generation == intent_mutation_gen {
-            if persist_result.is_ok() {
-                state.durable_clear_pending_gen = None;
-                Ok(())
+            let outcome = if confirmed {
+                ReadyPublication::Confirmed
             } else {
-                state.durable_clear_pending_gen = Some(intent_mutation_gen);
-                Err(())
+                ReadyPublication::Uncertain
+            };
+            let mut state = store.state.lock().unwrap_or_else(|e| e.into_inner());
+            if !store.access_attempt_is_current(&state, &attempt) {
+                return Err(());
             }
-        } else {
-            Ok(())
-        }
+            state.credential = updated.clone();
+            state.mutation_generation = next_revision;
+            state.durable_clear_pending_gen = None;
+            state.pending = if confirmed {
+                None
+            } else {
+                Some(TokenUpdate {
+                    id: store.next_pending_id.fetch_add(1, Ordering::SeqCst) + 1,
+                    expected_mutation_gen: next_revision,
+                })
+            };
+            // No await follows this lock-protected acceptance, so the opener
+            // and accepted store cannot be observed at different revisions.
+            opener.install_transport(Arc::new(transport), updated, next_revision);
+            Ok(outcome)
+        })
+        .await
+        .unwrap_or(Err(()))
     }
 
-    pub async fn retry_durable_clear_if_pending(&self) {
+    /// Ordered disable is the sole route used by relay access. It changes the
+    /// live opener before attempting durability, so a failed disk write cannot
+    /// leave a relay-only credential usable in this process.
+    pub async fn submit_disable(
+        self: &Arc<Self>,
+        opener: Arc<PrivateLinkOpener>,
+        attempt: AccessAttempt,
+    ) -> Result<(), ()> {
+        let store = Arc::clone(self);
+        self.enqueue_owned(async move {
+            let (direct, revision) = {
+                let mut state = store.state.lock().unwrap_or_else(|e| e.into_inner());
+                if !store.access_attempt_is_current(&state, &attempt) {
+                    return Err(());
+                }
+                let mut direct = state.credential.clone();
+                direct.relay_origin = None;
+                direct.device_token = None;
+                direct.device_token_expires_at = None;
+                state.credential = direct.clone();
+                state.pending = None;
+                state.mutation_generation = state.mutation_generation.wrapping_add(1);
+                let revision = state.mutation_generation;
+                state.durable_clear_pending_gen = Some(revision);
+                (direct, revision)
+            };
+            if direct.endpoints.is_empty() {
+                opener.install_disabled(direct.clone(), revision);
+            } else {
+                let hook = store.token_persist_hook(revision);
+                let transport =
+                    spl_transport::client::TransportClient::new(direct.clone(), Some(hook))
+                        .map_err(|_| ())?;
+                opener.install_transport(Arc::new(transport), direct.clone(), revision);
+            }
+            let config_root = store.config_root.clone();
+            let persisted =
+                tokio::task::spawn_blocking(move || persist_credential(&config_root, &direct))
+                    .await
+                    .ok()
+                    .and_then(Result::ok)
+                    .is_some();
+            if persisted {
+                let mut state = store.state.lock().unwrap_or_else(|e| e.into_inner());
+                if state.mutation_generation == revision
+                    && state.durable_clear_pending_gen == Some(revision)
+                {
+                    state.durable_clear_pending_gen = None;
+                }
+            }
+            Ok(())
+        })
+        .await
+        .unwrap_or(Err(()))
+    }
+
+    /// Serialize journal-version publication with credential mutations while
+    /// keeping its separate file and identity checks in VersionRefreshState.
+    pub async fn publish_journal_info(
+        self: &Arc<Self>,
+        refresh: crate::journal_version::VersionRefreshState,
+        metadata_attempt: u64,
+        name: Option<String>,
+        version: String,
+    ) -> bool {
+        let store = Arc::clone(self);
+        self.enqueue_owned(async move {
+            if !refresh.metadata_attempt_is_current(metadata_attempt) {
+                return false;
+            }
+            let persisted = tokio::task::spawn_blocking(move || {
+                refresh.apply_validated_journal_info_for_attempt(
+                    metadata_attempt,
+                    name.as_deref(),
+                    &version,
+                )
+            })
+            .await
+            .unwrap_or(false);
+            // The store's shutdown fence is checked after blocking I/O too;
+            // a late worker may have written nothing, but cannot claim a
+            // successful publication for a retired session.
+            let state = store.state.lock().unwrap_or_else(|e| e.into_inner());
+            !state.shutdown && persisted
+        })
+        .await
+        .unwrap_or(false)
+    }
+
+    pub async fn retry_durable_clear_if_pending(self: &Arc<Self>) {
+        let store = Arc::clone(self);
+        let _ = self
+            .enqueue_owned(async move { store.retry_durable_clear_if_pending_unordered().await })
+            .await;
+    }
+
+    async fn retry_durable_clear_if_pending_unordered(&self) {
         let (to_persist, intent_gen) = {
             let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
             if state.shutdown {
@@ -344,19 +527,30 @@ impl CredentialStore {
         }
     }
 
-    pub async fn persist_pending(&self) -> Result<(), DiagnosticCode> {
-        let (to_persist, is_token_refresh, intent_gen) = {
+    pub async fn persist_pending(self: &Arc<Self>) -> Result<(), DiagnosticCode> {
+        let store = Arc::clone(self);
+        self.enqueue_owned(async move { store.persist_pending_unordered().await })
+            .await
+            .unwrap_or(Ok(()))
+    }
+
+    async fn persist_pending_unordered(&self) -> Result<(), DiagnosticCode> {
+        let (to_persist, pending_id, intent_gen) = {
             let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-            if state.pending.is_some() {
-                (Some(state.credential.clone()), true, None)
+            if let Some(pending) = state.pending.as_ref() {
+                (
+                    Some(state.credential.clone()),
+                    Some((pending.id, pending.expected_mutation_gen)),
+                    None,
+                )
             } else if let Some(intent_gen) = state.durable_clear_pending_gen {
                 if state.mutation_generation == intent_gen {
-                    (Some(state.credential.clone()), false, Some(intent_gen))
+                    (Some(state.credential.clone()), None, Some(intent_gen))
                 } else {
-                    (None, false, None)
+                    (None, None, None)
                 }
             } else {
-                (None, false, None)
+                (None, None, None)
             }
         };
 
@@ -373,7 +567,13 @@ impl CredentialStore {
         match res {
             Ok(()) => {
                 let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-                if is_token_refresh {
+                if let Some((pending_id, expected_mutation_gen)) = pending_id
+                    && state.mutation_generation == expected_mutation_gen
+                    && state
+                        .pending
+                        .as_ref()
+                        .is_some_and(|pending| pending.id == pending_id)
+                {
                     state.pending = None;
                 }
                 if let Some(intent_gen) = intent_gen
@@ -384,7 +584,7 @@ impl CredentialStore {
                 Ok(())
             }
             Err(e) => {
-                if is_token_refresh {
+                if pending_id.is_some() {
                     Err(e)
                 } else {
                     let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
@@ -463,8 +663,8 @@ impl JournalSession {
             clock,
             optional_timeout,
         );
-        refresh.attach_post_connect_trigger(Arc::new(Arc::clone(&coordinator)));
-        bridge.opener().attach_journal_client(journal);
+        bridge.opener().attach_coordinator(&coordinator);
+        coordinator.trigger_post_bootstrap();
         Ok(Self {
             bridge,
             journal: (*journal_client).clone(),
@@ -475,8 +675,7 @@ impl JournalSession {
 
     pub fn trigger_post_connect(&self) {
         if let Some(ref coordinator) = self.coordinator {
-            coordinator.trigger_metadata();
-            coordinator.trigger_relay_access();
+            coordinator.trigger_external();
         }
     }
 
@@ -492,13 +691,24 @@ impl JournalSession {
         self.bridge.opener()
     }
 
+    /// Test and lifecycle receipt for the bounded optional burst. It does not
+    /// affect ingest work and is useful when callers need publication to have
+    /// reached its terminal owner state.
+    pub async fn wait_for_post_connect_quiescence(&self, timeout: Duration) {
+        if let Some(coordinator) = &self.coordinator {
+            coordinator.wait_for_quiescence(timeout).await;
+        }
+    }
+
     pub async fn shutdown(mut self) -> Result<(), DiagnosticCode> {
         if let Some(coordinator) = self.coordinator.take() {
             coordinator.shutdown();
         }
-        let persist_result = self.credential_store.persist_pending().await;
+        // Optional credential publication is best-effort at shutdown; it must
+        // never turn a clean observer shutdown into PrivateStateIo.
+        let _ = self.credential_store.persist_pending().await;
         self.bridge.shutdown().await;
-        persist_result
+        Ok(())
     }
 }
 

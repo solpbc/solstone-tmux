@@ -7,7 +7,7 @@ use std::io::Read;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, RwLock, Weak};
 
 use serde_json::{Map, Value};
 use spl_core::bridge::BridgeNames;
@@ -22,11 +22,11 @@ use spl_transport::pairing::pair_from_link;
 use crate::config::system_hostname;
 use crate::health::DiagnosticCode;
 use crate::instance_lock::InstanceLock;
-use crate::journal::JournalClient;
 use crate::journal_version::VersionRefreshState;
 use crate::paths::{
     Environment, PlatformKind, ensure_private_directory, resolve_config_root, resolve_data_root,
 };
+use crate::post_connect::PostConnectCoordinator;
 use crate::storage::{StorageError, atomic_write_bytes, open_regular_readonly};
 
 pub const CREDENTIALS_FILENAME: &str = "credentials.json";
@@ -41,34 +41,82 @@ pub const PROTOCOL_VERSION: &str = "3";
 pub const PROTOCOL_VERSION_NUMBER: u64 = 3;
 
 pub struct PrivateLinkOpener {
-    transport: std::sync::RwLock<(Arc<TransportClient>, Credential)>,
-    refresh: VersionRefreshState,
+    state: RwLock<OpenerState>,
+    coordinator: Mutex<Option<Weak<PostConnectCoordinator>>>,
+}
+
+struct OpenerState {
+    incarnation: u64,
+    mode: OpenerMode,
+}
+
+enum OpenerMode {
+    Transport {
+        transport: Arc<TransportClient>,
+        credential: Credential,
+        access_revision: u64,
+    },
+    Disabled {
+        credential: Credential,
+        access_revision: u64,
+    },
 }
 
 impl PrivateLinkOpener {
     fn new(
         transport: TransportClient,
         credential: Credential,
-        refresh: VersionRefreshState,
+        _refresh: VersionRefreshState,
     ) -> Self {
         Self {
-            transport: std::sync::RwLock::new((Arc::new(transport), credential)),
-            refresh,
+            state: RwLock::new(OpenerState {
+                incarnation: 0,
+                mode: OpenerMode::Transport {
+                    transport: Arc::new(transport),
+                    credential,
+                    access_revision: 0,
+                },
+            }),
+            coordinator: Mutex::new(None),
         }
     }
 
-    pub(crate) fn attach_journal_client(&self, client: JournalClient) {
-        self.refresh.attach_client(client);
+    pub(crate) fn attach_coordinator(&self, coordinator: &Arc<PostConnectCoordinator>) {
+        *self.coordinator.lock().unwrap_or_else(|e| e.into_inner()) =
+            Some(Arc::downgrade(coordinator));
     }
 
-    pub fn replace_transport(&self, transport: Arc<TransportClient>, credential: Credential) {
-        let mut guard = self.transport.write().unwrap_or_else(|e| e.into_inner());
-        *guard = (transport, credential);
+    pub(crate) fn install_transport(
+        &self,
+        transport: Arc<TransportClient>,
+        credential: Credential,
+        access_revision: u64,
+    ) {
+        let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
+        state.incarnation = state.incarnation.wrapping_add(1);
+        state.mode = OpenerMode::Transport {
+            transport,
+            credential,
+            access_revision,
+        };
+    }
+
+    pub(crate) fn install_disabled(&self, credential: Credential, access_revision: u64) {
+        let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
+        state.incarnation = state.incarnation.wrapping_add(1);
+        state.mode = OpenerMode::Disabled {
+            credential,
+            access_revision,
+        };
     }
 
     pub fn live_dial_credential(&self) -> Credential {
-        let guard = self.transport.read().unwrap_or_else(|e| e.into_inner());
-        guard.1.clone()
+        let state = self.state.read().unwrap_or_else(|e| e.into_inner());
+        match &state.mode {
+            OpenerMode::Transport { credential, .. } | OpenerMode::Disabled { credential, .. } => {
+                credential.clone()
+            }
+        }
     }
 }
 
@@ -88,20 +136,47 @@ impl CarrierOpener for PrivateLinkOpener {
     fn dial_carrier(
         &self,
     ) -> Pin<Box<dyn Future<Output = Result<DialedCarrier, TransportError>> + Send + '_>> {
-        let transport = {
-            let guard = self.transport.read().unwrap_or_else(|e| e.into_inner());
-            Arc::clone(&guard.0)
+        let snapshot = {
+            let state = self.state.read().unwrap_or_else(|e| e.into_inner());
+            match &state.mode {
+                OpenerMode::Transport {
+                    transport,
+                    access_revision,
+                    ..
+                } => Some((state.incarnation, *access_revision, Arc::clone(transport))),
+                OpenerMode::Disabled {
+                    access_revision, ..
+                } => {
+                    let _ = access_revision;
+                    None
+                }
+            }
         };
         Box::pin(async move {
+            let Some((incarnation, _access_revision, transport)) = snapshot else {
+                return Err(TransportError::NoEndpoint);
+            };
             match transport.dial_carrier().await {
                 Ok(dialed) => {
-                    self.refresh.note_redial();
+                    let current = self.state.read().unwrap_or_else(|e| e.into_inner());
+                    if current.incarnation != incarnation {
+                        drop(current);
+                        drop(dialed);
+                        return Err(TransportError::NoEndpoint);
+                    }
+                    drop(current);
+                    let coordinator = self
+                        .coordinator
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .as_ref()
+                        .and_then(Weak::upgrade);
+                    if let Some(coordinator) = coordinator {
+                        coordinator.note_successful_dial();
+                    }
                     Ok(dialed)
                 }
-                Err(error) => {
-                    self.refresh.note_dial_failed();
-                    Err(error)
-                }
+                Err(error) => Err(error),
             }
         })
     }

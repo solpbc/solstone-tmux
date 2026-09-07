@@ -545,10 +545,15 @@ pub fn atomic_write_bytes(path: &Path, parent: &Path, bytes: &[u8]) -> Result<()
         TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
     ));
     let result = (|| {
-        let fault = ATOMIC_WRITE_FAULT
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .take();
+        let fault = {
+            let mut state = ATOMIC_WRITE_FAULT.lock().unwrap_or_else(|e| e.into_inner());
+            if state.target.as_ref().is_none_or(|target| target == path) {
+                state.target = None;
+                state.fault.take()
+            } else {
+                None
+            }
+        };
         let descriptor = rustix::fs::open(
             &temporary,
             rustix::fs::OFlags::CREATE
@@ -618,10 +623,30 @@ pub enum AtomicWriteFault {
     FailAfterRename,
 }
 
-static ATOMIC_WRITE_FAULT: std::sync::Mutex<Option<AtomicWriteFault>> = std::sync::Mutex::new(None);
+struct AtomicWriteFaultState {
+    fault: Option<AtomicWriteFault>,
+    target: Option<PathBuf>,
+}
+
+static ATOMIC_WRITE_FAULT: std::sync::Mutex<AtomicWriteFaultState> =
+    std::sync::Mutex::new(AtomicWriteFaultState {
+        fault: None,
+        target: None,
+    });
 
 pub fn set_atomic_write_fault(fault: Option<AtomicWriteFault>) {
-    *ATOMIC_WRITE_FAULT.lock().unwrap() = fault;
+    let mut state = ATOMIC_WRITE_FAULT.lock().unwrap_or_else(|e| e.into_inner());
+    state.fault = fault;
+    state.target = None;
+}
+
+/// Limit an injected atomic-write fault to one file. Integration tests run in
+/// parallel, so an unrelated state publication must not consume a credential
+/// persistence fault before its owner reaches the write.
+pub fn set_atomic_write_fault_for_path(path: &Path, fault: Option<AtomicWriteFault>) {
+    let mut state = ATOMIC_WRITE_FAULT.lock().unwrap_or_else(|e| e.into_inner());
+    state.fault = fault;
+    state.target = fault.map(|_| path.to_path_buf());
 }
 
 pub fn sync_directory(path: &Path) -> Result<(), StorageError> {

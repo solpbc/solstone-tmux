@@ -207,19 +207,20 @@ server-issued ingest URL or read `observer.json`.
 ### Post-connection publication and relay access
 
 Optional post-connection publication (`GET`/`PUT /app/network/api/clients/self`)
-and optional relay access (`GET /app/network/api/relay/access`); triggers are
-attach_client, note_redial, and session start after bootstrap; hostname
-resampled only on those events — no polling; one in-flight per kind, coalesced,
-independent of capture/uploads/status; pairing generation is SHA-256 of client
-cert PEM (same-home re-pair invalidates); ready persists then
-`replace_transport` for the next dial; `not_configured` disables live relay
-immediately then durable-clear; cert + LAN remain; missing API / optional
-failure does not break LAN; no `enroll_device`; name/version never enter cert,
-source ID, `captures/` history, or relay UA; optional persist failure is not the
-mandatory shutdown `PrivateStateIo` path; the loopback bridge capability gate
-is disabled so journal PUT can be forwarded (SPL authorize admits only
-GET/HEAD/POST); caller-supplied Authorization and reserved observer headers
-are still rejected locally with 403.
+and optional relay access (`GET /app/network/api/relay/access`) share one finite
+two-pass burst. Bootstrap and a later external reconnect start a burst;
+job-induced bridge dials do not. Hostname is resampled only for a pass, never
+polled. CredentialStore is the ordered mutation owner: it publishes accepted
+ready, renewal, and disable state before installing the next opener transport.
+`not_configured` immediately blocks relay dials while retaining any LAN path,
+then attempts its durable clear. Missing APIs and optional failures do not
+affect capture, ingest, uploads, or status; optional persistence failure is not
+the mandatory shutdown `PrivateStateIo` path. The loopback capability gate
+remains enabled: authenticated PUT is admitted only for
+`/app/network/api/clients/self` and `/app/link/api/clients/self`; Host,
+capability-cookie, caller Authorization, and reserved observer-header checks
+remain enforced locally with 403. No `enroll_device`; journal name/version never
+enter cert, source ID, `captures/` history, or relay UA.
 
 ### Sync and custody
 

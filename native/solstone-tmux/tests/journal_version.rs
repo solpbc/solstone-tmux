@@ -70,14 +70,9 @@ fn initial_fetch_stores_and_live_read_reports_current() {
             .await
             .expect("start session");
 
-        for _ in 0..50 {
-            if read_journal_version(&config_root, &data_root, NOW)
-                == JournalVersionStatus::Current("2026.8.0".to_owned())
-            {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
+        session
+            .wait_for_post_connect_quiescence(Duration::from_secs(5))
+            .await;
 
         assert_eq!(
             read_journal_version(&config_root, &data_root, NOW),
@@ -130,14 +125,9 @@ fn redial_carrier_fetches_newer_version_and_updates_cache() {
             .await
             .expect("start session");
 
-        for _ in 0..50 {
-            if read_journal_version(&config_root, &data_root, NOW)
-                == JournalVersionStatus::Current("2026.8.0".to_owned())
-            {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
+        session
+            .wait_for_post_connect_quiescence(Duration::from_secs(5))
+            .await;
 
         assert_eq!(
             read_journal_version(&config_root, &data_root, NOW),
@@ -151,14 +141,9 @@ fn redial_carrier_fetches_newer_version_and_updates_cache() {
 
         let _ = session.opener().dial_carrier().await.expect("dial carrier");
 
-        for _ in 0..50 {
-            if read_journal_version(&config_root, &data_root, NOW)
-                == JournalVersionStatus::Current("2026.8.1".to_owned())
-            {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
+        session
+            .wait_for_post_connect_quiescence(Duration::from_secs(5))
+            .await;
 
         assert_eq!(
             read_journal_version(&config_root, &data_root, NOW),
@@ -171,7 +156,7 @@ fn redial_carrier_fetches_newer_version_and_updates_cache() {
 }
 
 #[test]
-fn malformed_or_failed_response_preserves_existing_cache() {
+fn malformed_or_failed_fallback_preserves_existing_cache() {
     runtime().block_on(async {
         let temporary = TestDirectory::new("jv-malformed-preserves");
         let config_root = temporary.path().join("config");
@@ -200,36 +185,26 @@ fn malformed_or_failed_response_preserves_existing_cache() {
             .await
             .expect("start session");
 
-        for _ in 0..50 {
-            if read_journal_version(&config_root, &data_root, NOW)
-                == JournalVersionStatus::Current("2026.8.0".to_owned())
-            {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
+        session
+            .wait_for_post_connect_quiescence(Duration::from_secs(5))
+            .await;
 
         assert_eq!(
             read_journal_version(&config_root, &data_root, NOW),
             JournalVersionStatus::Current("2026.8.0".to_owned())
         );
 
-        // When a subsequent fetch fails (e.g. 500 error), confirmed flips false while version is preserved
+        // A failed optional fallback must retain the last validated cache.
         peer.enqueue_system_status_response(500, br#"{"error":"internal error"}"#.to_vec());
         let _ = session.opener().dial_carrier().await.expect("dial carrier");
 
-        for _ in 0..50 {
-            if read_journal_version(&config_root, &data_root, NOW)
-                == JournalVersionStatus::LastKnown("2026.8.0".to_owned())
-            {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
+        session
+            .wait_for_post_connect_quiescence(Duration::from_secs(5))
+            .await;
 
         assert_eq!(
             read_journal_version(&config_root, &data_root, NOW),
-            JournalVersionStatus::LastKnown("2026.8.0".to_owned())
+            JournalVersionStatus::Current("2026.8.0".to_owned())
         );
 
         let version_path = config_root.join(JOURNAL_VERSION_FILENAME);
@@ -237,7 +212,7 @@ fn malformed_or_failed_response_preserves_existing_cache() {
         let record: serde_json::Value =
             serde_json::from_str(&content).expect("parse version record");
         assert_eq!(record["version"], "2026.8.0");
-        assert_eq!(record["confirmed"], false);
+        assert_eq!(record["confirmed"], true);
 
         session.shutdown().await.expect("shutdown session");
         peer.shutdown().await;
@@ -245,7 +220,7 @@ fn malformed_or_failed_response_preserves_existing_cache() {
 }
 
 #[test]
-fn dial_failure_invalidates_confirmed_and_reports_last_known() {
+fn dial_failure_preserves_last_validated_version() {
     runtime().block_on(async {
         let temporary = TestDirectory::new("jv-dial-failure");
         let config_root = temporary.path().join("config");
@@ -274,14 +249,9 @@ fn dial_failure_invalidates_confirmed_and_reports_last_known() {
             .await
             .expect("start session");
 
-        for _ in 0..50 {
-            if read_journal_version(&config_root, &data_root, NOW)
-                == JournalVersionStatus::Current("2026.8.0".to_owned())
-            {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
+        session
+            .wait_for_post_connect_quiescence(Duration::from_secs(5))
+            .await;
 
         assert_eq!(
             read_journal_version(&config_root, &data_root, NOW),
@@ -294,18 +264,12 @@ fn dial_failure_invalidates_confirmed_and_reports_last_known() {
         let dial_result = session.opener().dial_carrier().await;
         assert!(dial_result.is_err());
 
-        for _ in 0..50 {
-            if read_journal_version(&config_root, &data_root, NOW)
-                == JournalVersionStatus::LastKnown("2026.8.0".to_owned())
-            {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
+        // The failed dial does not create a publication, so the completed
+        // initial burst remains the receipt for this stable cache assertion.
 
         assert_eq!(
             read_journal_version(&config_root, &data_root, NOW),
-            JournalVersionStatus::LastKnown("2026.8.0".to_owned())
+            JournalVersionStatus::Current("2026.8.0".to_owned())
         );
 
         let version_path = config_root.join(JOURNAL_VERSION_FILENAME);
@@ -313,7 +277,7 @@ fn dial_failure_invalidates_confirmed_and_reports_last_known() {
         let record: serde_json::Value =
             serde_json::from_str(&content).expect("parse version record");
         assert_eq!(record["version"], "2026.8.0");
-        assert_eq!(record["confirmed"], false);
+        assert_eq!(record["confirmed"], true);
 
         session.shutdown().await.expect("shutdown session");
     });
@@ -349,14 +313,9 @@ fn credential_mismatch_invalidates_cached_version() {
             .await
             .expect("start session");
 
-        for _ in 0..50 {
-            if read_journal_version(&config_root, &data_root, NOW)
-                == JournalVersionStatus::Current("2026.8.0".to_owned())
-            {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
+        session
+            .wait_for_post_connect_quiescence(Duration::from_secs(5))
+            .await;
 
         assert_eq!(
             read_journal_version(&config_root, &data_root, NOW),
