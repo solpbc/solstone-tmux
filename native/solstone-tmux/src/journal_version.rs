@@ -215,6 +215,15 @@ impl VersionRefreshState {
         self.begin_refresh();
     }
 
+    pub(crate) fn expire_metadata_attempt(&self, attempt: u64) {
+        let _ = self.generation.compare_exchange(
+            attempt,
+            attempt.wrapping_add(1),
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        );
+    }
+
     pub(crate) fn metadata_attempt_is_current(&self, attempt: u64) -> bool {
         self.generation.load(Ordering::SeqCst) == attempt
     }
@@ -222,7 +231,7 @@ impl VersionRefreshState {
     pub(crate) fn apply_validated_journal_info_for_attempt(
         &self,
         attempt: u64,
-        journal_name: Option<&str>,
+        journal_name: Option<Option<&str>>,
         version: &str,
     ) -> bool {
         let trimmed = version.trim();
@@ -246,7 +255,9 @@ impl VersionRefreshState {
                 instance_id: self.instance_id.clone(),
                 ca_fp_prefix_hex: self.ca_fp_prefix_hex.clone(),
                 version: trimmed.to_owned(),
-                journal_name: journal_name.map(ToOwned::to_owned).or(previous_name),
+                journal_name: journal_name
+                    .map(|name| name.map(ToOwned::to_owned))
+                    .unwrap_or(previous_name),
                 confirmed: true,
                 run_id: self.run_identity.run_id.clone(),
                 lock_inode: self.run_identity.lock_inode,
@@ -273,7 +284,8 @@ impl VersionRefreshState {
     }
 
     fn begin_refresh(&self) -> u64 {
-        let _guard = lock(&self.generation_guard);
+        // Blocking cache publication is owned independently; invalidation must
+        // not block the executor while an already executing write finishes.
         self.generation.fetch_add(1, Ordering::SeqCst) + 1
     }
 

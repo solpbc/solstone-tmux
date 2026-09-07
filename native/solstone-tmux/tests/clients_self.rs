@@ -57,7 +57,7 @@ fn decode_get_response_handles_null_and_populated_reported() {
         "revision": 1,
         "reported": null,
         "owner_label": null,
-        "display_label": null,
+        "display_label": "test-device",
         "updated_at": null,
         "journal": {
             "name": "my-journal",
@@ -80,7 +80,7 @@ fn decode_get_response_handles_null_and_populated_reported() {
             "app_version": "1.0.6"
         },
         "owner_label": null,
-        "display_label": null,
+        "display_label": "test-device",
         "updated_at": null,
         "journal": {
             "name": "my-journal",
@@ -136,7 +136,7 @@ fn clients_self_publishes_when_reported_is_null() {
                 "revision": 1,
                 "reported": null,
                 "owner_label": null,
-                "display_label": null,
+                "display_label": "test-device",
                 "updated_at": null,
                 "journal": {
                     "name": "test-journal",
@@ -158,7 +158,7 @@ fn clients_self_publishes_when_reported_is_null() {
                     "app_version": "1.0.6"
                 },
                 "owner_label": null,
-                "display_label": null,
+                "display_label": "test-device",
                 "updated_at": null,
                 "journal": { "name": "test-journal", "version": "2026.8.0" }
             }))
@@ -234,7 +234,7 @@ fn clients_self_noops_when_reported_already_matches() {
                 "revision": 3,
                 "reported": current,
                 "owner_label": null,
-                "display_label": null,
+                "display_label": "test-device",
                 "updated_at": null,
                 "journal": { "name": "test-journal", "version": "2026.8.0" }
             }))
@@ -301,7 +301,7 @@ fn clients_self_handles_409_conflict_with_refetch_and_retry() {
                 "revision": 1,
                 "reported": null,
                 "owner_label": null,
-                "display_label": null,
+                "display_label": "test-device",
                 "updated_at": null,
                 "journal": { "name": "test-journal", "version": "2026.8.0" }
             }))
@@ -323,7 +323,7 @@ fn clients_self_handles_409_conflict_with_refetch_and_retry() {
                     "app_version": null
                 },
                 "owner_label": null,
-                "display_label": null,
+                "display_label": "test-device",
                 "updated_at": null,
                 "journal": { "name": "test-journal", "version": "2026.8.0" }
             }))
@@ -337,7 +337,7 @@ fn clients_self_handles_409_conflict_with_refetch_and_retry() {
                 "revision": 3,
                 "reported": null,
                 "owner_label": null,
-                "display_label": null,
+                "display_label": "test-device",
                 "updated_at": null,
                 "journal": { "name": "test-journal", "version": "2026.8.0" }
             }))
@@ -458,7 +458,7 @@ fn clients_self_integrates_with_journal_session() {
                 "protocol_version": 1,
                 "revision": 1,
                 "reported": null,
-                "owner_label": null, "display_label": null, "updated_at": null,
+                "owner_label": null, "display_label": "test-device", "updated_at": null,
                 "journal": { "name": "test-journal", "version": "2026.8.0" }
             }))
             .expect("json"),
@@ -472,7 +472,7 @@ fn clients_self_integrates_with_journal_session() {
                     "name": "session-host", "platform": "linux", "device_type": "terminal",
                     "app_id": "solstone-tmux", "app_version": solstone_tmux::cli::version()
                 },
-                "owner_label": null, "display_label": null, "updated_at": null,
+                "owner_label": null, "display_label": "test-device", "updated_at": null,
                 "journal": { "name": "test-journal", "version": "2026.8.0" }
             }))
             .expect("json"),
@@ -516,7 +516,7 @@ fn clients_self_integrates_with_journal_session() {
                     "app_id": "solstone-tmux",
                     "app_version": solstone_tmux::cli::version()
                 },
-                "owner_label": null, "display_label": null, "updated_at": null,
+                "owner_label": null, "display_label": "test-device", "updated_at": null,
                 "journal": { "name": "test-journal", "version": "2026.8.0" }
             }))
             .expect("json"),
@@ -581,7 +581,7 @@ fn clients_self_description_b_during_a_is_published_on_one_follow_up() {
                     "protocol_version": 1,
                     "revision": revision,
                     "reported": reported,
-                    "owner_label": null, "display_label": null, "updated_at": null,
+                    "owner_label": null, "display_label": "test-device", "updated_at": null,
                     "journal": { "name": "test-journal", "version": "2026.8.0" }
                 }))
                 .expect("json"),
@@ -671,7 +671,7 @@ fn clients_self_invalid_name_nulls_field_without_tmux_fallback() {
                 "protocol_version": 1,
                 "revision": 1,
                 "reported": null,
-                "owner_label": null, "display_label": null, "updated_at": null,
+                "owner_label": null, "display_label": "test-device", "updated_at": null,
                 "journal": { "name": "test-journal", "version": "2026.8.0" }
             }))
             .expect("json"),
@@ -682,7 +682,7 @@ fn clients_self_invalid_name_nulls_field_without_tmux_fallback() {
                 "protocol_version": 1,
                 "revision": 2,
                 "reported": null,
-                "owner_label": null, "display_label": null, "updated_at": null,
+                "owner_label": null, "display_label": "test-device", "updated_at": null,
                 "journal": { "name": "test-journal", "version": "2026.8.0" }
             }))
             .expect("json"),
@@ -812,15 +812,15 @@ fn clients_self_timeout_releases_slot_and_fences_late_io() {
             lock.identity().clone(),
         );
 
-        // Delay GET by 300ms, with a 50ms session timeout
+        // The first response exceeds the total lane budget; the next burst can complete.
         peer.enqueue_delayed_clients_self_response(
-            Duration::from_millis(300),
+            Duration::from_secs(1),
             200,
             serde_json::to_vec(&json!({
                 "protocol_version": 1,
                 "revision": 1,
                 "reported": null,
-                "owner_label": null, "display_label": null, "updated_at": null,
+                "owner_label": null, "display_label": "test-device", "updated_at": null,
                 "journal": { "name": "test-journal", "version": "2026.8.0" }
             }))
             .expect("json"),
@@ -830,7 +830,7 @@ fn clients_self_timeout_releases_slot_and_fences_late_io() {
             credential,
             config_root,
             refresh,
-            Duration::from_millis(50),
+            Duration::from_millis(400),
             Arc::new(|| Some("session-host".to_owned())),
             PlatformKind::Linux,
             Arc::new(solstone_tmux::clock::SystemClock::new(time::UtcOffset::UTC)),
@@ -841,6 +841,10 @@ fn clients_self_timeout_releases_slot_and_fences_late_io() {
         peer.wait_for_clients_self_request_count(1, Duration::from_secs(5))
             .await;
 
+        session
+            .wait_for_post_connect_quiescence(Duration::from_secs(5))
+            .await;
+
         // Enqueue responses for the second trigger
         peer.enqueue_clients_self_response(
             200,
@@ -848,7 +852,7 @@ fn clients_self_timeout_releases_slot_and_fences_late_io() {
                 "protocol_version": 1,
                 "revision": 1,
                 "reported": null,
-                "owner_label": null, "display_label": null, "updated_at": null,
+                "owner_label": null, "display_label": "test-device", "updated_at": null,
                 "journal": { "name": "test-journal", "version": "2026.8.0" }
             }))
             .expect("json"),
@@ -860,7 +864,7 @@ fn clients_self_timeout_releases_slot_and_fences_late_io() {
                 "revision": 2,
                 "reported": { "name": "session-host", "platform": null, "device_type": null,
                     "app_id": null, "app_version": null },
-                "owner_label": null, "display_label": null, "updated_at": null,
+                "owner_label": null, "display_label": "test-device", "updated_at": null,
                 "journal": { "name": "test-journal", "version": "2026.8.0" }
             }))
             .expect("json"),
@@ -948,6 +952,260 @@ fn clients_self_optional_failure_preserves_upload_progress() {
 
         session.shutdown().await.expect("session shutdown");
         peer.shutdown().await;
+    });
+}
+
+#[test]
+fn full_metadata_requires_members_and_exact_nullable_types() {
+    let full = json!({
+        "protocol_version": 1, "revision": 0,
+        "reported": { "name": null, "platform": null, "device_type": null, "app_id": null, "app_version": null },
+        "owner_label": null, "display_label": "device", "updated_at": null,
+        "journal": { "name": null, "version": "2.0.0" }
+    });
+    let decode =
+        |value: &serde_json::Value| decode_get_response(&serde_json::to_vec(value).unwrap());
+    assert!(decode(&full).unwrap().journal.name.is_none());
+    for key in [
+        "protocol_version",
+        "revision",
+        "reported",
+        "owner_label",
+        "display_label",
+        "updated_at",
+        "journal",
+    ] {
+        let mut missing = full.clone();
+        missing.as_object_mut().unwrap().remove(key);
+        assert!(decode(&missing).is_none(), "missing {key}");
+    }
+    for key in ["name", "platform", "device_type", "app_id", "app_version"] {
+        let mut missing = full.clone();
+        missing["reported"].as_object_mut().unwrap().remove(key);
+        assert!(decode(&missing).is_none(), "missing reported.{key}");
+    }
+    for key in ["name", "version"] {
+        let mut missing = full.clone();
+        missing["journal"].as_object_mut().unwrap().remove(key);
+        assert!(decode(&missing).is_none(), "missing journal.{key}");
+    }
+    let mut invalid = full.clone();
+    invalid["display_label"] = serde_json::Value::Null;
+    assert!(decode(&invalid).is_none());
+    let mut valid = full;
+    valid["revision"] = json!(u64::MAX);
+    valid["journal"]["version"] = json!("v".repeat(65));
+    assert!(decode(&valid).is_some());
+}
+
+struct MetadataFixture {
+    temporary: TestDirectory,
+    peer: PrivateLinkPeer,
+    _lock: InstanceLock,
+    bridge: PrivateLinkBridge,
+    client: JournalClient,
+    store: Arc<CredentialStore>,
+    refresh: VersionRefreshState,
+}
+
+impl MetadataFixture {
+    async fn new(label: &str) -> Self {
+        let peer = PrivateLinkPeer::start().await;
+        let temporary = TestDirectory::new(label);
+        let config_root = temporary.path().join("config");
+        let data_root = temporary.path().join("data");
+        ensure_private_directory(&config_root).unwrap();
+        ensure_private_directory(&data_root).unwrap();
+        let lock = InstanceLock::acquire(&data_root).unwrap();
+        let credential = peer.credential();
+        persist_credential(&config_root, &credential).unwrap();
+        let refresh = VersionRefreshState::new(
+            config_root.clone(),
+            data_root,
+            credential.instance_id.clone(),
+            &credential.ca_fp_prefix,
+            lock.identity().clone(),
+        );
+        let (store, hook) = CredentialStore::new(
+            config_root,
+            credential.clone(),
+            compute_pairing_generation(&credential.client_cert_pem),
+        );
+        let bridge = PrivateLinkBridge::start(credential, Some(hook), refresh.clone())
+            .await
+            .unwrap();
+        let client = JournalClient::bootstrap(&bridge).await.unwrap();
+        Self {
+            temporary,
+            peer,
+            _lock: lock,
+            bridge,
+            client,
+            store,
+            refresh,
+        }
+    }
+    async fn run(&self, timeout: Duration) -> Result<(), ()> {
+        run_metadata_job(
+            &self.client,
+            &self.store,
+            &self.refresh,
+            || Some("test-host".to_owned()),
+            PlatformKind::Linux,
+            timeout,
+        )
+        .await
+    }
+    fn cache(&self) -> serde_json::Value {
+        serde_json::from_slice(
+            &std::fs::read(self.temporary.path().join("config/journal-version.json")).unwrap(),
+        )
+        .unwrap()
+    }
+    async fn shutdown(self) {
+        self.bridge.shutdown().await;
+        self.peer.shutdown().await;
+    }
+}
+
+fn metadata_resource(name: serde_json::Value, reported: serde_json::Value) -> Vec<u8> {
+    serde_json::to_vec(&json!({
+        "protocol_version": 1, "revision": 1, "reported": reported,
+        "owner_label": null, "display_label": "device", "updated_at": null,
+        "journal": { "name": name, "version": "2.0.0" }
+    }))
+    .unwrap()
+}
+
+#[test]
+fn full_null_journal_name_clears_cache_while_legacy_fallback_preserves_it() {
+    runtime().block_on(async {
+        let fixture = MetadataFixture::new("metadata-null-name").await;
+        let reported = serde_json::to_value(build_reported_snapshot(
+            || Some("test-host".to_owned()),
+            PlatformKind::Linux,
+        ))
+        .unwrap();
+        fixture.peer.enqueue_clients_self_response(
+            200,
+            metadata_resource(json!("home-name"), reported.clone()),
+        );
+        fixture.run(Duration::from_secs(5)).await.unwrap();
+        assert_eq!(fixture.cache()["journal_name"], json!("home-name"));
+        fixture.peer.enqueue_clients_self_response(404, Vec::new());
+        fixture.peer.enqueue_system_status_response(
+            200,
+            br#"{"ok":true,"version":{"current":"2.0.1"}}"#.to_vec(),
+        );
+        fixture.run(Duration::from_secs(5)).await.unwrap();
+        assert_eq!(fixture.cache()["journal_name"], json!("home-name"));
+        assert_eq!(fixture.cache()["version"], json!("2.0.1"));
+        fixture.peer.enqueue_clients_self_response(
+            200,
+            metadata_resource(json!("home-name"), serde_json::Value::Null),
+        );
+        fixture.peer.enqueue_clients_self_response(
+            200,
+            metadata_resource(serde_json::Value::Null, reported.clone()),
+        );
+        fixture.run(Duration::from_secs(5)).await.unwrap();
+        assert!(
+            fixture.cache()["journal_name"].is_null(),
+            "successful PUT with full null name clears cache"
+        );
+        fixture.peer.enqueue_clients_self_response(
+            200,
+            metadata_resource(serde_json::Value::Null, reported),
+        );
+        fixture.run(Duration::from_secs(5)).await.unwrap();
+        assert!(
+            fixture.cache()["journal_name"].is_null(),
+            "GET accepts full null name too"
+        );
+        fixture.shutdown().await;
+    });
+}
+
+#[test]
+fn metadata_get_and_put_share_one_total_deadline() {
+    runtime().block_on(async {
+        let fixture = MetadataFixture::new("metadata-total-deadline").await;
+        let response = metadata_resource(json!("home"), serde_json::Value::Null);
+        fixture.peer.enqueue_delayed_clients_self_response(
+            Duration::from_millis(700),
+            200,
+            response.clone(),
+        );
+        fixture.peer.enqueue_delayed_clients_self_response(
+            Duration::from_millis(700),
+            200,
+            response,
+        );
+        // Each response fits the per-request budget; together they exceed the job budget.
+        let result =
+            tokio::time::timeout(Duration::from_secs(5), fixture.run(Duration::from_secs(1)))
+                .await
+                .unwrap();
+        assert!(
+            result.is_err(),
+            "GET plus PUT must not receive independent one-second budgets"
+        );
+        assert_eq!(fixture.peer.clients_self_request_count(), 2);
+        assert_eq!(fixture.cache()["journal_name"], json!("home"));
+        fixture.shutdown().await;
+    });
+}
+
+#[test]
+fn metadata_legacy_fallback_shares_the_original_deadline() {
+    runtime().block_on(async {
+        let fixture = MetadataFixture::new("metadata-legacy-deadline").await;
+        fixture.peer.enqueue_delayed_clients_self_response(
+            Duration::from_millis(700),
+            404,
+            Vec::new(),
+        );
+        fixture.peer.enqueue_delayed_system_status_response(
+            Duration::from_millis(700),
+            200,
+            br#"{"ok":true,"version":{"current":"2.0.0"}}"#.to_vec(),
+        );
+        let _result =
+            tokio::time::timeout(Duration::from_secs(5), fixture.run(Duration::from_secs(1)))
+                .await
+                .unwrap();
+        assert!(
+            !fixture
+                .temporary
+                .path()
+                .join("config/journal-version.json")
+                .exists()
+        );
+        fixture.shutdown().await;
+    });
+}
+
+#[test]
+fn legacy_metadata_fallback_uses_optional_body_limit() {
+    runtime().block_on(async {
+        let fixture = MetadataFixture::new("metadata-legacy-body-limit").await;
+        fixture.peer.enqueue_clients_self_response(404, Vec::new());
+        fixture.peer.enqueue_system_status_response(
+            200,
+            serde_json::to_vec(
+                &json!({"ok":true,"version":{"current":"2.0.0"},"padding":"x".repeat(65536)}),
+            )
+            .unwrap(),
+        );
+        fixture.run(Duration::from_secs(5)).await.unwrap();
+        assert!(
+            !fixture
+                .temporary
+                .path()
+                .join("config/journal-version.json")
+                .exists()
+        );
+        fixture.shutdown().await;
     });
 }
 

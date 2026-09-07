@@ -164,6 +164,14 @@ impl InstanceLock {
     }
 }
 
+impl Drop for InstanceLock {
+    fn drop(&mut self) {
+        // Closing this descriptor alone does not release flock while a child
+        // between fork and exec still holds the same open-file description.
+        let _ = rustix::fs::flock(&self.file, rustix::fs::FlockOperation::Unlock);
+    }
+}
+
 pub(crate) fn inspect_existing(data_root: &Path) -> ExistingLock {
     let path = data_root.join(LOCK_FILENAME);
     let descriptor = match rustix::fs::open(

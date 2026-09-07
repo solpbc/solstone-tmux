@@ -36,6 +36,26 @@ fn crash_release_allows_immediate_recovery() {
 }
 
 #[test]
+fn owner_release_unlocks_despite_a_duplicated_descriptor() {
+    let temporary = TestDirectory::new("duplicate-lock-descriptor");
+    let first = InstanceLock::acquire(temporary.path()).expect("first lock");
+    // A child between fork and exec retains this same open-file description.
+    let inherited = first.file().try_clone().expect("duplicate descriptor");
+    assert!(matches!(
+        InstanceLock::acquire(temporary.path()),
+        Err(InstanceLockError::AlreadyLocked(_))
+    ));
+    drop(first);
+    let second = InstanceLock::acquire(temporary.path()).expect("owner released lock");
+    drop(inherited);
+    assert!(matches!(
+        InstanceLock::acquire(temporary.path()),
+        Err(InstanceLockError::AlreadyLocked(_))
+    ));
+    drop(second);
+}
+
+#[test]
 fn release_never_unlinks_lock_inode() {
     let temporary = TestDirectory::new("persistent-inode");
     let lock = InstanceLock::acquire(temporary.path()).expect("lock");

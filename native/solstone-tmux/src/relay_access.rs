@@ -41,75 +41,82 @@ pub async fn run_relay_access_job(
     clock: &dyn Clock,
     timeout: Duration,
 ) -> Result<(), ()> {
-    store.retry_durable_clear_if_pending().await;
-    // A Ready write which landed after a reported durability error remains
-    // pending until this owner retry confirms it. This is optional work: a
-    // retry failure must not turn access acquisition into PrivateStateIo.
-    let _ = store.persist_pending().await;
+    let deadline = tokio::time::Instant::now() + timeout;
+    tokio::time::timeout_at(deadline, async {
+        // A Ready write which landed after a reported durability error remains
+        // pending until this owner retry confirms it. This is optional work: a
+        // retry failure must not turn access acquisition into PrivateStateIo.
+        let _ = store.persist_pending().await;
 
-    let attempt = store.capture_access_attempt(lane_attempt_id);
+        let attempt = store.capture_access_attempt_until(lane_attempt_id, deadline);
 
-    let (status, body) = client.get_relay_access(timeout).await.map_err(|_| ())?;
-    if status != StatusCode::OK {
-        return Err(());
-    }
+        let (status, body) = client
+            .get_relay_access(deadline.saturating_duration_since(tokio::time::Instant::now()))
+            .await
+            .map_err(|_| ())?;
+        if status != StatusCode::OK {
+            return Err(());
+        }
 
-    let response = serde_json::from_slice::<RelayAccessResponse>(&body).map_err(|_| ())?;
-    match response {
-        RelayAccessResponse::Ready(ready) => {
-            if ready.status != "ready" || ready.protocol_version != RELAY_PROTOCOL_VERSION {
-                return Err(());
-            }
-            let paired_instance_id = store.instance_id();
-            if ready.instance_id != paired_instance_id {
-                return Err(());
-            }
-            validate_relay_origin(&ready.relay_origin).map_err(|_| ())?;
-            // Capture time only after the response is complete, so expiry
-            // during a blocked request cannot be admitted.
-            let now_unix_seconds = clock.wall_now().unix_timestamp();
-            let claims = negotiated_claims(
-                ready.protocol_version,
-                &ready.device_token,
-                &ready.expires_at,
-                &paired_instance_id,
-                now_unix_seconds,
-            )
-            .ok_or(())?;
-
-            let current = store.live_credential();
-            let same_origin = current
-                .relay_origin
-                .as_deref()
-                .map(|origin| same_relay_origin(origin, &ready.relay_origin).map_err(|_| ()))
-                .transpose()?
-                .unwrap_or(false);
-            if same_origin
-                && current.device_token.as_deref() == Some(ready.device_token.as_str())
-                && current.device_token_expires_at == Some(claims.exp)
-            {
-                return Ok(());
-            }
-
-            store
-                .submit_ready(
-                    Arc::clone(opener),
-                    attempt,
-                    ready.relay_origin,
-                    ready.device_token,
-                    claims.exp,
+        let response = serde_json::from_slice::<RelayAccessResponse>(&body).map_err(|_| ())?;
+        match response {
+            RelayAccessResponse::Ready(ready) => {
+                if ready.status != "ready" || ready.protocol_version != RELAY_PROTOCOL_VERSION {
+                    return Err(());
+                }
+                let paired_instance_id = store.instance_id();
+                if ready.instance_id != paired_instance_id {
+                    return Err(());
+                }
+                validate_relay_origin(&ready.relay_origin).map_err(|_| ())?;
+                // Capture time only after the response is complete, so expiry
+                // during a blocked request cannot be admitted.
+                let now_unix_seconds = clock.wall_now().unix_timestamp();
+                let claims = negotiated_claims(
+                    ready.protocol_version,
+                    &ready.device_token,
+                    &ready.expires_at,
+                    &paired_instance_id,
+                    now_unix_seconds,
                 )
-                .await
-                .map_err(|_| ())?;
-            Ok(())
-        }
-        RelayAccessResponse::NotConfigured(response) => {
-            if response.status != "not_configured"
-                || response.protocol_version != RELAY_PROTOCOL_VERSION
-            {
-                return Err(());
+                .ok_or(())?;
+
+                let current = store.live_credential();
+                let same_origin = current
+                    .relay_origin
+                    .as_deref()
+                    .map(|origin| same_relay_origin(origin, &ready.relay_origin).map_err(|_| ()))
+                    .transpose()?
+                    .unwrap_or(false);
+                if same_origin
+                    && current.device_token.as_deref() == Some(ready.device_token.as_str())
+                    && current.device_token_expires_at == Some(claims.exp)
+                {
+                    return Ok(());
+                }
+
+                store
+                    .submit_ready(
+                        Arc::clone(opener),
+                        attempt,
+                        ready.relay_origin,
+                        ready.device_token,
+                        claims.exp,
+                    )
+                    .await
+                    .map_err(|_| ())?;
+                Ok(())
             }
-            store.submit_disable(Arc::clone(opener), attempt).await
+            RelayAccessResponse::NotConfigured(response) => {
+                if response.status != "not_configured"
+                    || response.protocol_version != RELAY_PROTOCOL_VERSION
+                {
+                    return Err(());
+                }
+                store.submit_disable(Arc::clone(opener), attempt).await
+            }
         }
-    }
+    })
+    .await
+    .unwrap_or(Err(()))
 }

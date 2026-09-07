@@ -132,11 +132,18 @@ pub struct AccessAttempt {
     access_revision: u64,
     relay_origin: Option<String>,
     device_token: Option<String>,
+    deadline: Instant,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ReadyPublication {
     Confirmed,
+    Uncertain,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CredentialPersistenceIssue {
+    Failed,
     Uncertain,
 }
 
@@ -147,6 +154,7 @@ struct CredentialStoreState {
     durable_clear_pending_gen: Option<u64>,
     shutdown: bool,
     current_access_attempt_id: u64,
+    persistence_issue: Option<CredentialPersistenceIssue>,
 }
 
 pub struct CredentialStore {
@@ -158,6 +166,8 @@ pub struct CredentialStore {
     // Each optional publication is chained behind this task. Dropping its
     // waiter cannot drop the blocking write already owned by the store.
     owner_tail: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    #[cfg(test)]
+    publication_queued: Notify,
 }
 
 impl CredentialStore {
@@ -176,10 +186,13 @@ impl CredentialStore {
                 durable_clear_pending_gen: None,
                 shutdown: false,
                 current_access_attempt_id: 0,
+                persistence_issue: None,
             }),
             next_pending_id: AtomicU64::new(0),
             next_access_attempt_id: AtomicU64::new(0),
             owner_tail: Mutex::new(None),
+            #[cfg(test)]
+            publication_queued: Notify::new(),
         });
         let hook = store.token_persist_hook(0);
         (store, hook)
@@ -200,6 +213,14 @@ impl CredentialStore {
     }
 
     pub fn capture_access_attempt(&self, lane_attempt_id: u64) -> AccessAttempt {
+        self.capture_access_attempt_until(lane_attempt_id, Instant::now() + OPTIONAL_JOB_TIMEOUT)
+    }
+
+    pub(crate) fn capture_access_attempt_until(
+        &self,
+        lane_attempt_id: u64,
+        deadline: Instant,
+    ) -> AccessAttempt {
         let owner_attempt_id = self.next_access_attempt_id.fetch_add(1, Ordering::SeqCst) + 1;
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         state.current_access_attempt_id = owner_attempt_id;
@@ -210,6 +231,7 @@ impl CredentialStore {
             access_revision: state.mutation_generation,
             relay_origin: state.credential.relay_origin.clone(),
             device_token: state.credential.device_token.clone(),
+            deadline,
         }
     }
 
@@ -218,7 +240,8 @@ impl CredentialStore {
         state: &CredentialStoreState,
         attempt: &AccessAttempt,
     ) -> bool {
-        attempt.pairing_generation == self.pairing_generation
+        Instant::now() < attempt.deadline
+            && attempt.pairing_generation == self.pairing_generation
             && attempt.lane_attempt_id != 0
             && state.current_access_attempt_id == attempt.owner_attempt_id
             && !state.shutdown
@@ -230,7 +253,6 @@ impl CredentialStore {
     pub fn invalidate(&self) {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         state.shutdown = true;
-        state.durable_clear_pending_gen = None;
     }
 
     pub fn token_persist_hook(self: &Arc<Self>, for_mutation_gen: u64) -> TokenPersistHook {
@@ -276,39 +298,52 @@ impl CredentialStore {
     ) {
         let store = Arc::clone(self);
         drop(self.enqueue_owned(async move {
-            let (candidate, pending_id) = {
+            #[cfg(test)]
+            let receipt = Arc::clone(&store);
+            let worker = tokio::task::spawn_blocking(move || {
                 let mut state = store.state.lock().unwrap_or_else(|e| e.into_inner());
                 if state.shutdown || state.mutation_generation != expected_mutation_gen {
                     return;
                 }
-                state.credential.device_token = Some(token.clone());
+                state.credential.device_token = Some(token);
                 state.credential.device_token_expires_at = Some(expires_at);
                 let id = store.next_pending_id.fetch_add(1, Ordering::SeqCst) + 1;
                 state.pending = Some(TokenUpdate {
                     id,
                     expected_mutation_gen,
                 });
-                (state.credential.clone(), id)
-            };
-            let config_root = store.config_root.clone();
-            let persisted =
-                tokio::task::spawn_blocking(move || persist_credential(&config_root, &candidate))
-                    .await
-                    .ok()
-                    .and_then(Result::ok)
-                    .is_some();
-            if persisted {
+                let candidate = state.credential.clone();
+                drop(state);
+                let persisted = persist_credential(&store.config_root, &candidate).is_ok();
                 let mut state = store.state.lock().unwrap_or_else(|e| e.into_inner());
-                if state.mutation_generation == expected_mutation_gen
-                    && state
-                        .pending
-                        .as_ref()
-                        .is_some_and(|pending| pending.id == pending_id)
-                {
+                if persisted {
                     state.pending = None;
+                    state.persistence_issue = None;
+                } else {
+                    Self::record_persistence_issue(&mut state, CredentialPersistenceIssue::Failed);
                 }
-            }
+            });
+            #[cfg(test)]
+            receipt.publication_queued.notify_one();
+            let _ = worker.await;
         }));
+    }
+
+    pub fn persistence_issue(&self) -> Option<CredentialPersistenceIssue> {
+        self.state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .persistence_issue
+    }
+
+    fn record_persistence_issue(
+        state: &mut CredentialStoreState,
+        issue: CredentialPersistenceIssue,
+    ) {
+        if state.persistence_issue != Some(issue) {
+            crate::health::emit_diagnostic(DiagnosticCode::PrivateStateIo);
+        }
+        state.persistence_issue = Some(issue);
     }
 
     /// Persist and install Ready as a single ordered owner operation.  The
@@ -324,7 +359,12 @@ impl CredentialStore {
     ) -> Result<ReadyPublication, ()> {
         let store = Arc::clone(self);
         self.enqueue_owned(async move {
-            let (updated, next_revision) = {
+            #[cfg(test)]
+            let receipt = Arc::clone(&store);
+            let worker = tokio::task::spawn_blocking(move || {
+                // Claim inside the blocking worker, not before it queues. The
+                // owner chain retains this executing publication through acceptance;
+                // state readers and shutdown never wait on a filesystem lock.
                 let state = store.state.lock().unwrap_or_else(|e| e.into_inner());
                 if !store.access_attempt_is_current(&state, &attempt) {
                     return Err(());
@@ -333,73 +373,68 @@ impl CredentialStore {
                 updated.relay_origin = Some(relay_origin);
                 updated.device_token = Some(device_token);
                 updated.device_token_expires_at = Some(expires_at);
-                (updated, state.mutation_generation.wrapping_add(1))
-            };
-
-            let hook = store.token_persist_hook(next_revision);
-            let transport = if updated.endpoints.is_empty() {
-                spl_transport::client::TransportClient::new_relay_only(updated.clone(), Some(hook))
-            } else {
-                spl_transport::client::TransportClient::new(updated.clone(), Some(hook))
-            }
-            .map_err(|_| ())?;
-
-            let config_root = store.config_root.clone();
-            let to_persist = updated.clone();
-            let persisted =
-                tokio::task::spawn_blocking(move || persist_credential(&config_root, &to_persist))
-                    .await;
-            let (confirmed, disk_matches) = match persisted {
-                Ok(Ok(())) => (true, true),
-                _ => {
-                    let config_root = store.config_root.clone();
-                    let candidate = updated.clone();
-                    let loaded = tokio::task::spawn_blocking(move || {
-                        crate::private_link::load_credential(&config_root)
-                    })
-                    .await
-                    .ok()
-                    .and_then(Result::ok)
-                    .flatten();
-                    let matches = loaded.is_some_and(|loaded| {
-                        loaded.relay_origin == candidate.relay_origin
-                            && loaded.device_token == candidate.device_token
-                            && loaded.device_token_expires_at == candidate.device_token_expires_at
-                            && loaded.client_cert_pem == candidate.client_cert_pem
-                    });
-                    (false, matches)
+                let next_revision = state.mutation_generation.wrapping_add(1);
+                let hook = store.token_persist_hook(next_revision);
+                let transport = if updated.endpoints.is_empty() {
+                    spl_transport::client::TransportClient::new_relay_only(
+                        updated.clone(),
+                        Some(hook),
+                    )
+                } else {
+                    spl_transport::client::TransportClient::new(updated.clone(), Some(hook))
                 }
-            };
-            if !disk_matches {
-                return Err(());
-            }
-
-            let outcome = if confirmed {
-                ReadyPublication::Confirmed
-            } else {
-                ReadyPublication::Uncertain
-            };
-            let mut state = store.state.lock().unwrap_or_else(|e| e.into_inner());
-            // Once the bytes are known to be on disk, this owner operation
-            // must converge the accepted store and live opener even if
-            // shutdown or a later captured attempt arrived while blocking I/O
-            // was in flight. A later queued mutation remains ordered after
-            // this acceptance and can supersede it.
-            state.credential = updated.clone();
-            state.mutation_generation = next_revision;
-            state.durable_clear_pending_gen = None;
-            state.pending = if confirmed {
-                None
-            } else {
-                Some(TokenUpdate {
-                    id: store.next_pending_id.fetch_add(1, Ordering::SeqCst) + 1,
-                    expected_mutation_gen: next_revision,
+                .map_err(|_| ())?;
+                drop(state);
+                let confirmed = persist_credential(&store.config_root, &updated).is_ok();
+                if !confirmed {
+                    let matches = load_credential(&store.config_root)
+                        .ok()
+                        .flatten()
+                        .is_some_and(|loaded| {
+                            loaded.relay_origin == updated.relay_origin
+                                && loaded.device_token == updated.device_token
+                                && loaded.device_token_expires_at == updated.device_token_expires_at
+                                && loaded.client_cert_pem == updated.client_cert_pem
+                        });
+                    if !matches {
+                        let mut state = store.state.lock().unwrap_or_else(|e| e.into_inner());
+                        Self::record_persistence_issue(
+                            &mut state,
+                            CredentialPersistenceIssue::Failed,
+                        );
+                        return Err(());
+                    }
+                }
+                let mut state = store.state.lock().unwrap_or_else(|e| e.into_inner());
+                state.credential = updated.clone();
+                state.mutation_generation = next_revision;
+                state.durable_clear_pending_gen = None;
+                state.pending = if confirmed {
+                    None
+                } else {
+                    Some(TokenUpdate {
+                        id: store.next_pending_id.fetch_add(1, Ordering::SeqCst) + 1,
+                        expected_mutation_gen: next_revision,
+                    })
+                };
+                if confirmed {
+                    state.persistence_issue = None;
+                } else {
+                    Self::record_persistence_issue(
+                        &mut state,
+                        CredentialPersistenceIssue::Uncertain,
+                    );
+                }
+                opener.install_transport(Arc::new(transport), updated, next_revision);
+                Ok(if confirmed {
+                    ReadyPublication::Confirmed
+                } else {
+                    ReadyPublication::Uncertain
                 })
-            };
-            // No await follows this lock-protected acceptance, so the opener
-            // and accepted store cannot be observed at different revisions.
-            opener.install_transport(Arc::new(transport), updated, next_revision);
-            Ok(outcome)
+            });
+            #[cfg(test)]
+            receipt.publication_queued.notify_one();
+            worker.await.unwrap_or(Err(()))
         })
         .await
         .unwrap_or(Err(()))
@@ -431,9 +466,8 @@ impl CredentialStore {
                 state.durable_clear_pending_gen = Some(revision);
                 (direct, revision)
             };
-            if direct.endpoints.is_empty() {
-                opener.install_disabled(direct.clone(), revision);
-            } else {
+            opener.install_disabled(direct.clone(), revision);
+            if !direct.endpoints.is_empty() {
                 let hook = store.token_persist_hook(revision);
                 let transport =
                     spl_transport::client::TransportClient::new(direct.clone(), Some(hook))
@@ -453,9 +487,14 @@ impl CredentialStore {
                     && state.durable_clear_pending_gen == Some(revision)
                 {
                     state.durable_clear_pending_gen = None;
+                    state.persistence_issue = None;
                 }
+                Ok(())
+            } else {
+                let mut state = store.state.lock().unwrap_or_else(|e| e.into_inner());
+                Self::record_persistence_issue(&mut state, CredentialPersistenceIssue::Failed);
+                Err(())
             }
-            Ok(())
         })
         .await
         .unwrap_or(Err(()))
@@ -467,7 +506,7 @@ impl CredentialStore {
         self: &Arc<Self>,
         refresh: crate::journal_version::VersionRefreshState,
         metadata_attempt: u64,
-        name: Option<String>,
+        name: Option<Option<String>>,
         version: String,
     ) -> bool {
         let store = Arc::clone(self);
@@ -475,10 +514,22 @@ impl CredentialStore {
             if !refresh.metadata_attempt_is_current(metadata_attempt) {
                 return false;
             }
+            let worker_store = Arc::clone(&store);
             let persisted = tokio::task::spawn_blocking(move || {
+                let state = worker_store.state.lock().unwrap_or_else(|e| e.into_inner());
+                if state.shutdown {
+                    return false;
+                }
+                let certificate = state.credential.client_cert_pem.clone();
+                drop(state);
+                if !matches!(load_credential(&worker_store.config_root), Ok(Some(credential))
+                    if credential.client_cert_pem == certificate)
+                {
+                    return false;
+                }
                 refresh.apply_validated_journal_info_for_attempt(
                     metadata_attempt,
-                    name.as_deref(),
+                    name.as_ref().map(|name| name.as_deref()),
                     &version,
                 )
             })
@@ -495,110 +546,50 @@ impl CredentialStore {
     }
 
     pub async fn retry_durable_clear_if_pending(self: &Arc<Self>) {
-        let store = Arc::clone(self);
-        let _ = self
-            .enqueue_owned(async move { store.retry_durable_clear_if_pending_unordered().await })
-            .await;
-    }
-
-    async fn retry_durable_clear_if_pending_unordered(&self) {
-        let (to_persist, intent_gen) = {
-            let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-            if state.shutdown {
-                return;
-            }
-            let Some(intent_gen) = state.durable_clear_pending_gen else {
-                return;
-            };
-            if state.mutation_generation != intent_gen {
-                return;
-            }
-            (state.credential.clone(), intent_gen)
-        };
-
-        let config_root = self.config_root.clone();
-        let persist_result =
-            tokio::task::spawn_blocking(move || persist_credential(&config_root, &to_persist))
-                .await;
-
-        if let Ok(Ok(())) = persist_result {
-            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-            if state.mutation_generation == intent_gen {
-                state.durable_clear_pending_gen = None;
-            }
-        }
+        let _ = self.persist_pending().await;
     }
 
     pub async fn persist_pending(self: &Arc<Self>) -> Result<(), DiagnosticCode> {
         let store = Arc::clone(self);
         self.enqueue_owned(async move { store.persist_pending_unordered().await })
             .await
-            .unwrap_or(Ok(()))
+            .unwrap_or(Err(DiagnosticCode::PrivateStateIo))
     }
 
-    async fn persist_pending_unordered(&self) -> Result<(), DiagnosticCode> {
-        let (to_persist, pending_id, intent_gen) = {
-            let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some(pending) = state.pending.as_ref() {
-                (
-                    Some(state.credential.clone()),
-                    Some((pending.id, pending.expected_mutation_gen)),
-                    None,
-                )
-            } else if let Some(intent_gen) = state.durable_clear_pending_gen {
-                if state.mutation_generation == intent_gen {
-                    (Some(state.credential.clone()), None, Some(intent_gen))
-                } else {
-                    (None, None, None)
-                }
-            } else {
-                (None, None, None)
+    async fn persist_pending_unordered(self: &Arc<Self>) -> Result<(), DiagnosticCode> {
+        let store = Arc::clone(self);
+        tokio::task::spawn_blocking(move || {
+            let state = store.state.lock().unwrap_or_else(|e| e.into_inner());
+            let has_pending =
+                state.pending.as_ref().is_some_and(|pending| {
+                    pending.expected_mutation_gen == state.mutation_generation
+                }) || state.durable_clear_pending_gen == Some(state.mutation_generation);
+            if !has_pending {
+                return Ok(());
             }
-        };
-
-        let Some(to_persist) = to_persist else {
-            return Ok(());
-        };
-
-        let config_root = self.config_root.clone();
-        let res =
-            tokio::task::spawn_blocking(move || persist_credential(&config_root, &to_persist))
-                .await
-                .map_err(|_| DiagnosticCode::PrivateStateIo)?;
-
-        match res {
-            Ok(()) => {
-                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-                if let Some((pending_id, expected_mutation_gen)) = pending_id
-                    && state.mutation_generation == expected_mutation_gen
-                    && state
-                        .pending
-                        .as_ref()
-                        .is_some_and(|pending| pending.id == pending_id)
-                {
+            // Shutdown retires network work, not this already accepted intent.
+            let candidate = state.credential.clone();
+            drop(state);
+            let persisted = persist_credential(&store.config_root, &candidate);
+            let mut state = store.state.lock().unwrap_or_else(|e| e.into_inner());
+            match persisted {
+                Ok(()) => {
                     state.pending = None;
-                }
-                if let Some(intent_gen) = intent_gen
-                    && state.mutation_generation == intent_gen
-                {
                     state.durable_clear_pending_gen = None;
-                }
-                Ok(())
-            }
-            Err(e) => {
-                if pending_id.is_some() {
-                    Err(e)
-                } else {
-                    let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-                    if let Some(intent_gen) = intent_gen
-                        && state.mutation_generation == intent_gen
-                    {
-                        state.durable_clear_pending_gen = Some(intent_gen);
-                    }
+                    state.persistence_issue = None;
                     Ok(())
                 }
+                Err(error) => {
+                    let issue = state
+                        .persistence_issue
+                        .unwrap_or(CredentialPersistenceIssue::Failed);
+                    Self::record_persistence_issue(&mut state, issue);
+                    Err(error)
+                }
             }
-        }
+        })
+        .await
+        .map_err(|_| DiagnosticCode::PrivateStateIo)?
     }
 }
 
@@ -2547,6 +2538,173 @@ mod tests {
                 assert!(loaded.device_token_expires_at.is_some());
                 fs::remove_dir_all(root).expect("remove token test root");
             });
+    }
+
+    #[test]
+    fn queued_refresh_cannot_publish_after_shutdown() {
+        for retire in [false, true] {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .max_blocking_threads(1)
+                .build()
+                .unwrap()
+                .block_on(async {
+                    let root = std::env::temp_dir().join(format!(
+                        "tmux-queued-refresh-{}-{}",
+                        std::process::id(),
+                        SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .unwrap()
+                            .as_nanos()
+                    ));
+                    crate::paths::ensure_private_directory(&root).unwrap();
+                    let initial = credential();
+                    crate::private_link::persist_credential(&root, &initial).unwrap();
+                    let (store, hook) = CredentialStore::new(
+                        root.clone(),
+                        initial.clone(),
+                        compute_pairing_generation(&initial.client_cert_pem),
+                    );
+                    let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+                    let (release_tx, release_rx) = std::sync::mpsc::channel();
+                    let blocker = tokio::task::spawn_blocking(move || {
+                        entered_tx.send(()).unwrap();
+                        release_rx
+                            .recv_timeout(std::time::Duration::from_secs(5))
+                            .unwrap();
+                    });
+                    entered_rx.await.unwrap();
+                    hook("new-token", 1_900_000_000);
+                    tokio::time::timeout(
+                        std::time::Duration::from_secs(5),
+                        store.publication_queued.notified(),
+                    )
+                    .await
+                    .unwrap();
+                    if retire {
+                        store.invalidate();
+                    }
+                    release_tx.send(()).unwrap();
+                    blocker.await.unwrap();
+                    store.persist_pending().await.unwrap();
+                    let disk = load_credential(&root).unwrap().unwrap();
+                    let expected = if retire { None } else { Some("new-token") };
+                    assert_eq!(disk.device_token.as_deref(), expected);
+                    assert_eq!(store.live_credential().device_token.as_deref(), expected);
+                    fs::remove_dir_all(root).unwrap();
+                });
+        }
+    }
+
+    #[test]
+    fn queued_ready_rechecks_new_attempt_and_shutdown_before_disk_publication() {
+        use crate::instance_lock::InstanceLock;
+        use crate::journal_version::VersionRefreshState;
+        use crate::private_link::{PrivateLinkBridge, persist_credential};
+        use std::sync::Arc;
+        for supersession in [0, 1, 2] {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .max_blocking_threads(1)
+                .build()
+                .unwrap()
+                .block_on(async {
+                    let root = std::env::temp_dir().join(format!(
+                        "tmux-queued-ready-{}-{}",
+                        std::process::id(),
+                        SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .unwrap()
+                            .as_nanos()
+                    ));
+                    crate::paths::ensure_private_directory(&root).unwrap();
+                    let data = root.join("data");
+                    crate::paths::ensure_private_directory(&data).unwrap();
+                    let identity =
+                        rcgen::generate_simple_self_signed(vec!["localhost".to_owned()]).unwrap();
+                    let mut initial = credential();
+                    initial.client_key_pem = identity.key_pair.serialize_pem();
+                    initial.client_cert_pem = identity.cert.pem();
+                    initial.ca_chain_pem = vec![identity.cert.pem()];
+                    persist_credential(&root, &initial).unwrap();
+                    let lock = InstanceLock::acquire(&data).unwrap();
+                    let refresh = VersionRefreshState::new(
+                        root.clone(),
+                        data,
+                        initial.instance_id.clone(),
+                        &initial.ca_fp_prefix,
+                        lock.identity().clone(),
+                    );
+                    let bridge = PrivateLinkBridge::start(initial.clone(), None, refresh)
+                        .await
+                        .unwrap();
+                    let opener = Arc::clone(bridge.opener());
+                    let (store, _) = CredentialStore::new(
+                        root.clone(),
+                        initial.clone(),
+                        compute_pairing_generation(&initial.client_cert_pem),
+                    );
+                    let attempt = store.capture_access_attempt(1);
+                    let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+                    let (release_tx, release_rx) = std::sync::mpsc::channel();
+                    let blocker = tokio::task::spawn_blocking(move || {
+                        entered_tx.send(()).unwrap();
+                        release_rx
+                            .recv_timeout(std::time::Duration::from_secs(5))
+                            .unwrap();
+                    });
+                    entered_rx.await.unwrap();
+                    let task_store = Arc::clone(&store);
+                    let task_opener = Arc::clone(&opener);
+                    let ready = tokio::spawn(async move {
+                        task_store
+                            .submit_ready(
+                                task_opener,
+                                attempt,
+                                "https://relay.example".to_owned(),
+                                "new-token".to_owned(),
+                                1_900_000_000,
+                            )
+                            .await
+                    });
+                    tokio::time::timeout(
+                        std::time::Duration::from_secs(5),
+                        store.publication_queued.notified(),
+                    )
+                    .await
+                    .unwrap();
+                    if supersession == 1 {
+                        let _ = store.capture_access_attempt(2);
+                    }
+                    if supersession == 2 {
+                        store.invalidate();
+                    }
+                    release_tx.send(()).unwrap();
+                    blocker.await.unwrap();
+                    let result = ready.await.unwrap();
+                    assert_eq!(result.is_ok(), supersession == 0);
+                    let expected = if supersession == 0 {
+                        Some("new-token")
+                    } else {
+                        None
+                    };
+                    assert_eq!(
+                        load_credential(&root)
+                            .unwrap()
+                            .unwrap()
+                            .device_token
+                            .as_deref(),
+                        expected
+                    );
+                    assert_eq!(store.live_credential().device_token.as_deref(), expected);
+                    assert_eq!(
+                        opener.live_dial_credential().device_token.as_deref(),
+                        expected
+                    );
+                    bridge.shutdown().await;
+                    fs::remove_dir_all(root).unwrap();
+                });
+        }
     }
 
     fn credential() -> Credential {

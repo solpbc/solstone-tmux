@@ -599,9 +599,26 @@ impl JournalClient {
     }
 
     pub async fn system_status(&self) -> Result<String, JournalError> {
+        self.system_status_with_limits(SYSTEM_STATUS_TIMEOUT, MAX_RESPONSE_BODY_BYTES)
+            .await
+    }
+
+    pub(crate) async fn optional_system_status(
+        &self,
+        timeout: Duration,
+    ) -> Result<String, JournalError> {
+        self.system_status_with_limits(timeout, OPTIONAL_RESPONSE_BODY_BYTES)
+            .await
+    }
+
+    async fn system_status_with_limits(
+        &self,
+        timeout: Duration,
+        max_bytes: usize,
+    ) -> Result<String, JournalError> {
         let response = self
             .request(Method::GET, SYSTEM_STATUS_PATH)?
-            .timeout(SYSTEM_STATUS_TIMEOUT)
+            .timeout(timeout)
             .send()
             .await
             .map_err(|error| {
@@ -611,7 +628,7 @@ impl JournalClient {
                 ))
             })?;
         let status = response.status();
-        let body = collect_response_body(response).await?;
+        let body = collect_response_body_limited(response, max_bytes).await?;
         if status != StatusCode::OK {
             return Err(classify_error_response(status.as_u16(), &body));
         }

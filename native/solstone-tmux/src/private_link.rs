@@ -47,6 +47,7 @@ pub struct PrivateLinkOpener {
 
 struct OpenerState {
     incarnation: u64,
+    retired: bool,
     mode: OpenerMode,
 }
 
@@ -71,6 +72,7 @@ impl PrivateLinkOpener {
         Self {
             state: RwLock::new(OpenerState {
                 incarnation: 0,
+                retired: false,
                 mode: OpenerMode::Transport {
                     transport: Arc::new(transport),
                     credential,
@@ -93,6 +95,9 @@ impl PrivateLinkOpener {
         access_revision: u64,
     ) {
         let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
+        if state.retired {
+            return;
+        }
         state.incarnation = state.incarnation.wrapping_add(1);
         state.mode = OpenerMode::Transport {
             transport,
@@ -103,11 +108,20 @@ impl PrivateLinkOpener {
 
     pub(crate) fn install_disabled(&self, credential: Credential, access_revision: u64) {
         let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
+        if state.retired {
+            return;
+        }
         state.incarnation = state.incarnation.wrapping_add(1);
         state.mode = OpenerMode::Disabled {
             credential,
             access_revision,
         };
+    }
+
+    pub(crate) fn retire(&self) {
+        let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
+        state.retired = true;
+        state.incarnation = state.incarnation.wrapping_add(1);
     }
 
     pub fn live_dial_credential(&self) -> Credential {
@@ -136,9 +150,19 @@ impl CarrierOpener for PrivateLinkOpener {
     fn dial_carrier(
         &self,
     ) -> Pin<Box<dyn Future<Output = Result<DialedCarrier, TransportError>> + Send + '_>> {
+        let coordinator = self
+            .coordinator
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .and_then(Weak::upgrade);
+        let job_induced = coordinator
+            .as_ref()
+            .is_some_and(|coordinator| coordinator.burst_is_active());
         let snapshot = {
             let state = self.state.read().unwrap_or_else(|e| e.into_inner());
             match &state.mode {
+                _ if state.retired => None,
                 OpenerMode::Transport {
                     transport,
                     access_revision,
@@ -159,19 +183,15 @@ impl CarrierOpener for PrivateLinkOpener {
             match transport.dial_carrier().await {
                 Ok(dialed) => {
                     let current = self.state.read().unwrap_or_else(|e| e.into_inner());
-                    if current.incarnation != incarnation {
+                    if current.retired || current.incarnation != incarnation {
                         drop(current);
                         drop(dialed);
                         return Err(TransportError::NoEndpoint);
                     }
                     drop(current);
-                    let coordinator = self
-                        .coordinator
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .as_ref()
-                        .and_then(Weak::upgrade);
-                    if let Some(coordinator) = coordinator {
+                    // A job-induced dial can finish after its request deadline.
+                    // Its completion must not be reclassified as a fresh reconnect.
+                    if !job_induced && let Some(coordinator) = coordinator {
                         coordinator.note_successful_dial();
                     }
                     Ok(dialed)
@@ -255,6 +275,7 @@ impl PrivateLinkBridge {
     }
 
     pub async fn shutdown(self) {
+        self.opener.retire();
         self.handle.shutdown_and_wait().await;
     }
 }

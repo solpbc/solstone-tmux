@@ -122,6 +122,7 @@ impl PostConnectCoordinator {
 
     pub fn shutdown(&self) {
         self.alive.store(false, Ordering::SeqCst);
+        self.opener.retire();
         self.store.invalidate();
         self.version_refresh.invalidate();
         let mut burst = self.burst.lock().unwrap_or_else(|e| e.into_inner());
@@ -193,6 +194,10 @@ impl PostConnectCoordinator {
 
     /// A bridge dial is job-induced while a burst is active. Once quiescent it
     /// is an external reconnect and starts exactly one new burst.
+    pub(crate) fn burst_is_active(&self) -> bool {
+        self.burst.lock().unwrap_or_else(|e| e.into_inner()).active
+    }
+
     pub(crate) fn note_successful_dial(self: &Arc<Self>) {
         let quiescent = {
             let burst = self.burst.lock().unwrap_or_else(|e| e.into_inner());
@@ -230,8 +235,8 @@ impl PostConnectCoordinator {
             let client = Arc::clone(&coordinator.journal_client);
             let refresh = coordinator.version_refresh.clone();
             let hostname_source = Arc::clone(&coordinator.hostname_source);
-            // Each metadata request carries the optional-job timeout. The
-            // owner-held cache publication is intentionally outside it.
+            // The complete lane, including publication waiting, shares one deadline.
+            // A started blocking publication retains its own serialized lifetime.
             let result = run_metadata_job(
                 &client,
                 &coordinator.store,
@@ -248,8 +253,7 @@ impl PostConnectCoordinator {
     fn spawn_relay_access_job(self: &Arc<Self>, attempt_id: u64) {
         let coordinator = Arc::clone(self);
         tokio::spawn(async move {
-            // The relay request itself is bounded by `timeout`; publication is
-            // deliberately outside that deadline and remains owner-held.
+            // The lane wait is bounded; queued blocking publication stays owned.
             let result = run_relay_access_job(
                 &coordinator.journal_client,
                 &coordinator.store,

@@ -173,6 +173,7 @@ struct PeerState {
     system_status_request_count: Arc<AtomicUsize>,
     request_arrived: Arc<Notify>,
     clients_self_hold: Arc<PathHold>,
+    handshake_hold: Arc<PathHold>,
     relay_access_hold: Arc<PathHold>,
     system_status_hold: Arc<PathHold>,
     withhold_credit: Arc<AtomicBool>,
@@ -225,6 +226,7 @@ impl PrivateLinkPeer {
             system_status_request_count: Arc::new(AtomicUsize::new(0)),
             request_arrived: Arc::new(Notify::new()),
             clients_self_hold: Arc::new(PathHold::default()),
+            handshake_hold: Arc::new(PathHold::default()),
             relay_access_hold: Arc::new(PathHold::default()),
             system_status_hold: Arc::new(PathHold::default()),
             withhold_credit: Arc::new(AtomicBool::new(false)),
@@ -273,6 +275,19 @@ impl PrivateLinkPeer {
             status,
             body: body.into(),
             delay: None,
+        });
+    }
+
+    pub fn enqueue_delayed_system_status_response(
+        &self,
+        delay: std::time::Duration,
+        status: u16,
+        body: impl Into<Vec<u8>>,
+    ) {
+        lock(&self.state.system_status_responses).push_back(PeerResponse::Structured {
+            status,
+            body: body.into(),
+            delay: Some(delay),
         });
     }
 
@@ -414,6 +429,19 @@ impl PrivateLinkPeer {
         })
         .await
         .expect("system status request receipt timed out");
+    }
+
+    pub fn hold_handshake(&self) {
+        self.state.handshake_hold.hold();
+    }
+    pub async fn wait_for_held_handshake(&self, timeout: std::time::Duration) {
+        self.state
+            .handshake_hold
+            .wait_for_arrivals(1, timeout)
+            .await;
+    }
+    pub fn release_handshake(&self) {
+        self.state.handshake_hold.release();
     }
 
     pub fn hold_clients_self(&self) {
@@ -581,6 +609,7 @@ async fn serve(
             return;
         };
         state.accepted.fetch_add(1, Ordering::SeqCst);
+        state.handshake_hold.wait_if_held().await;
         let Ok(tls) = acceptor.accept(tcp).await else {
             continue;
         };

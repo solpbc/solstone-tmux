@@ -30,7 +30,7 @@ pub struct ClientsSelfReportedSnapshot {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ClientsSelfJournalInfo {
-    pub name: String,
+    pub name: Option<String>,
     pub version: String,
 }
 
@@ -41,7 +41,7 @@ pub struct ClientsSelfGetResponse {
     pub revision: u64,
     pub reported: Option<ClientsSelfReportedSnapshot>,
     pub owner_label: Option<String>,
-    pub display_label: Option<String>,
+    pub display_label: String,
     pub updated_at: Option<String>,
     pub journal: ClientsSelfJournalInfo,
 }
@@ -133,7 +133,7 @@ async fn cache_journal_info(
     store: &Arc<CredentialStore>,
     version_refresh: VersionRefreshState,
     attempt: u64,
-    name: Option<String>,
+    name: Option<Option<String>>,
     version: String,
 ) {
     let _ = store
@@ -153,126 +153,135 @@ where
     F: Fn() -> Option<String>,
 {
     let attempt = version_refresh.capture_metadata_attempt();
-    let (status, body) = client.get_clients_self(timeout).await.map_err(|_| ())?;
-    if !version_refresh.metadata_attempt_is_current(attempt) {
-        return Ok(());
-    }
-    if status == StatusCode::NOT_FOUND {
-        // Legacy status probing is a metadata-lane fallback, never a third
-        // redial-triggered job.
-        if let Ok(version) = client.system_status().await
-            && !version.trim().is_empty()
-        {
-            cache_journal_info(store, version_refresh.clone(), attempt, None, version).await;
-        }
-        return Ok(());
-    }
-    if status != StatusCode::OK {
-        return Err(());
-    }
-    let get_response = decode_get_response(&body).ok_or(())?;
-    if !get_response.journal.version.is_empty() {
-        cache_journal_info(
-            store,
-            version_refresh.clone(),
-            attempt,
-            Some(get_response.journal.name.clone()),
-            get_response.journal.version.clone(),
-        )
-        .await;
-    }
-
-    let current_snapshot = build_reported_snapshot(&hostname_source, platform);
-    if get_response.reported.as_ref() == Some(&current_snapshot) {
-        return Ok(());
-    }
-    if !version_refresh.metadata_attempt_is_current(attempt) {
-        return Ok(());
-    }
-
-    let put_req = ClientsSelfPutRequest {
-        protocol_version: METADATA_PROTOCOL_VERSION,
-        expected_revision: get_response.revision,
-        reported: current_snapshot,
-    };
-    let put_bytes = serde_json::to_vec(&put_req).map_err(|_| ())?;
-    let (put_status, put_body) = client
-        .put_clients_self(put_bytes, timeout)
-        .await
-        .map_err(|_| ())?;
-    if put_status == StatusCode::OK {
-        // PUT is the same complete resource as GET. A malformed successful
-        // response must not roll back the already validated GET cache.
-        let put_response = decode_get_response(&put_body).ok_or(())?;
-        if version_refresh.metadata_attempt_is_current(attempt)
-            && !put_response.journal.version.is_empty()
-        {
-            cache_journal_info(
-                store,
-                version_refresh.clone(),
-                attempt,
-                Some(put_response.journal.name),
-                put_response.journal.version,
-            )
-            .await;
-        }
-        return Ok(());
-    }
-    if put_status == StatusCode::CONFLICT {
-        // 409 Conflict: reread GET, retry at most once with newest local snapshot
-        let (retry_get_status, retry_get_body) =
-            client.get_clients_self(timeout).await.map_err(|_| ())?;
-        if retry_get_status != StatusCode::OK {
-            return Err(());
-        }
-        let retry_get_response = decode_get_response(&retry_get_body).ok_or(())?;
-        if !retry_get_response.journal.version.is_empty() {
-            cache_journal_info(
-                store,
-                version_refresh.clone(),
-                attempt,
-                Some(retry_get_response.journal.name.clone()),
-                retry_get_response.journal.version.clone(),
-            )
-            .await;
-        }
-        let newest_snapshot = build_reported_snapshot(&hostname_source, platform);
+    let deadline = tokio::time::Instant::now() + timeout;
+    let result = tokio::time::timeout_at(deadline, async {
+        let remaining = || deadline.saturating_duration_since(tokio::time::Instant::now());
+        let (status, body) = client.get_clients_self(remaining()).await.map_err(|_| ())?;
         if !version_refresh.metadata_attempt_is_current(attempt) {
             return Ok(());
         }
-        if retry_get_response.reported.as_ref() == Some(&newest_snapshot) {
+        if status == StatusCode::NOT_FOUND {
+            // Legacy status probing is a metadata-lane fallback, never a third
+            // redial-triggered job.
+            if let Ok(version) = client.optional_system_status(remaining()).await
+                && !version.trim().is_empty()
+            {
+                cache_journal_info(store, version_refresh.clone(), attempt, None, version).await;
+            }
             return Ok(());
         }
-        let retry_put_req = ClientsSelfPutRequest {
+        if status != StatusCode::OK {
+            return Err(());
+        }
+        let get_response = decode_get_response(&body).ok_or(())?;
+        if !get_response.journal.version.is_empty() {
+            cache_journal_info(
+                store,
+                version_refresh.clone(),
+                attempt,
+                Some(get_response.journal.name.clone()),
+                get_response.journal.version.clone(),
+            )
+            .await;
+        }
+
+        let current_snapshot = build_reported_snapshot(&hostname_source, platform);
+        if get_response.reported.as_ref() == Some(&current_snapshot) {
+            return Ok(());
+        }
+        if !version_refresh.metadata_attempt_is_current(attempt) {
+            return Ok(());
+        }
+
+        let put_req = ClientsSelfPutRequest {
             protocol_version: METADATA_PROTOCOL_VERSION,
-            expected_revision: retry_get_response.revision,
-            reported: newest_snapshot,
+            expected_revision: get_response.revision,
+            reported: current_snapshot,
         };
-        let retry_put_bytes = serde_json::to_vec(&retry_put_req).map_err(|_| ())?;
-        let (final_status, final_body) = client
-            .put_clients_self(retry_put_bytes, timeout)
+        let put_bytes = serde_json::to_vec(&put_req).map_err(|_| ())?;
+        let (put_status, put_body) = client
+            .put_clients_self(put_bytes, remaining())
             .await
             .map_err(|_| ())?;
-        if final_status == StatusCode::OK {
-            let final_response = decode_get_response(&final_body).ok_or(())?;
+        if put_status == StatusCode::OK {
+            // PUT is the same complete resource as GET. A malformed successful
+            // response must not roll back the already validated GET cache.
+            let put_response = decode_get_response(&put_body).ok_or(())?;
             if version_refresh.metadata_attempt_is_current(attempt)
-                && !final_response.journal.version.is_empty()
+                && !put_response.journal.version.is_empty()
             {
                 cache_journal_info(
                     store,
                     version_refresh.clone(),
                     attempt,
-                    Some(final_response.journal.name),
-                    final_response.journal.version,
+                    Some(put_response.journal.name),
+                    put_response.journal.version,
                 )
                 .await;
             }
             return Ok(());
         }
-        return Err(());
-    }
+        if put_status == StatusCode::CONFLICT {
+            // 409 Conflict: reread GET, retry at most once with newest local snapshot
+            let (retry_get_status, retry_get_body) =
+                client.get_clients_self(remaining()).await.map_err(|_| ())?;
+            if retry_get_status != StatusCode::OK {
+                return Err(());
+            }
+            let retry_get_response = decode_get_response(&retry_get_body).ok_or(())?;
+            if !retry_get_response.journal.version.is_empty() {
+                cache_journal_info(
+                    store,
+                    version_refresh.clone(),
+                    attempt,
+                    Some(retry_get_response.journal.name.clone()),
+                    retry_get_response.journal.version.clone(),
+                )
+                .await;
+            }
+            let newest_snapshot = build_reported_snapshot(&hostname_source, platform);
+            if !version_refresh.metadata_attempt_is_current(attempt) {
+                return Ok(());
+            }
+            if retry_get_response.reported.as_ref() == Some(&newest_snapshot) {
+                return Ok(());
+            }
+            let retry_put_req = ClientsSelfPutRequest {
+                protocol_version: METADATA_PROTOCOL_VERSION,
+                expected_revision: retry_get_response.revision,
+                reported: newest_snapshot,
+            };
+            let retry_put_bytes = serde_json::to_vec(&retry_put_req).map_err(|_| ())?;
+            let (final_status, final_body) = client
+                .put_clients_self(retry_put_bytes, remaining())
+                .await
+                .map_err(|_| ())?;
+            if final_status == StatusCode::OK {
+                let final_response = decode_get_response(&final_body).ok_or(())?;
+                if version_refresh.metadata_attempt_is_current(attempt)
+                    && !final_response.journal.version.is_empty()
+                {
+                    cache_journal_info(
+                        store,
+                        version_refresh.clone(),
+                        attempt,
+                        Some(final_response.journal.name),
+                        final_response.journal.version,
+                    )
+                    .await;
+                }
+                return Ok(());
+            }
+            return Err(());
+        }
 
-    Err(())
+        Err(())
+    })
+    .await;
+    if result.is_err() {
+        version_refresh.expire_metadata_attempt(attempt);
+    }
+    result.unwrap_or(Err(()))
 }
 
 #[cfg(test)]

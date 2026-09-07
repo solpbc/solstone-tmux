@@ -128,7 +128,7 @@ fn relay_access_post_connect_job_redial_quiesces_then_external_redial_starts_one
                 "protocol_version": 1,
                 "revision": 1,
                 "reported": null,
-                "owner_label": null, "display_label": null, "updated_at": null,
+                "owner_label": null, "display_label": "test-device", "updated_at": null,
                 "journal": { "name": "test-journal", "version": "2026.8.0" }
             }))
             .expect("json"),
@@ -139,7 +139,7 @@ fn relay_access_post_connect_job_redial_quiesces_then_external_redial_starts_one
                 "protocol_version": 1,
                 "revision": 2,
                 "reported": reported.clone(),
-                "owner_label": null, "display_label": null, "updated_at": null,
+                "owner_label": null, "display_label": "test-device", "updated_at": null,
                 "journal": { "name": "test-journal", "version": "2026.8.0" }
             }))
             .expect("json"),
@@ -201,7 +201,7 @@ fn relay_access_post_connect_job_redial_quiesces_then_external_redial_starts_one
                 "protocol_version": 1,
                 "revision": 2,
                 "reported": reported,
-                "owner_label": null, "display_label": null, "updated_at": null,
+                "owner_label": null, "display_label": "test-device", "updated_at": null,
                 "journal": { "name": "test-journal", "version": "2026.8.0" }
             }))
             .expect("json"),
@@ -1085,6 +1085,10 @@ fn relay_access_fault_after_rename_is_durability_uncertain() {
             .await;
         set_credential_write_fault(&config_root, None);
         assert_eq!(result, Ok(ReadyPublication::Uncertain));
+        assert_eq!(
+            store.persistence_issue(),
+            Some(solstone_tmux::sync::CredentialPersistenceIssue::Uncertain)
+        );
 
         // On disk, the rename succeeded so credentials.json has the new bytes
         let on_disk = load_credential(&config_root)
@@ -1109,6 +1113,25 @@ fn relay_access_fault_after_rename_is_durability_uncertain() {
             .expect("next dial uses the accepted replacement adapter");
         assert!(peer.accepted_carriers() > accepted_before);
 
+        let client = JournalClient::bootstrap(&bridge).await.expect("bootstrap");
+        peer.enqueue_relay_access_response(503, Vec::new());
+        assert!(
+            run_relay_access_job(
+                &client,
+                &store,
+                &opener,
+                2,
+                &clock_at(1_800_000_000),
+                Duration::from_secs(5)
+            )
+            .await
+            .is_err()
+        );
+        assert_eq!(
+            store.persistence_issue(),
+            None,
+            "a later access trigger retries uncertain publication even when its GET fails"
+        );
         bridge.shutdown().await;
         peer.shutdown().await;
     });
@@ -1157,7 +1180,7 @@ fn relay_access_durable_clear_retry_does_not_clobber_newer_ready() {
             store
                 .submit_disable(Arc::clone(&opener), store.capture_access_attempt(1))
                 .await
-                .is_ok()
+                .is_err()
         );
         set_credential_write_fault(&config_root, None);
 
@@ -1195,6 +1218,85 @@ fn relay_access_durable_clear_retry_does_not_clobber_newer_ready() {
             Some("https://newer-relay.solstone.io")
         );
         assert_eq!(on_disk.device_token.as_deref(), Some(newer_jwt.as_str()));
+
+        bridge.shutdown().await;
+        peer.shutdown().await;
+    });
+}
+
+#[test]
+fn relay_access_failed_clear_survives_shutdown_and_retries() {
+    let _fault_guard = FAULT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    runtime().block_on(async {
+        let peer = PrivateLinkPeer::start().await;
+        let temporary = TestDirectory::new("relay-access-shutdown-clear-retry");
+        let config_root = temporary.path().join("config");
+        let data_root = temporary.path().join("data");
+        ensure_private_directory(&config_root).expect("config root");
+        ensure_private_directory(&data_root).expect("data root");
+
+        let mut initial_cred = peer.credential();
+        let exp = 1900000000i64;
+        let jwt = create_jwt(&initial_cred.instance_id, exp);
+        initial_cred.relay_origin = Some("https://relay.solstone.io".to_owned());
+        initial_cred.device_token = Some(jwt.clone());
+        persist_credential(&config_root, &initial_cred).expect("persist initial cred");
+        let lock = InstanceLock::acquire(&data_root).expect("acquire lock");
+        let refresh = VersionRefreshState::new(
+            config_root.clone(),
+            data_root.clone(),
+            initial_cred.instance_id.clone(),
+            &initial_cred.ca_fp_prefix,
+            lock.identity().clone(),
+        );
+        let bridge = PrivateLinkBridge::start(initial_cred.clone(), None, refresh)
+            .await
+            .expect("start bridge");
+        let opener = bridge.opener().clone();
+
+        let pairing_gen = compute_pairing_generation(&initial_cred.client_cert_pem);
+        let (store, _hook) =
+            CredentialStore::new(config_root.clone(), initial_cred.clone(), pairing_gen);
+
+        // Fault before rename makes durable clear fail
+        set_credential_write_fault(
+            &config_root,
+            Some(solstone_tmux::storage::AtomicWriteFault::FailBeforeRename),
+        );
+        assert!(
+            store
+                .submit_disable(Arc::clone(&opener), store.capture_access_attempt(1))
+                .await
+                .is_err()
+        );
+        set_credential_write_fault(&config_root, None);
+
+        assert_eq!(
+            store.persistence_issue(),
+            Some(solstone_tmux::sync::CredentialPersistenceIssue::Failed)
+        );
+        assert!(opener.live_dial_credential().device_token.is_none());
+        assert!(
+            load_credential(&config_root)
+                .unwrap()
+                .unwrap()
+                .device_token
+                .is_some()
+        );
+        store.invalidate();
+        store
+            .persist_pending()
+            .await
+            .expect("shutdown retries accepted disable");
+        assert_eq!(store.persistence_issue(), None);
+        assert!(
+            load_credential(&config_root)
+                .unwrap()
+                .unwrap()
+                .device_token
+                .is_none()
+        );
+        assert!(store.live_credential().device_token.is_none());
 
         bridge.shutdown().await;
         peer.shutdown().await;
@@ -1256,6 +1358,47 @@ fn relay_access_stale_hook_cannot_undo_disable() {
         assert_eq!(on_disk.device_token, None);
 
         bridge.shutdown().await;
+        peer.shutdown().await;
+    });
+}
+
+#[test]
+fn shutdown_retires_an_already_blocked_dial() {
+    runtime().block_on(async {
+        let peer = PrivateLinkPeer::start().await;
+        let temporary = TestDirectory::new("shutdown-blocked-dial");
+        let config_root = temporary.path().join("config");
+        let data_root = temporary.path().join("data");
+        ensure_private_directory(&config_root).unwrap();
+        ensure_private_directory(&data_root).unwrap();
+        let credential = peer.credential();
+        persist_credential(&config_root, &credential).unwrap();
+        let lock = InstanceLock::acquire(&data_root).unwrap();
+        let refresh = VersionRefreshState::new(
+            config_root,
+            data_root,
+            credential.instance_id.clone(),
+            &credential.ca_fp_prefix,
+            lock.identity().clone(),
+        );
+        let bridge = PrivateLinkBridge::start(credential, None, refresh)
+            .await
+            .unwrap();
+        let opener = Arc::clone(bridge.opener());
+        peer.hold_handshake();
+        let old_opener = Arc::clone(&opener);
+        let dial = tokio::spawn(async move { old_opener.dial_carrier().await });
+        peer.wait_for_held_handshake(Duration::from_secs(5)).await;
+        bridge.shutdown().await;
+        peer.release_handshake();
+        assert!(
+            tokio::time::timeout(Duration::from_secs(5), dial)
+                .await
+                .unwrap()
+                .unwrap()
+                .is_err()
+        );
+        assert!(opener.dial_carrier().await.is_err());
         peer.shutdown().await;
     });
 }
