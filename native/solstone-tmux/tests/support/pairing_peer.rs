@@ -136,6 +136,7 @@ fn sign_pair_response(ca: &PairingCa, request: &PairRequest, relay: bool) -> Pai
         home_label: "Home".to_owned(),
         fingerprint: format!("sha256:{}", spl_core::ca::sha256_hex(client_cert.der())),
         home_attestation: relay.then(|| "attestation".to_owned()),
+        relay_access: None,
         local_endpoints: relay.then(|| json!([{"ip":"10.0.0.2","port":7657,"scope":"lan"}])),
     }
 }

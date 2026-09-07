@@ -139,7 +139,7 @@ impl PrivateLinkBridge {
         let bridge_names_for_hook = bridge_names.clone();
         let policy = BridgePolicy {
             port: 0,
-            capability_gate: CapabilityGate::Disabled,
+            capability_gate: CapabilityGate::Enabled,
             max_request_body_bytes: MAX_REQUEST_BODY_BYTES,
             local_response: Arc::new(move |head, _| {
                 if spl_core::bridge::check_caller_auth(head, &bridge_names_for_hook).is_err() {
