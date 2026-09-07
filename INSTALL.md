@@ -1,8 +1,8 @@
 # Installing solstone-tmux
 
-solstone-tmux experiences tmux sessions along with you and syncs completed
-observations to your journal. The current release is a native application and
-requires tmux.
+solstone-tmux takes in what you share from your tmux sessions, and all of it
+goes into your journal. The current release is a native application and requires
+tmux.
 
 Supported systems are Linux on x86_64 or aarch64 and macOS on Apple silicon.
 Intel macOS, 32-bit systems, and Windows are not supported.
@@ -13,6 +13,9 @@ Download packages from the
 **Verify first.** Download the package you will install, `SHA256SUMS`, and
 `SHA256SUMS.minisig` from that release. Then fetch the published key,
 authenticate the checksum file, and check the package against it:
+
+Install minisign if you do not have it: `apt install minisign`,
+`dnf install minisign`, or `brew install minisign` on macOS.
 
 ```sh
 curl -fLo solstone-tmux-release.pub https://updates.solstone.app/solstone-tmux/minisign.pub
@@ -36,7 +39,10 @@ Choose one format. The deb and RPM packages install
 `/usr/bin/solstone-tmux`; the tarball installs
 `/usr/local/bin/solstone-tmux`.
 
-| System | Tar name | deb name | RPM name |
+`<VERSION>` below is the version you downloaded. The three formats do not share
+one architecture name, so each command below uses the matching column:
+
+| System | `<tar-name>` | `<deb-name>` | `<rpm-name>` |
 | --- | --- | --- | --- |
 | Linux x86_64 | `x86_64` | `amd64` | `x86_64` |
 | Linux aarch64 | `aarch64` | `arm64` | `aarch64` |
@@ -46,7 +52,7 @@ Choose one format. The deb and RPM packages install
 Install tmux with your system package manager, then:
 
 ```sh
-tar -xzf solstone-tmux-1.0.2-<architecture>-linux.tar.gz
+tar -xzf solstone-tmux-<VERSION>-<tar-name>-linux.tar.gz
 sudo install -m 0755 solstone-tmux /usr/local/bin/solstone-tmux
 /usr/local/bin/solstone-tmux --version
 ```
@@ -57,7 +63,7 @@ sudo install -m 0755 solstone-tmux /usr/local/bin/solstone-tmux
 above before running:
 
 ```sh
-sudo apt install ./solstone-tmux_1.0.2_<architecture>.deb
+sudo apt install ./solstone-tmux_<VERSION>_<deb-name>.deb
 /usr/bin/solstone-tmux --version
 ```
 
@@ -69,7 +75,7 @@ The package declares its tmux dependency.
 above before running:
 
 ```sh
-sudo dnf install ./solstone-tmux-1.0.2-1.<architecture>.rpm
+sudo dnf install ./solstone-tmux-<VERSION>-1.<rpm-name>.rpm
 /usr/bin/solstone-tmux --version
 ```
 
@@ -100,6 +106,9 @@ Set `native_bin` to `/usr/bin/solstone-tmux` for deb or RPM, or to
 2. Confirm that
    `~/.config/systemd/user/solstone-tmux.service` is the previous Python unit,
    then remove it and reload systemd:
+
+   The string below is the retired unit's exact `Description`, matched
+   literally; it is not current product vocabulary.
 
    ```sh
    grep -Fx 'Description=Solstone Tmux Terminal Observer' \
@@ -153,7 +162,7 @@ The macOS installer does not run minisign for you. Complete the verify-first
 step above before running:
 
 ```sh
-sudo installer -pkg solstone-tmux-1.0.2-aarch64-macos.pkg -target /
+sudo installer -pkg solstone-tmux-<VERSION>-aarch64-macos.pkg -target /
 /usr/local/bin/solstone-tmux --version
 ```
 
@@ -171,7 +180,7 @@ binary, but only the pkg is notarized and stapled.
    solstone-tmux setup < pairing-link.txt
    ```
 
-2. `install-service` activates the observer as the current user's service:
+2. `install-service` activates solstone-tmux as the current user's service:
 
    ```sh
    solstone-tmux install-service
@@ -192,9 +201,9 @@ solstone-tmux run
 
 By default, solstone-tmux owns a small tmux status indicator while it runs:
 
-- yellow means observation is active and sync is connected;
-- grey means observation is active and sync is unavailable;
-- absent means the observer is not running.
+- yellow means solstone-tmux is running and sync is connected;
+- grey means solstone-tmux is running and sync is unavailable;
+- absent means solstone-tmux is not running.
 
 Set `"status_indicator": false` in the native `config.json` to leave tmux
 options untouched.
@@ -229,4 +238,4 @@ On macOS:
 sudo rm /usr/local/bin/solstone-tmux
 ```
 
-These commands leave settings and cached observations in place.
+These commands leave settings and cached segments in place.

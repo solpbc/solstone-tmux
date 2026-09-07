@@ -1,11 +1,12 @@
 # solstone-tmux
 
-solstone-tmux is a standalone observer for
-[solstone](https://solpbc.org). It experiences tmux sessions along with you,
-keeps observations locally while your journal is unavailable, and syncs them
-when the connection returns.
+solstone-tmux adds your terminal to [solstone](https://solpbc.org). It takes in
+what you share from your tmux sessions, and all of it goes into your journal.
+While your journal is unavailable, what it takes in waits on this device and
+syncs when the connection returns.
 
-Version 1.0.0 is one native executable with tmux as its runtime prerequisite.
+The current release is one native executable with tmux as its runtime
+prerequisite.
 Supported systems are Linux on x86_64 or aarch64 and macOS on Apple silicon.
 Intel macOS, 32-bit systems, and Windows are not supported.
 
@@ -53,13 +54,13 @@ in place. Previous credentials are not copied; pairing is fresh.
 
 ## How it works
 
-- Experiences active tmux panes every five seconds and writes changed
-  observations into five-minute segments.
-- Keeps segments under
-  `~/.local/share/solstone-tmux/captures/` and recovers incomplete work after a
-  restart.
-- Syncs sequentially and retains local data until journal custody is proven.
-- Keeps local observation running when pairing or sync is unavailable.
+- Takes in what you share from active tmux panes every five seconds, and all of
+  it goes into your journal in five-minute segments.
+- Segments wait under `~/.local/share/solstone-tmux/captures/`, and incomplete
+  work is recovered after a restart.
+- Syncs one segment at a time, and local data is released only after the journal
+  has proven custody.
+- Keeps taking in what you share when pairing or sync is unavailable.
 - Emits diagnostics that exclude pane content and tmux session names.
 
 ## License

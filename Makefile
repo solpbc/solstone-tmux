@@ -3,7 +3,7 @@
 
 SHELL := /bin/bash
 
-.PHONY: all build hopper-install test test-only format ci clean install-service uninstall-service service-status service-logs package-linux release-linux validate-release sign-validate-release publish-origin publish-release
+.PHONY: all build agent-setup test test-only format ci clean install-service uninstall-service service-status service-logs package-linux release-linux validate-release sign-validate-release publish-origin publish-release
 
 APP := solstone-tmux
 CARGO := cargo
@@ -18,7 +18,7 @@ all: build
 build:
 	$(CARGO) build --locked --workspace
 
-hopper-install: build
+agent-setup: build
 
 test:
 	$(CARGO) test --locked --workspace
