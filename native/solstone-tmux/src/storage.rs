@@ -545,6 +545,10 @@ pub fn atomic_write_bytes(path: &Path, parent: &Path, bytes: &[u8]) -> Result<()
         TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
     ));
     let result = (|| {
+        let fault = ATOMIC_WRITE_FAULT
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
         let descriptor = rustix::fs::open(
             &temporary,
             rustix::fs::OFlags::CREATE
@@ -581,17 +585,43 @@ pub fn atomic_write_bytes(path: &Path, parent: &Path, bytes: &[u8]) -> Result<()
             path: temporary.clone(),
             source,
         })?;
+        if matches!(fault, Some(AtomicWriteFault::FailBeforeRename)) {
+            return Err(StorageError::Io {
+                stage: "injected atomic write fault before rename",
+                path: path.to_owned(),
+                source: std::io::Error::other("injected atomic write fault before rename"),
+            });
+        }
         fs::rename(&temporary, path).map_err(|source| StorageError::Io {
             stage: "rename metadata",
             path: path.to_owned(),
             source,
         })?;
+        if matches!(fault, Some(AtomicWriteFault::FailAfterRename)) {
+            return Err(StorageError::Io {
+                stage: "injected atomic write fault after rename",
+                path: path.to_owned(),
+                source: std::io::Error::other("injected atomic write fault after rename"),
+            });
+        }
         sync_directory(parent)
     })();
     if result.is_err() {
         let _ = fs::remove_file(&temporary);
     }
     result
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AtomicWriteFault {
+    FailBeforeRename,
+    FailAfterRename,
+}
+
+static ATOMIC_WRITE_FAULT: std::sync::Mutex<Option<AtomicWriteFault>> = std::sync::Mutex::new(None);
+
+pub fn set_atomic_write_fault(fault: Option<AtomicWriteFault>) {
+    *ATOMIC_WRITE_FAULT.lock().unwrap() = fault;
 }
 
 pub fn sync_directory(path: &Path) -> Result<(), StorageError> {

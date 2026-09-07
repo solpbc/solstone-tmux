@@ -83,7 +83,11 @@ fn linked_device_bridge_rejects_caller_auth_and_mints_only_v3_protocol_header() 
             .await
             .expect("peer response");
         assert_eq!(response.status(), StatusCode::OK);
-        let requests = peer.requests();
+        let requests = peer
+            .requests()
+            .into_iter()
+            .filter(|r| r.path_without_query() == "/v3")
+            .collect::<Vec<_>>();
         assert_eq!(requests.len(), 1);
         assert_eq!(
             requests[0].header(PROTOCOL_VERSION_HEADER_NAME),
@@ -186,14 +190,13 @@ fn linked_device_session_composes_on_the_production_runtime_shape() {
             .ingest_manifest(DEFAULT_SOURCE)
             .await
             .expect("manifest");
-        assert_eq!(
-            peer.requests()[0].path_without_query(),
-            INGEST_MANIFEST_PATH
-        );
-        assert_eq!(
-            peer.requests()[0].query_param("source"),
-            Some(DEFAULT_SOURCE)
-        );
+        let requests = peer
+            .requests()
+            .into_iter()
+            .filter(|r| !r.path_without_query().starts_with("/app/network/api/"))
+            .collect::<Vec<_>>();
+        assert_eq!(requests[0].path_without_query(), INGEST_MANIFEST_PATH);
+        assert_eq!(requests[0].query_param("source"), Some(DEFAULT_SOURCE));
         session.shutdown().await.expect("shutdown");
         peer.shutdown().await;
     });
@@ -236,7 +239,12 @@ fn v3_routes_refuse_unconfined_day_values() {
                 .await
                 .is_err()
         );
-        assert!(peer.requests().is_empty());
+        let requests = peer
+            .requests()
+            .into_iter()
+            .filter(|r| !r.path_without_query().starts_with("/app/network/api/"))
+            .collect::<Vec<_>>();
+        assert!(requests.is_empty());
         session.shutdown().await.expect("shutdown");
         peer.shutdown().await;
     });

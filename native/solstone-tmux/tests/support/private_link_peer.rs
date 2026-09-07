@@ -71,7 +71,11 @@ impl PeerRequest {
 
 #[derive(Clone)]
 enum PeerResponse {
-    Structured { status: u16, body: Vec<u8> },
+    Structured {
+        status: u16,
+        body: Vec<u8>,
+        delay: Option<std::time::Duration>,
+    },
     Raw(Vec<u8>),
 }
 
@@ -79,6 +83,7 @@ struct OutboundResponse {
     bytes: Vec<u8>,
     offset: usize,
     credit: usize,
+    deliver_at: Option<tokio::time::Instant>,
 }
 
 #[derive(Clone)]
@@ -90,6 +95,8 @@ enum Control {
 struct PeerState {
     responses: Arc<Mutex<VecDeque<PeerResponse>>>,
     system_status_responses: Arc<Mutex<VecDeque<PeerResponse>>>,
+    clients_self_responses: Arc<Mutex<VecDeque<PeerResponse>>>,
+    relay_access_responses: Arc<Mutex<VecDeque<PeerResponse>>>,
     requests: Arc<Mutex<Vec<PeerRequest>>>,
     withhold_credit: Arc<AtomicBool>,
     upload_stalled: Arc<Notify>,
@@ -132,6 +139,8 @@ impl PrivateLinkPeer {
         let state = PeerState {
             responses: Arc::new(Mutex::new(VecDeque::new())),
             system_status_responses: Arc::new(Mutex::new(VecDeque::new())),
+            clients_self_responses: Arc::new(Mutex::new(VecDeque::new())),
+            relay_access_responses: Arc::new(Mutex::new(VecDeque::new())),
             requests: Arc::new(Mutex::new(Vec::new())),
             withhold_credit: Arc::new(AtomicBool::new(false)),
             upload_stalled: Arc::new(Notify::new()),
@@ -157,6 +166,20 @@ impl PrivateLinkPeer {
         lock(&self.state.responses).push_back(PeerResponse::Structured {
             status,
             body: body.into(),
+            delay: None,
+        });
+    }
+
+    pub fn enqueue_delayed_response(
+        &self,
+        delay: std::time::Duration,
+        status: u16,
+        body: impl Into<Vec<u8>>,
+    ) {
+        lock(&self.state.responses).push_back(PeerResponse::Structured {
+            status,
+            body: body.into(),
+            delay: Some(delay),
         });
     }
 
@@ -164,6 +187,49 @@ impl PrivateLinkPeer {
         lock(&self.state.system_status_responses).push_back(PeerResponse::Structured {
             status,
             body: body.into(),
+            delay: None,
+        });
+    }
+
+    pub fn enqueue_clients_self_response(&self, status: u16, body: impl Into<Vec<u8>>) {
+        lock(&self.state.clients_self_responses).push_back(PeerResponse::Structured {
+            status,
+            body: body.into(),
+            delay: None,
+        });
+    }
+
+    pub fn enqueue_delayed_clients_self_response(
+        &self,
+        delay: std::time::Duration,
+        status: u16,
+        body: impl Into<Vec<u8>>,
+    ) {
+        lock(&self.state.clients_self_responses).push_back(PeerResponse::Structured {
+            status,
+            body: body.into(),
+            delay: Some(delay),
+        });
+    }
+
+    pub fn enqueue_relay_access_response(&self, status: u16, body: impl Into<Vec<u8>>) {
+        lock(&self.state.relay_access_responses).push_back(PeerResponse::Structured {
+            status,
+            body: body.into(),
+            delay: None,
+        });
+    }
+
+    pub fn enqueue_delayed_relay_access_response(
+        &self,
+        delay: std::time::Duration,
+        status: u16,
+        body: impl Into<Vec<u8>>,
+    ) {
+        lock(&self.state.relay_access_responses).push_back(PeerResponse::Structured {
+            status,
+            body: body.into(),
+            delay: Some(delay),
         });
     }
 
@@ -300,7 +366,35 @@ async fn handle_carrier(
     let mut pending_upload_credit = 0u32;
 
     loop {
+        let next_delayed = outbound.values().filter_map(|r| r.deliver_at).min();
         tokio::select! {
+            _ = async {
+                match next_delayed {
+                    Some(instant) => tokio::time::sleep_until(instant).await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                let now = tokio::time::Instant::now();
+                let ready_stream_ids: Vec<u32> = outbound
+                    .iter()
+                    .filter_map(|(id, resp)| {
+                        if resp.deliver_at.is_some_and(|inst| inst <= now) {
+                            Some(*id)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                for stream_id in ready_stream_ids {
+                    if let Some(mut response) = outbound.remove(&stream_id) {
+                        response.deliver_at = None;
+                        flush_response(&mut writer, stream_id, &mut response).await?;
+                        if response.offset != response.bytes.len() {
+                            outbound.insert(stream_id, response);
+                        }
+                    }
+                }
+            }
             read = reader.read(&mut read_buffer) => {
                 let count = read?;
                 if count == 0 {
@@ -327,9 +421,11 @@ async fn handle_carrier(
                             (frame.window_credit(), outbound.get_mut(&stream_id))
                     {
                         response.credit = response.credit.saturating_add(credit as usize);
-                        flush_response(&mut writer, stream_id, response).await?;
-                        if response.offset == response.bytes.len() {
-                            outbound.remove(&stream_id);
+                        if response.deliver_at.is_none() {
+                            flush_response(&mut writer, stream_id, response).await?;
+                            if response.offset == response.bytes.len() {
+                                outbound.remove(&stream_id);
+                            }
                         }
                     }
                     if frame.flags & FLAG_DATA != 0 {
@@ -358,9 +454,10 @@ async fn handle_carrier(
                         );
                         let raw = request_bytes.remove(&stream_id).unwrap_or_default();
                         let parsed = parse_request(&raw);
-                        let is_system_status = parsed
-                            .as_ref()
-                            .is_some_and(|req| req.path_without_query() == "/api/system/status");
+                        let path = parsed.as_ref().map(|req| req.path_without_query().to_string());
+                        let is_system_status = path.as_deref() == Some("/api/system/status");
+                        let is_clients_self = path.as_deref() == Some("/app/network/api/clients/self");
+                        let is_relay_access = path.as_deref() == Some("/app/network/api/relay/access");
                         if let (Some(request), false) = (parsed, is_system_status) {
                             lock(&state.requests).push(request);
                         }
@@ -371,6 +468,23 @@ async fn handle_carrier(
                                 .unwrap_or(PeerResponse::Structured {
                                     status: 500,
                                     body: Vec::new(),
+                                    delay: None,
+                                })
+                        } else if is_clients_self {
+                            lock(&state.clients_self_responses)
+                                .pop_front()
+                                .unwrap_or(PeerResponse::Structured {
+                                    status: 404,
+                                    body: Vec::new(),
+                                    delay: None,
+                                })
+                        } else if is_relay_access {
+                            lock(&state.relay_access_responses)
+                                .pop_front()
+                                .unwrap_or(PeerResponse::Structured {
+                                    status: 404,
+                                    body: Vec::new(),
+                                    delay: None,
                                 })
                         } else {
                             lock(&state.responses)
@@ -378,19 +492,29 @@ async fn handle_carrier(
                                 .unwrap_or(PeerResponse::Structured {
                                     status: 500,
                                     body: Vec::new(),
+                                    delay: None,
                                 })
+                        };
+                        let deliver_at = match &response {
+                            PeerResponse::Structured {
+                                delay: Some(delay), ..
+                            } => Some(tokio::time::Instant::now() + *delay),
+                            _ => None,
                         };
                         let mut output = OutboundResponse {
                             bytes: match response {
-                                PeerResponse::Structured { status, body } => {
+                                PeerResponse::Structured { status, body, .. } => {
                                     encode_response(status, body)
                                 }
                                 PeerResponse::Raw(bytes) => bytes,
                             },
                             offset: 0,
                             credit: INITIAL_WINDOW,
+                            deliver_at,
                         };
-                        flush_response(&mut writer, stream_id, &mut output).await?;
+                        if deliver_at.is_none() {
+                            flush_response(&mut writer, stream_id, &mut output).await?;
+                        }
                         if output.offset != output.bytes.len() {
                             outbound.insert(stream_id, output);
                         }
@@ -464,19 +588,28 @@ fn encode_response(status: u16, body: Vec<u8>) -> Vec<u8> {
     let reason = match status {
         200 => "OK",
         201 => "Created",
+        301 => "Moved Permanently",
         400 => "Bad Request",
         401 => "Unauthorized",
         404 => "Not Found",
         409 => "Conflict",
         500 => "Internal Server Error",
+        503 => "Service Unavailable",
         _ => "Response",
     };
-    let head = format!(
-        "HTTP/1.1 {} {}\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n",
-        status,
-        reason,
-        body.len()
-    );
+    let head = if status == 301 {
+        format!(
+            "HTTP/1.1 301 Moved Permanently\r\nlocation: /redirected\r\ncontent-length: {}\r\n\r\n",
+            body.len()
+        )
+    } else {
+        format!(
+            "HTTP/1.1 {} {}\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n",
+            status,
+            reason,
+            body.len()
+        )
+    };
     let mut bytes = head.into_bytes();
     bytes.extend_from_slice(&body);
     bytes

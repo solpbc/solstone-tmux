@@ -3,7 +3,7 @@
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use serde::{Deserialize, Serialize};
@@ -168,6 +168,10 @@ fn record_for_attempt(
     }
 }
 
+pub trait PostConnectTrigger: Send + Sync {
+    fn trigger_all(&self);
+}
+
 #[derive(Clone)]
 pub struct VersionRefreshState {
     config_root: PathBuf,
@@ -178,6 +182,8 @@ pub struct VersionRefreshState {
     generation: Arc<AtomicU64>,
     generation_guard: Arc<Mutex<()>>,
     journal_client: Arc<Mutex<Option<JournalClient>>>,
+    post_connect_trigger: Arc<Mutex<Option<Arc<dyn PostConnectTrigger>>>>,
+    has_dialed: Arc<AtomicBool>,
 }
 
 impl VersionRefreshState {
@@ -197,16 +203,32 @@ impl VersionRefreshState {
             generation: Arc::new(AtomicU64::new(0)),
             generation_guard: Arc::new(Mutex::new(())),
             journal_client: Arc::new(Mutex::new(None)),
+            post_connect_trigger: Arc::new(Mutex::new(None)),
+            has_dialed: Arc::new(AtomicBool::new(false)),
         }
     }
 
     pub fn attach_client(&self, client: JournalClient) {
         *lock(&self.journal_client) = Some(client);
         self.spawn_refresh();
+        let trigger = lock(&self.post_connect_trigger).clone();
+        if let Some(trigger) = trigger {
+            trigger.trigger_all();
+        }
+    }
+
+    pub fn attach_post_connect_trigger(&self, trigger: Arc<dyn PostConnectTrigger>) {
+        *lock(&self.post_connect_trigger) = Some(trigger);
     }
 
     pub(crate) fn note_redial(&self) {
         self.spawn_refresh();
+        if self.has_dialed.swap(true, Ordering::SeqCst) {
+            let trigger = lock(&self.post_connect_trigger).clone();
+            if let Some(trigger) = trigger {
+                trigger.trigger_all();
+            }
+        }
     }
 
     pub(crate) fn note_dial_failed(&self) {
@@ -217,7 +239,33 @@ impl VersionRefreshState {
 
     pub(crate) fn note_session_started(&self) {
         *lock(&self.journal_client) = None;
+        *lock(&self.post_connect_trigger) = None;
+        self.has_dialed.store(false, Ordering::SeqCst);
         self.note_dial_failed();
+    }
+
+    pub(crate) fn apply_validated_version(&self, version: &str) -> bool {
+        let trimmed = version.trim();
+        if trimmed.is_empty() {
+            return false;
+        }
+        let _guard = lock(&self.generation_guard);
+        with_write_lock(&self.config_root, || {
+            if !self.identity_and_credential_live() {
+                return false;
+            }
+            let record = JournalVersionRecord {
+                schema_version: SCHEMA_VERSION,
+                instance_id: self.instance_id.clone(),
+                ca_fp_prefix_hex: self.ca_fp_prefix_hex.clone(),
+                version: trimmed.to_owned(),
+                confirmed: true,
+                run_id: self.run_identity.run_id.clone(),
+                lock_inode: self.run_identity.lock_inode,
+            };
+            store_record(&self.config_root, &record).is_ok()
+        })
+        .unwrap_or(false)
     }
 
     fn identity_and_credential_live(&self) -> bool {

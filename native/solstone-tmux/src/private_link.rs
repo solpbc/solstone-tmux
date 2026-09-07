@@ -41,20 +41,34 @@ pub const PROTOCOL_VERSION: &str = "3";
 pub const PROTOCOL_VERSION_NUMBER: u64 = 3;
 
 pub struct PrivateLinkOpener {
-    transport: Arc<TransportClient>,
+    transport: std::sync::RwLock<(Arc<TransportClient>, Credential)>,
     refresh: VersionRefreshState,
 }
 
 impl PrivateLinkOpener {
-    fn new(transport: TransportClient, refresh: VersionRefreshState) -> Self {
+    fn new(
+        transport: TransportClient,
+        credential: Credential,
+        refresh: VersionRefreshState,
+    ) -> Self {
         Self {
-            transport: Arc::new(transport),
+            transport: std::sync::RwLock::new((Arc::new(transport), credential)),
             refresh,
         }
     }
 
     pub(crate) fn attach_journal_client(&self, client: JournalClient) {
         self.refresh.attach_client(client);
+    }
+
+    pub fn replace_transport(&self, transport: Arc<TransportClient>, credential: Credential) {
+        let mut guard = self.transport.write().unwrap_or_else(|e| e.into_inner());
+        *guard = (transport, credential);
+    }
+
+    pub fn live_dial_credential(&self) -> Credential {
+        let guard = self.transport.read().unwrap_or_else(|e| e.into_inner());
+        guard.1.clone()
     }
 }
 
@@ -74,8 +88,12 @@ impl CarrierOpener for PrivateLinkOpener {
     fn dial_carrier(
         &self,
     ) -> Pin<Box<dyn Future<Output = Result<DialedCarrier, TransportError>> + Send + '_>> {
+        let transport = {
+            let guard = self.transport.read().unwrap_or_else(|e| e.into_inner());
+            Arc::clone(&guard.0)
+        };
         Box::pin(async move {
-            match self.transport.dial_carrier().await {
+            match transport.dial_carrier().await {
                 Ok(dialed) => {
                     self.refresh.note_redial();
                     Ok(dialed)
@@ -106,22 +124,34 @@ impl PrivateLinkBridge {
             .map(|endpoint| endpoint.host.clone())
             .collect();
         let transport = if credential.endpoints.is_empty() {
-            TransportClient::new_relay_only(credential, token_persist)
+            TransportClient::new_relay_only(credential.clone(), token_persist)
         } else {
-            TransportClient::new(credential, token_persist)
+            TransportClient::new(credential.clone(), token_persist)
         }
         .map_err(|_| DiagnosticCode::BridgeUnavailable)?;
-        let opener = Arc::new(PrivateLinkOpener::new(transport, refresh));
+        let opener = Arc::new(PrivateLinkOpener::new(transport, credential, refresh));
         let bridge_names = BridgeNames {
             capability_cookie_name: CAPABILITY_COOKIE_NAME.to_owned(),
             upstream_cookie_prefix: UPSTREAM_COOKIE_PREFIX.to_owned(),
             observer_header_name: OBSERVER_HEADER_NAME.to_owned(),
             protocol_version_header_name: PROTOCOL_VERSION_HEADER_NAME.to_owned(),
         };
+        let bridge_names_for_hook = bridge_names.clone();
         let policy = BridgePolicy {
             port: 0,
-            capability_gate: CapabilityGate::Enabled,
+            capability_gate: CapabilityGate::Disabled,
             max_request_body_bytes: MAX_REQUEST_BODY_BYTES,
+            local_response: Arc::new(move |head, _| {
+                if spl_core::bridge::check_caller_auth(head, &bridge_names_for_hook).is_err() {
+                    Some(spl_transport::journal_bridge::LocalResponse {
+                        status: 403,
+                        content_type: "text/plain".to_owned(),
+                        body: b"forbidden".to_vec(),
+                    })
+                } else {
+                    None
+                }
+            }),
             ..BridgePolicy::default()
         };
         let handle = spl_transport::journal_bridge::start(JournalBridgeConfig {

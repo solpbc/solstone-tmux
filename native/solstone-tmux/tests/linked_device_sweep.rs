@@ -122,8 +122,13 @@ fn linked_device_sweep_uses_exactly_the_four_v3_operations_without_legacy_header
 
         assert_eq!(summary.attempted, 1);
         assert_eq!(summary.custodied, 1, "{summary:?}");
+        let ingest_requests = peer
+            .requests()
+            .into_iter()
+            .filter(|req| !req.path_without_query().starts_with("/app/network/api/"))
+            .collect::<Vec<_>>();
         assert_eq!(
-            peer.requests()
+            ingest_requests
                 .iter()
                 .map(|request| (
                     request.method().to_owned(),
@@ -144,7 +149,7 @@ fn linked_device_sweep_uses_exactly_the_four_v3_operations_without_legacy_header
             ],
             "the real mTLS peer must observe no registration or extra liveness request",
         );
-        for request in peer.requests() {
+        for request in &ingest_requests {
             assert_eq!(
                 request.query_param("source"),
                 Some(solstone_tmux::config::DEFAULT_SOURCE)
@@ -153,8 +158,8 @@ fn linked_device_sweep_uses_exactly_the_four_v3_operations_without_legacy_header
                 request.header(PROTOCOL_VERSION_HEADER_NAME),
                 Some(PROTOCOL_VERSION)
             );
-            assert_legacy_header_is_absent(&request, "authorization");
-            assert_legacy_header_is_absent(&request, OBSERVER_HEADER_NAME);
+            assert_legacy_header_is_absent(request, "authorization");
+            assert_legacy_header_is_absent(request, OBSERVER_HEADER_NAME);
         }
         assert_eq!(
             fs::read(candidate).expect("candidate bytes"),
@@ -197,8 +202,13 @@ fn linked_device_sweep_sends_the_configured_source_on_every_v3_operation() {
 
         assert_eq!(summary.attempted, 1);
         assert_eq!(summary.custodied, 1, "{summary:?}");
+        let requests = peer
+            .requests()
+            .into_iter()
+            .filter(|req| !req.path_without_query().starts_with("/app/network/api/"))
+            .collect::<Vec<_>>();
         assert_eq!(
-            peer.requests()
+            requests
                 .iter()
                 .map(|request| (
                     request.method().to_owned(),
@@ -219,7 +229,6 @@ fn linked_device_sweep_sends_the_configured_source_on_every_v3_operation() {
             ],
             "the real mTLS peer must observe no registration or extra liveness request",
         );
-        let requests = peer.requests();
         for request in &requests {
             assert_eq!(request.query_param("source"), Some("studio"));
         }
@@ -281,15 +290,20 @@ fn linked_device_403_and_426_retain_every_candidate_for_each_operation_class() {
                     Some(DiagnosticCode::JournalRejected),
                     "{operation} {reason_code}: {summary:?}",
                 );
+                let requests = peer
+                    .requests()
+                    .into_iter()
+                    .filter(|req| !req.path_without_query().starts_with("/app/network/api/"))
+                    .collect::<Vec<_>>();
                 assert_eq!(
-                    peer.requests()
+                    requests
                         .iter()
                         .map(|request| request.path_without_query().to_owned())
                         .collect::<Vec<_>>(),
                     v3_paths_through(operation),
                     "a refused {operation} must not populate reconciliation state or mark the day fresh",
                 );
-                for request in peer.requests() {
+                for request in &requests {
                     assert_eq!(
                         request.query_param("source"),
                         Some(solstone_tmux::config::DEFAULT_SOURCE)

@@ -34,6 +34,10 @@ pub const INGEST_MANIFEST_PATH: &str = "/app/devices/ingest/manifest";
 pub const INGEST_MANIFEST_DAY_PATH: &str = "/app/devices/ingest/manifest/{day}";
 pub const INGEST_SEGMENTS_PATH: &str = "/app/devices/ingest/segments/{day}";
 pub const SYSTEM_STATUS_PATH: &str = "/api/system/status";
+pub const CLIENTS_SELF_PATH: &str = "/app/network/api/clients/self";
+pub const RELAY_ACCESS_PATH: &str = "/app/network/api/relay/access";
+pub const OPTIONAL_JOB_TIMEOUT: Duration = Duration::from_secs(15);
+pub const OPTIONAL_RESPONSE_BODY_BYTES: usize = 64 * 1024;
 const SYSTEM_STATUS_TIMEOUT: Duration = Duration::from_secs(5);
 const LOOPBACK_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
@@ -390,15 +394,16 @@ impl JournalClient {
             .connect_timeout(LOOPBACK_CONNECT_TIMEOUT)
             .build()
             .map_err(|_| DiagnosticCode::BridgeUnavailable)?;
-        let bootstrap_url = bridge.bootstrap_url()?;
-        let response = client
-            .get(bootstrap_url)
-            .timeout(REQUEST_TIMEOUT)
-            .send()
-            .await
-            .map_err(|error| request_diagnostic(&error, DiagnosticCode::JournalUnavailable))?;
-        if response.status() != StatusCode::FOUND {
-            return Err(DiagnosticCode::JournalContractInvalid);
+        if let Ok(bootstrap_url) = bridge.bootstrap_url() {
+            let response = client
+                .get(bootstrap_url)
+                .timeout(REQUEST_TIMEOUT)
+                .send()
+                .await
+                .map_err(|error| request_diagnostic(&error, DiagnosticCode::JournalUnavailable))?;
+            if response.status() != StatusCode::FOUND {
+                return Err(DiagnosticCode::JournalContractInvalid);
+            }
         }
         Ok(Self {
             client,
@@ -612,9 +617,79 @@ impl JournalClient {
         }
         decode_system_status_response(&body)
     }
+
+    pub async fn get_clients_self(
+        &self,
+        timeout: Duration,
+    ) -> Result<(StatusCode, Vec<u8>), JournalError> {
+        let response = self
+            .request(Method::GET, CLIENTS_SELF_PATH)?
+            .timeout(timeout)
+            .send()
+            .await
+            .map_err(|error| {
+                JournalError::local(request_diagnostic(
+                    &error,
+                    DiagnosticCode::JournalUnavailable,
+                ))
+            })?;
+        let status = response.status();
+        let body = collect_response_body_limited(response, OPTIONAL_RESPONSE_BODY_BYTES).await?;
+        Ok((status, body))
+    }
+
+    pub async fn put_clients_self(
+        &self,
+        body: Vec<u8>,
+        timeout: Duration,
+    ) -> Result<(StatusCode, Vec<u8>), JournalError> {
+        let response = self
+            .request(Method::PUT, CLIENTS_SELF_PATH)?
+            .header("content-type", "application/json")
+            .body(body)
+            .timeout(timeout)
+            .send()
+            .await
+            .map_err(|error| {
+                JournalError::local(request_diagnostic(
+                    &error,
+                    DiagnosticCode::JournalUnavailable,
+                ))
+            })?;
+        let status = response.status();
+        let body = collect_response_body_limited(response, OPTIONAL_RESPONSE_BODY_BYTES).await?;
+        Ok((status, body))
+    }
+
+    pub async fn get_relay_access(
+        &self,
+        timeout: Duration,
+    ) -> Result<(StatusCode, Vec<u8>), JournalError> {
+        let response = self
+            .request(Method::GET, RELAY_ACCESS_PATH)?
+            .timeout(timeout)
+            .send()
+            .await
+            .map_err(|error| {
+                JournalError::local(request_diagnostic(
+                    &error,
+                    DiagnosticCode::JournalUnavailable,
+                ))
+            })?;
+        let status = response.status();
+        let body = collect_response_body_limited(response, OPTIONAL_RESPONSE_BODY_BYTES).await?;
+        Ok((status, body))
+    }
 }
 
-async fn collect_response_body(mut response: reqwest::Response) -> Result<Vec<u8>, JournalError> {
+async fn collect_response_body(response: reqwest::Response) -> Result<Vec<u8>, JournalError> {
+    collect_response_body_limited(response, MAX_RESPONSE_BODY_BYTES).await
+}
+
+pub(crate) async fn collect_response_body_limited(
+    mut response: reqwest::Response,
+    max_bytes: usize,
+) -> Result<Vec<u8>, JournalError> {
     let declared_length = response.content_length().or_else(|| {
         response
             .headers()
@@ -622,7 +697,7 @@ async fn collect_response_body(mut response: reqwest::Response) -> Result<Vec<u8
             .and_then(|value| value.to_str().ok())
             .and_then(|value| value.parse::<u64>().ok())
     });
-    if declared_length.is_some_and(|length| length > MAX_RESPONSE_BODY_BYTES as u64) {
+    if declared_length.is_some_and(|length| length > max_bytes as u64) {
         return Err(JournalError::local(DiagnosticCode::JournalResponseTooLarge));
     }
     let mut body = Vec::new();
@@ -635,7 +710,7 @@ async fn collect_response_body(mut response: reqwest::Response) -> Result<Vec<u8
         let Some(length) = body.len().checked_add(chunk.len()) else {
             return Err(JournalError::local(DiagnosticCode::JournalResponseTooLarge));
         };
-        if length > MAX_RESPONSE_BODY_BYTES {
+        if length > max_bytes {
             return Err(JournalError::local(DiagnosticCode::JournalResponseTooLarge));
         }
         body.extend_from_slice(&chunk);

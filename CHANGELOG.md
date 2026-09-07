@@ -4,6 +4,12 @@ All notable changes to solstone-tmux will be documented in this file.
 
 Format adapted from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+
+- publishes device descriptions and acquires relay access over paired journal connections.
+
 ## [1.0.6] - 2026-08-28
 
 ### Fixed

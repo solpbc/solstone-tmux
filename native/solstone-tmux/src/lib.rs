@@ -4,6 +4,7 @@
 #![forbid(unsafe_code)]
 
 pub mod cli;
+pub mod client_metadata;
 pub mod clock;
 pub mod command;
 pub mod config;
@@ -17,8 +18,10 @@ pub mod model;
 pub mod name;
 pub mod observer;
 pub mod paths;
+pub mod post_connect;
 pub mod private_link;
 pub mod recovery;
+pub mod relay_access;
 pub mod segment;
 pub mod serialize;
 pub mod service;

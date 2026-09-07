@@ -39,6 +39,7 @@ native/solstone-tmux/
         main.rs                    Process startup and command dispatch
         lib.rs                     Shared crate surface
         cli.rs                     Command parser, help, and source-bound version
+        client_metadata.rs         Device description publication
         clock.rs                   Wall and monotonic clock seam
         command.rs                 Bounded argv command seam
         config.rs                  Native config and hostname-derived defaults
@@ -46,13 +47,16 @@ native/solstone-tmux/
         indicator.rs               Owned tmux status indicator
         instance_lock.rs           Exclusive data-root lock
         journal.rs                 Journal observer-client protocol
+        journal_version.rs         Journal version probing and post-connect trigger
         migration.rs               One-time Linux settings adoption
         model.rs                   Capture domain model
         name.rs                    Injective filename-safe names
         observer.rs                Poll and shutdown lifecycle
         paths.rs, paths/           Linux and macOS path policy
+        post_connect.rs            Post-connect job coordination
         private_link.rs            Pairing, credentials, and bridge
         recovery.rs                Incomplete-segment recovery
+        relay_access.rs            Relay access token acquisition
         segment.rs                 Rotation and finalization
         serialize.rs               JSONL serialization
         service.rs, service/       systemd-user and launchd lifecycle
@@ -199,6 +203,23 @@ opens the linked-device bridge. The paired mTLS credential is the Journal
 identity; sync bootstraps the Journal client through that bridge. There is no
 observer registration client or decoder, and sync does not select a
 server-issued ingest URL or read `observer.json`.
+
+### Post-connection publication and relay access
+
+Optional post-connection publication (`GET`/`PUT /app/network/api/clients/self`)
+and optional relay access (`GET /app/network/api/relay/access`); triggers are
+attach_client, note_redial, and session start after bootstrap; hostname
+resampled only on those events — no polling; one in-flight per kind, coalesced,
+independent of capture/uploads/status; pairing generation is SHA-256 of client
+cert PEM (same-home re-pair invalidates); ready persists then
+`replace_transport` for the next dial; `not_configured` disables live relay
+immediately then durable-clear; cert + LAN remain; missing API / optional
+failure does not break LAN; no `enroll_device`; name/version never enter cert,
+source ID, `captures/` history, or relay UA; optional persist failure is not the
+mandatory shutdown `PrivateStateIo` path; the loopback bridge capability gate
+is disabled so journal PUT can be forwarded (SPL authorize admits only
+GET/HEAD/POST); caller-supplied Authorization and reserved observer headers
+are still rejected locally with 403.
 
 ### Sync and custody
 

@@ -25,11 +25,12 @@ use crate::health::{DiagnosticCode, HealthWriter, SyncFacts};
 use crate::instance_lock::RunIdentity;
 use crate::journal::{
     IngestDayManifest, IngestManifest, JournalClient, JournalError, JournalReasonCode,
-    ListingFileStatus, LocalFile, SegmentsEnvelope, UploadResult, UploadStatus, inventory_files,
-    stream_sha256_hex,
+    ListingFileStatus, LocalFile, OPTIONAL_JOB_TIMEOUT, SegmentsEnvelope, UploadResult,
+    UploadStatus, inventory_files, stream_sha256_hex,
 };
 use crate::journal_version::VersionRefreshState;
 use crate::name::{DerivedName, derive_component};
+use crate::paths::PlatformKind;
 use crate::private_link::{
     PrivateLinkBridge, PrivateLinkOpener, load_credential, persist_credential,
 };
@@ -113,89 +114,297 @@ impl SyncInstrumentation {
     }
 }
 
+use crate::post_connect::{PostConnectCoordinator, compute_pairing_generation};
+
 #[derive(Clone, Eq, PartialEq)]
 struct TokenUpdate {
     token: String,
     expires_at: i64,
 }
 
-struct TokenPersistence {
-    config_root: PathBuf,
-    credential: Arc<Mutex<Credential>>,
-    pending: Arc<Mutex<Option<TokenUpdate>>>,
+struct CredentialStoreState {
+    credential: Credential,
+    mutation_generation: u64,
+    pending: Option<TokenUpdate>,
+    durable_clear_pending_gen: Option<u64>,
+    shutdown: bool,
 }
 
-impl TokenPersistence {
-    fn new(config_root: PathBuf, credential: Credential) -> (Self, TokenPersistHook) {
-        let pending = Arc::new(Mutex::new(None));
-        let hook_pending = Arc::clone(&pending);
-        let hook: TokenPersistHook = Arc::new(move |token, expires_at| {
-            let mut pending = match hook_pending.lock() {
-                Ok(pending) => pending,
-                Err(poisoned) => poisoned.into_inner(),
+pub struct CredentialStore {
+    config_root: PathBuf,
+    pairing_generation: [u8; 32],
+    state: Mutex<CredentialStoreState>,
+}
+
+impl CredentialStore {
+    pub fn new(
+        config_root: PathBuf,
+        credential: Credential,
+        pairing_generation: [u8; 32],
+    ) -> (Arc<Self>, TokenPersistHook) {
+        let store = Arc::new(Self {
+            config_root,
+            pairing_generation,
+            state: Mutex::new(CredentialStoreState {
+                credential,
+                mutation_generation: 0,
+                pending: None,
+                durable_clear_pending_gen: None,
+                shutdown: false,
+            }),
+        });
+        let hook = store.token_persist_hook(0);
+        (store, hook)
+    }
+
+    pub fn pairing_generation(&self) -> [u8; 32] {
+        self.pairing_generation
+    }
+
+    pub fn instance_id(&self) -> String {
+        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.credential.instance_id.clone()
+    }
+
+    pub fn live_credential(&self) -> Credential {
+        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.credential.clone()
+    }
+
+    pub fn invalidate(&self) {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.shutdown = true;
+        state.durable_clear_pending_gen = None;
+    }
+
+    pub fn token_persist_hook(self: &Arc<Self>, for_mutation_gen: u64) -> TokenPersistHook {
+        let weak = Arc::downgrade(self);
+        let expected_pairing_gen = self.pairing_generation;
+        Arc::new(move |token, expires_at| {
+            let Some(store) = weak.upgrade() else {
+                return;
             };
-            *pending = Some(TokenUpdate {
+            if store.pairing_generation != expected_pairing_gen {
+                return;
+            }
+            let mut state = store.state.lock().unwrap_or_else(|e| e.into_inner());
+            if state.shutdown || state.mutation_generation != for_mutation_gen {
+                return;
+            }
+            state.credential.device_token = Some(token.to_owned());
+            state.credential.device_token_expires_at = Some(expires_at);
+            state.pending = Some(TokenUpdate {
                 token: token.to_owned(),
                 expires_at,
             });
-        });
-        (
-            Self {
-                config_root,
-                credential: Arc::new(Mutex::new(credential)),
-                pending,
-            },
-            hook,
-        )
+        })
     }
 
-    async fn persist_pending(&self) -> Result<(), DiagnosticCode> {
-        let update = {
-            let pending = match self.pending.lock() {
-                Ok(pending) => pending,
-                Err(poisoned) => poisoned.into_inner(),
-            };
-            pending.clone()
+    pub async fn commit_ready_access(
+        &self,
+        relay_origin: String,
+        device_token: String,
+        expires_at: i64,
+    ) -> Result<(Credential, u64), ()> {
+        let (updated, expected_mutation_gen) = {
+            let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            if state.shutdown {
+                return Err(());
+            }
+            let mut updated = state.credential.clone();
+            updated.relay_origin = Some(relay_origin);
+            updated.device_token = Some(device_token);
+            updated.device_token_expires_at = Some(expires_at);
+            (updated, state.mutation_generation)
         };
-        let Some(update) = update else {
+
+        let config_root = self.config_root.clone();
+        let to_persist = updated.clone();
+        let persist_result =
+            tokio::task::spawn_blocking(move || persist_credential(&config_root, &to_persist))
+                .await
+                .map_err(|_| ());
+
+        let (persist_ok, disk_ok) = match persist_result {
+            Ok(Ok(())) => (true, true),
+            _ => {
+                let config_root_read = self.config_root.clone();
+                let loaded = tokio::task::spawn_blocking(move || {
+                    crate::private_link::load_credential(&config_root_read)
+                })
+                .await
+                .ok()
+                .and_then(|r| r.ok())
+                .flatten();
+
+                let matched = if let Some(loaded) = loaded {
+                    loaded.relay_origin == updated.relay_origin
+                        && loaded.device_token == updated.device_token
+                        && loaded.device_token_expires_at == updated.device_token_expires_at
+                        && loaded.client_cert_pem == updated.client_cert_pem
+                } else {
+                    false
+                };
+                (false, matched)
+            }
+        };
+
+        if !disk_ok {
+            return Err(());
+        }
+
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        if state.shutdown || state.mutation_generation != expected_mutation_gen {
+            return Err(());
+        }
+        state.credential = updated.clone();
+        state.pending = None;
+        state.durable_clear_pending_gen = None;
+        state.mutation_generation += 1;
+        let new_gen = state.mutation_generation;
+        if persist_ok {
+            Ok((updated, new_gen))
+        } else {
+            Err(())
+        }
+    }
+
+    pub fn live_clear_relay_credential(&self) -> (Credential, u64) {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut direct = state.credential.clone();
+        direct.relay_origin = None;
+        direct.device_token = None;
+        direct.device_token_expires_at = None;
+        state.credential = direct.clone();
+        state.pending = None;
+        state.mutation_generation += 1;
+        let new_gen = state.mutation_generation;
+        state.durable_clear_pending_gen = Some(new_gen);
+        (direct, new_gen)
+    }
+
+    pub async fn commit_durable_clear(&self, intent_mutation_gen: u64) -> Result<(), ()> {
+        let to_persist = {
+            let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            if state.shutdown
+                || state.mutation_generation != intent_mutation_gen
+                || state.durable_clear_pending_gen != Some(intent_mutation_gen)
+            {
+                return Ok(());
+            }
+            state.credential.clone()
+        };
+
+        let config_root = self.config_root.clone();
+        let persist_result =
+            tokio::task::spawn_blocking(move || persist_credential(&config_root, &to_persist))
+                .await
+                .map_err(|_| ())
+                .and_then(|res| res.map_err(|_| ()));
+
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        if state.mutation_generation == intent_mutation_gen {
+            if persist_result.is_ok() {
+                state.durable_clear_pending_gen = None;
+                Ok(())
+            } else {
+                state.durable_clear_pending_gen = Some(intent_mutation_gen);
+                Err(())
+            }
+        } else {
+            Ok(())
+        }
+    }
+
+    pub async fn retry_durable_clear_if_pending(&self) {
+        let (to_persist, intent_gen) = {
+            let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            if state.shutdown {
+                return;
+            }
+            let Some(intent_gen) = state.durable_clear_pending_gen else {
+                return;
+            };
+            if state.mutation_generation != intent_gen {
+                return;
+            }
+            (state.credential.clone(), intent_gen)
+        };
+
+        let config_root = self.config_root.clone();
+        let persist_result =
+            tokio::task::spawn_blocking(move || persist_credential(&config_root, &to_persist))
+                .await;
+
+        if let Ok(Ok(())) = persist_result {
+            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            if state.mutation_generation == intent_gen {
+                state.durable_clear_pending_gen = None;
+            }
+        }
+    }
+
+    pub async fn persist_pending(&self) -> Result<(), DiagnosticCode> {
+        let (to_persist, is_token_refresh, intent_gen) = {
+            let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            if state.pending.is_some() {
+                (Some(state.credential.clone()), true, None)
+            } else if let Some(intent_gen) = state.durable_clear_pending_gen {
+                if state.mutation_generation == intent_gen {
+                    (Some(state.credential.clone()), false, Some(intent_gen))
+                } else {
+                    (None, false, None)
+                }
+            } else {
+                (None, false, None)
+            }
+        };
+
+        let Some(to_persist) = to_persist else {
             return Ok(());
         };
-        let mut updated_credential = {
-            let credential = match self.credential.lock() {
-                Ok(credential) => credential,
-                Err(poisoned) => poisoned.into_inner(),
-            };
-            credential.clone()
-        };
-        updated_credential.device_token = Some(update.token.clone());
-        updated_credential.device_token_expires_at = Some(update.expires_at);
+
         let config_root = self.config_root.clone();
-        let persisted = updated_credential.clone();
-        tokio::task::spawn_blocking(move || persist_credential(&config_root, &persisted))
-            .await
-            .map_err(|_| DiagnosticCode::PrivateStateIo)??;
-        {
-            let mut credential = match self.credential.lock() {
-                Ok(credential) => credential,
-                Err(poisoned) => poisoned.into_inner(),
-            };
-            *credential = updated_credential;
+        let res =
+            tokio::task::spawn_blocking(move || persist_credential(&config_root, &to_persist))
+                .await
+                .map_err(|_| DiagnosticCode::PrivateStateIo)?;
+
+        match res {
+            Ok(()) => {
+                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                if is_token_refresh {
+                    state.pending = None;
+                }
+                if let Some(intent_gen) = intent_gen
+                    && state.mutation_generation == intent_gen
+                {
+                    state.durable_clear_pending_gen = None;
+                }
+                Ok(())
+            }
+            Err(e) => {
+                if is_token_refresh {
+                    Err(e)
+                } else {
+                    let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                    if let Some(intent_gen) = intent_gen
+                        && state.mutation_generation == intent_gen
+                    {
+                        state.durable_clear_pending_gen = Some(intent_gen);
+                    }
+                    Ok(())
+                }
+            }
         }
-        let mut pending = match self.pending.lock() {
-            Ok(pending) => pending,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        if pending.as_ref() == Some(&update) {
-            *pending = None;
-        }
-        Ok(())
     }
 }
 
 pub struct JournalSession {
     bridge: PrivateLinkBridge,
     journal: JournalClient,
-    token_persistence: TokenPersistence,
+    credential_store: Arc<CredentialStore>,
+    coordinator: Option<Arc<PostConnectCoordinator>>,
 }
 
 impl JournalSession {
@@ -204,10 +413,37 @@ impl JournalSession {
         config_root: PathBuf,
         refresh: VersionRefreshState,
     ) -> Result<Self, DiagnosticCode> {
+        let platform = if cfg!(target_os = "macos") {
+            PlatformKind::Macos
+        } else {
+            PlatformKind::Linux
+        };
+        Self::start_with(
+            credential,
+            config_root,
+            refresh,
+            OPTIONAL_JOB_TIMEOUT,
+            Arc::new(|| crate::config::system_hostname().ok()),
+            platform,
+            Arc::new(crate::clock::SystemClock::new(time::UtcOffset::UTC)),
+        )
+        .await
+    }
+
+    pub async fn start_with(
+        credential: Credential,
+        config_root: PathBuf,
+        refresh: VersionRefreshState,
+        optional_timeout: Duration,
+        hostname_source: Arc<dyn Fn() -> Option<String> + Send + Sync>,
+        platform: PlatformKind,
+        clock: Arc<dyn Clock>,
+    ) -> Result<Self, DiagnosticCode> {
         refresh.note_session_started();
-        let (token_persistence, hook) =
-            TokenPersistence::new(config_root.clone(), credential.clone());
-        let bridge = PrivateLinkBridge::start(credential, Some(hook), refresh).await?;
+        let pairing_generation = compute_pairing_generation(&credential.client_cert_pem);
+        let (credential_store, hook) =
+            CredentialStore::new(config_root.clone(), credential.clone(), pairing_generation);
+        let bridge = PrivateLinkBridge::start(credential, Some(hook), refresh.clone()).await?;
         let journal = match JournalClient::bootstrap(&bridge).await {
             Ok(journal) => journal,
             Err(code) => {
@@ -215,12 +451,37 @@ impl JournalSession {
                 return Err(code);
             }
         };
-        bridge.opener().attach_journal_client(journal.clone());
+        let journal_client = Arc::new(journal.clone());
+        let coordinator = PostConnectCoordinator::new_with_options(
+            pairing_generation,
+            Arc::clone(&journal_client),
+            Arc::clone(&credential_store),
+            Arc::clone(bridge.opener()),
+            refresh.clone(),
+            hostname_source,
+            platform,
+            clock,
+            optional_timeout,
+        );
+        refresh.attach_post_connect_trigger(Arc::new(Arc::clone(&coordinator)));
+        bridge.opener().attach_journal_client(journal);
         Ok(Self {
             bridge,
-            journal,
-            token_persistence,
+            journal: (*journal_client).clone(),
+            credential_store,
+            coordinator: Some(coordinator),
         })
+    }
+
+    pub fn trigger_post_connect(&self) {
+        if let Some(ref coordinator) = self.coordinator {
+            coordinator.trigger_metadata();
+            coordinator.trigger_relay_access();
+        }
+    }
+
+    pub fn credential_store(&self) -> &Arc<CredentialStore> {
+        &self.credential_store
     }
 
     pub fn journal(&self) -> &JournalClient {
@@ -231,8 +492,11 @@ impl JournalSession {
         self.bridge.opener()
     }
 
-    pub async fn shutdown(self) -> Result<(), DiagnosticCode> {
-        let persist_result = self.token_persistence.persist_pending().await;
+    pub async fn shutdown(mut self) -> Result<(), DiagnosticCode> {
+        if let Some(coordinator) = self.coordinator.take() {
+            coordinator.shutdown();
+        }
+        let persist_result = self.credential_store.persist_pending().await;
         self.bridge.shutdown().await;
         persist_result
     }
@@ -2019,8 +2283,9 @@ mod tests {
 
     use spl_transport::credential::{Credential, EndpointAddr};
 
-    use super::{SyncFailureClass, SyncOperationError, TokenPersistence, map_diagnostic};
+    use super::{CredentialStore, SyncFailureClass, SyncOperationError, map_diagnostic};
     use crate::health::DiagnosticCode;
+    use crate::post_connect::compute_pairing_generation;
     use crate::private_link::{CREDENTIALS_FILENAME, load_credential};
 
     #[test]
@@ -2040,10 +2305,12 @@ mod tests {
                 fs::create_dir(&root).expect("create token test root");
                 fs::create_dir(root.join(CREDENTIALS_FILENAME))
                     .expect("create invalid credential target");
-                let (persistence, hook) = TokenPersistence::new(root.clone(), credential());
+                let cred = credential();
+                let pairing_gen = compute_pairing_generation(&cred.client_cert_pem);
+                let (store, hook) = CredentialStore::new(root.clone(), cred, pairing_gen);
                 hook("refreshed-token", 1_900_000_000);
 
-                let code = persistence
+                let code = store
                     .persist_pending()
                     .await
                     .expect_err("invalid credential target was accepted");
@@ -2057,7 +2324,7 @@ mod tests {
 
                 fs::remove_dir(root.join(CREDENTIALS_FILENAME))
                     .expect("remove invalid credential target");
-                persistence
+                store
                     .persist_pending()
                     .await
                     .expect("retry pending token persistence");

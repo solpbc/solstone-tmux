@@ -1565,16 +1565,21 @@ async fn advance_both(clock: &TestClock, duration: Duration) {
 }
 
 async fn expect_listing(listings: &mut mpsc::UnboundedReceiver<()>, context: &str) {
-    for _ in 0..SCHEDULER_TURNS {
+    let deadline = std::time::Instant::now() + HANG_GUARD;
+    loop {
         if listings.try_recv().is_ok() {
             for _ in 0..SCHEDULER_TURNS {
                 tokio::task::yield_now().await;
             }
             return;
         }
+        if std::time::Instant::now() >= deadline {
+            panic!("scheduler did not make the expected listing contact: {context}");
+        }
         tokio::task::yield_now().await;
+        // yield_now does not wait for spawn_blocking candidate scans.
+        std::thread::sleep(Duration::from_millis(1));
     }
-    panic!("scheduler did not make the expected listing contact: {context}");
 }
 
 async fn assert_no_listing(listings: &mut mpsc::UnboundedReceiver<()>) {
