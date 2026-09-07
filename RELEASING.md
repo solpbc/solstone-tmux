@@ -5,8 +5,11 @@ candidate lanes, then validated and published once as a complete aggregate.
 No individual lane can publish.
 
 Builds and gates run locally on native release machines. GitHub Actions and
-other GitHub workflows are not part of the release rail; GitHub is used only
-for the final immutable release and downloads.
+other GitHub workflows are not part of the release rail. The release is
+published to the release origin, `https://updates.solstone.app`, which is where
+the install documentation points once the first `release` publish lands; GitHub
+Releases is an optional mirror carrying the tag, the release notes, and a copy of
+the same bytes.
 
 ## Prerequisites
 
@@ -120,9 +123,54 @@ The signing binary remains pinned to minisign 0.11. Set `MINISIGN_BIN` to an
 absolute executable path only when using a disposable lane-local copy of that
 pinned binary; never change a shared host toolchain just to run this proof.
 
-## 5. Sign and publish the aggregate
+## 5. Publish the aggregate
 
-Run publication only after all three lane candidates have been collected:
+Run publication only after all three lane candidates have been collected. The
+release origin comes first and stands alone; the GitHub mirror is optional and
+comes after.
+
+### The release origin
+
+Take the signed thirteen-file candidate from section 4 and publish it:
+
+```sh
+make publish-origin \
+  LANE=release \
+  CANDIDATE_DIRECTORY=/absolute/path/to/signed-candidate
+```
+
+Objects land at
+`https://updates.solstone.app/solstone-tmux/<lane>/<version>/<filename>`, and
+`<lane>/latest` (one line, `version=<version>`, the pointer the documentation
+tells people to read) is written only after every file in the set is published.
+The published key is at `https://updates.solstone.app/solstone-tmux/minisign.pub`
+and is the same key this repository pins at
+`packaging/keys/solstone-tmux-release.pub`. Nothing else places that object, so
+the publisher owns it: it writes the key when the origin has none, and refuses if
+the two ever disagree.
+
+Lanes are exactly `release`, `staging`, and `dev`. Versioned objects on `release`
+and `staging` are immutable: the publisher refuses to overwrite one, republishing
+identical bytes is a no-op, and adding a missing filename under an existing
+version is allowed. `dev` may be overwritten. `latest` never moves backwards.
+No R2 bucket lock rule covers these prefixes today (`wrangler r2 bucket lock
+list solstone-updates` reports none), so the store enforces none of that and
+`wrangler r2 object put` overwrites silently. The publisher enforces
+it instead, by reading what is already there before it writes.
+
+The origin publish never contacts GitHub and does not require `gh`. A GitHub
+outage cannot delay or fail it.
+
+Before publishing, the publisher runs the same verification the documentation
+asks a reader to run: the exact file set, the `SHA256SUMS` signature under the
+pinned key, and every listed digest. The `release` lane adds a clean checkout at
+the candidate's exact source commit, agreement with the shipping package version,
+and the repository's own aggregate validation. The `staging` and `dev` proof
+lanes deliberately do not require the publishing checkout to sit at the
+candidate's commit; that is what lets a retained candidate be republished for
+proof without re-cutting it.
+
+### The GitHub mirror
 
 ```sh
 make publish-release \
@@ -131,20 +179,29 @@ make publish-release \
   MINISIGN_SECRET_KEY=/absolute/path/to/out-of-tree-key
 ```
 
-The variable contract is:
+Run this after the origin publish, never before it. The variable contract is:
 
 - `SOURCE_COMMIT`: full lowercase 40-hex commit equal to clean `HEAD`.
 - `CANDIDATE_DIRECTORY`: absolute path to the exact unsigned 11-file aggregate.
 - `MINISIGN_SECRET_KEY`: absolute path to the out-of-tree minisign private key.
 
-The sole publisher implementation,
-`packaging/publish-release.sh`, validates the unsigned aggregate, generates
+`packaging/publish-release.sh` validates the unsigned aggregate, generates
 bytewise-sorted `SHA256SUMS`, signs it, verifies the detached signature with the
 pinned public key, validates the complete signed set, then evaluates remote tag
-and release state.
+and release state. It signs the same bytes with the same key and the same
+comments as section 4, and minisign signing is deterministic, so the mirrored
+`SHA256SUMS.minisig` is byte-identical to the one on the origin. Confirm that
+rather than assuming it: the mirrored assets must match the origin objects byte
+for byte, and a difference is a hard stop.
 
 Exact pushed tags are reused. An exact draft receives only missing assets.
 Existing asset equality is established by downloading and hashing bytes.
 An exact published release is an idempotent success. Any differing or ambiguous
 tag, release, metadata, or asset state is immutable red: the publisher never
 moves, replaces, repairs, or deletes it.
+
+GitHub does not build, validate, approve, or define the release. Skipping the
+mirror leaves a complete, correct release. The install instructions move to the
+origin with the first `release` publish; until that happens `INSTALL.md` and
+`README.md` still name GitHub, and that is correct, because the `release` lane
+is empty.

@@ -3,7 +3,7 @@
 
 SHELL := /bin/bash
 
-.PHONY: all build hopper-install test test-only format ci clean install-service uninstall-service service-status service-logs package-linux release-linux validate-release sign-validate-release publish-release
+.PHONY: all build hopper-install test test-only format ci clean install-service uninstall-service service-status service-logs package-linux release-linux validate-release sign-validate-release publish-origin publish-release
 
 APP := solstone-tmux
 CARGO := cargo
@@ -149,6 +149,16 @@ sign-validate-release:
 		"$(MINISIGN_SECRET_KEY)" \
 		"$(SIGNED_CANDIDATE_DIRECTORY)"
 
+# The release origin. This is the publish owners fetch from; it never contacts
+# GitHub and takes the already-signed candidate, so signing happens exactly once
+# per release and both destinations carry the same bytes.
+publish-origin:
+	@test -n "$(LANE)" || { echo "LANE is required" >&2; exit 1; }
+	@test -n "$(CANDIDATE_DIRECTORY)" || { echo "CANDIDATE_DIRECTORY is required" >&2; exit 1; }
+	packaging/publish-origin.sh --lane "$(LANE)" --candidate-dir "$(CANDIDATE_DIRECTORY)"
+
+# The optional GitHub mirror. Run it after the origin publish; a failure here
+# leaves the origin publish intact, because the origin publish already happened.
 publish-release:
 	@test -n "$(SOURCE_COMMIT)" || { echo "SOURCE_COMMIT is required" >&2; exit 1; }
 	@test -n "$(CANDIDATE_DIRECTORY)" || { echo "CANDIDATE_DIRECTORY is required" >&2; exit 1; }
