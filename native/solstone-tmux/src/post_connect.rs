@@ -136,6 +136,9 @@ impl PostConnectCoordinator {
     pub async fn wait_for_quiescence(&self, timeout: Duration) {
         tokio::time::timeout(timeout, async {
             loop {
+                let notified = self.quiesced.notified();
+                tokio::pin!(notified);
+                notified.as_mut().enable();
                 let quiescent = {
                     let burst = self.burst.lock().unwrap_or_else(|e| e.into_inner());
                     !burst.active
@@ -143,7 +146,7 @@ impl PostConnectCoordinator {
                 if quiescent {
                     return;
                 }
-                self.quiesced.notified().await;
+                notified.await;
             }
         })
         .await
@@ -231,7 +234,7 @@ impl PostConnectCoordinator {
             // owner-held cache publication is intentionally outside it.
             let result = run_metadata_job(
                 &client,
-                Some(&coordinator.store),
+                &coordinator.store,
                 &refresh,
                 move || hostname_source(),
                 coordinator.platform,

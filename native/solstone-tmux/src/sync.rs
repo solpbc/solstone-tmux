@@ -380,9 +380,11 @@ impl CredentialStore {
                 ReadyPublication::Uncertain
             };
             let mut state = store.state.lock().unwrap_or_else(|e| e.into_inner());
-            if !store.access_attempt_is_current(&state, &attempt) {
-                return Err(());
-            }
+            // Once the bytes are known to be on disk, this owner operation
+            // must converge the accepted store and live opener even if
+            // shutdown or a later captured attempt arrived while blocking I/O
+            // was in flight. A later queued mutation remains ordered after
+            // this acceptance and can supersede it.
             state.credential = updated.clone();
             state.mutation_generation = next_revision;
             state.durable_clear_pending_gen = None;

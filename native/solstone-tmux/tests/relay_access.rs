@@ -692,6 +692,12 @@ fn relay_access_fault_before_rename_does_not_mutate_live() {
         assert_eq!(on_disk.device_token, None);
         assert_eq!(opener.live_dial_credential().relay_origin, None);
         assert_eq!(opener.live_dial_credential().device_token, None);
+        let accepted_before = peer.accepted_carriers();
+        opener
+            .dial_carrier()
+            .await
+            .expect("next dial keeps the original LAN adapter");
+        assert!(peer.accepted_carriers() > accepted_before);
 
         bridge.shutdown().await;
         peer.shutdown().await;
@@ -1096,6 +1102,12 @@ fn relay_access_fault_after_rename_is_durability_uncertain() {
         assert_eq!(live.client_cert_pem, initial_cred.client_cert_pem);
         assert_eq!(live.local_endpoints, initial_cred.local_endpoints);
         assert_eq!(opener.live_dial_credential().device_token, Some(jwt));
+        let accepted_before = peer.accepted_carriers();
+        opener
+            .dial_carrier()
+            .await
+            .expect("next dial uses the accepted replacement adapter");
+        assert!(peer.accepted_carriers() > accepted_before);
 
         bridge.shutdown().await;
         peer.shutdown().await;

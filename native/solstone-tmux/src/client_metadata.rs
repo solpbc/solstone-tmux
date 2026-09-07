@@ -130,27 +130,20 @@ pub fn decode_get_response(bytes: &[u8]) -> Option<ClientsSelfGetResponse> {
 }
 
 async fn cache_journal_info(
-    store: Option<&Arc<CredentialStore>>,
+    store: &Arc<CredentialStore>,
     version_refresh: VersionRefreshState,
     attempt: u64,
     name: Option<String>,
     version: String,
 ) {
-    if let Some(store) = store {
-        let _ = store
-            .publish_journal_info(version_refresh, attempt, name, version)
-            .await;
-        return;
-    }
-    let _ = tokio::task::spawn_blocking(move || {
-        version_refresh.apply_validated_journal_info_for_attempt(attempt, name.as_deref(), &version)
-    })
-    .await;
+    let _ = store
+        .publish_journal_info(version_refresh, attempt, name, version)
+        .await;
 }
 
 pub async fn run_metadata_job<F>(
     client: &JournalClient,
-    store: Option<&Arc<CredentialStore>>,
+    store: &Arc<CredentialStore>,
     version_refresh: &VersionRefreshState,
     hostname_source: F,
     platform: PlatformKind,

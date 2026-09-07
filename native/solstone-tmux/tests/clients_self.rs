@@ -13,8 +13,9 @@ use solstone_tmux::instance_lock::InstanceLock;
 use solstone_tmux::journal::JournalClient;
 use solstone_tmux::journal_version::VersionRefreshState;
 use solstone_tmux::paths::{PlatformKind, ensure_private_directory};
+use solstone_tmux::post_connect::compute_pairing_generation;
 use solstone_tmux::private_link::{PrivateLinkBridge, persist_credential};
-use solstone_tmux::sync::JournalSession;
+use solstone_tmux::sync::{CredentialStore, JournalSession};
 
 mod support;
 use support::TestDirectory;
@@ -108,6 +109,11 @@ fn clients_self_publishes_when_reported_is_null() {
         ensure_private_directory(temporary.path()).expect("private root");
         let lock = InstanceLock::acquire(temporary.path()).expect("acquire lock");
         let credential = peer.credential();
+        let (store, _) = CredentialStore::new(
+            temporary.path().to_path_buf(),
+            credential.clone(),
+            compute_pairing_generation(&credential.client_cert_pem),
+        );
         let refresh = VersionRefreshState::new(
             temporary.path().to_path_buf(),
             temporary.path().to_path_buf(),
@@ -161,7 +167,7 @@ fn clients_self_publishes_when_reported_is_null() {
 
         let result = run_metadata_job(
             &client,
-            None,
+            &store,
             &refresh,
             || Some("test-box".to_owned()),
             PlatformKind::Linux,
@@ -199,6 +205,11 @@ fn clients_self_noops_when_reported_already_matches() {
         ensure_private_directory(temporary.path()).expect("private root");
         let lock = InstanceLock::acquire(temporary.path()).expect("acquire lock");
         let credential = peer.credential();
+        let (store, _) = CredentialStore::new(
+            temporary.path().to_path_buf(),
+            credential.clone(),
+            compute_pairing_generation(&credential.client_cert_pem),
+        );
         let refresh = VersionRefreshState::new(
             temporary.path().to_path_buf(),
             temporary.path().to_path_buf(),
@@ -232,7 +243,7 @@ fn clients_self_noops_when_reported_already_matches() {
 
         let result = run_metadata_job(
             &client,
-            None,
+            &store,
             &refresh,
             || Some("test-box".to_owned()),
             PlatformKind::Linux,
@@ -262,6 +273,11 @@ fn clients_self_handles_409_conflict_with_refetch_and_retry() {
         ensure_private_directory(temporary.path()).expect("private root");
         let lock = InstanceLock::acquire(temporary.path()).expect("acquire lock");
         let credential = peer.credential();
+        let (store, _) = CredentialStore::new(
+            temporary.path().to_path_buf(),
+            credential.clone(),
+            compute_pairing_generation(&credential.client_cert_pem),
+        );
         let refresh = VersionRefreshState::new(
             temporary.path().to_path_buf(),
             temporary.path().to_path_buf(),
@@ -330,7 +346,7 @@ fn clients_self_handles_409_conflict_with_refetch_and_retry() {
 
         let result = run_metadata_job(
             &client,
-            None,
+            &store,
             &refresh,
             || Some("test-box".to_owned()),
             PlatformKind::Linux,
@@ -367,6 +383,11 @@ fn clients_self_404_is_tolerated_as_unsupported() {
         ensure_private_directory(temporary.path()).expect("private root");
         let lock = InstanceLock::acquire(temporary.path()).expect("acquire lock");
         let credential = peer.credential();
+        let (store, _) = CredentialStore::new(
+            temporary.path().to_path_buf(),
+            credential.clone(),
+            compute_pairing_generation(&credential.client_cert_pem),
+        );
         let refresh = VersionRefreshState::new(
             temporary.path().to_path_buf(),
             temporary.path().to_path_buf(),
@@ -386,7 +407,7 @@ fn clients_self_404_is_tolerated_as_unsupported() {
 
         let result = run_metadata_job(
             &client,
-            None,
+            &store,
             &refresh,
             || Some("test-box".to_owned()),
             PlatformKind::Linux,

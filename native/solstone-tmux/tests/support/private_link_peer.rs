@@ -123,6 +123,12 @@ impl PathHold {
             return;
         }
         while self.enabled.load(Ordering::SeqCst) {
+            let notified = self.release.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if !self.enabled.load(Ordering::SeqCst) {
+                return;
+            }
             if self
                 .releases
                 .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |count| {
@@ -134,14 +140,19 @@ impl PathHold {
             }
             self.arrivals.fetch_add(1, Ordering::SeqCst);
             self.arrived.notify_waiters();
-            self.release.notified().await;
+            notified.await;
         }
     }
 
     async fn wait_for_arrivals(&self, target: usize, timeout: std::time::Duration) {
         tokio::time::timeout(timeout, async {
             while self.arrivals.load(Ordering::SeqCst) < target {
-                self.arrived.notified().await;
+                let notified = self.arrived.notified();
+                tokio::pin!(notified);
+                notified.as_mut().enable();
+                if self.arrivals.load(Ordering::SeqCst) < target {
+                    notified.await;
+                }
             }
         })
         .await
@@ -322,7 +333,12 @@ impl PrivateLinkPeer {
     pub async fn wait_for_request_count(&self, target: usize, timeout: std::time::Duration) {
         tokio::time::timeout(timeout, async {
             while self.request_count() < target {
-                self.state.request_arrived.notified().await;
+                let notified = self.state.request_arrived.notified();
+                tokio::pin!(notified);
+                notified.as_mut().enable();
+                if self.request_count() < target {
+                    notified.await;
+                }
             }
         })
         .await
@@ -340,7 +356,12 @@ impl PrivateLinkPeer {
     ) {
         tokio::time::timeout(timeout, async {
             while self.clients_self_request_count() < target {
-                self.state.request_arrived.notified().await;
+                let notified = self.state.request_arrived.notified();
+                tokio::pin!(notified);
+                notified.as_mut().enable();
+                if self.clients_self_request_count() < target {
+                    notified.await;
+                }
             }
         })
         .await
@@ -358,7 +379,12 @@ impl PrivateLinkPeer {
     ) {
         tokio::time::timeout(timeout, async {
             while self.relay_access_request_count() < target {
-                self.state.request_arrived.notified().await;
+                let notified = self.state.request_arrived.notified();
+                tokio::pin!(notified);
+                notified.as_mut().enable();
+                if self.relay_access_request_count() < target {
+                    notified.await;
+                }
             }
         })
         .await
@@ -378,7 +404,12 @@ impl PrivateLinkPeer {
     ) {
         tokio::time::timeout(timeout, async {
             while self.system_status_request_count() < target {
-                self.state.request_arrived.notified().await;
+                let notified = self.state.request_arrived.notified();
+                tokio::pin!(notified);
+                notified.as_mut().enable();
+                if self.system_status_request_count() < target {
+                    notified.await;
+                }
             }
         })
         .await

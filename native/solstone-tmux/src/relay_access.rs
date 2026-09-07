@@ -42,6 +42,10 @@ pub async fn run_relay_access_job(
     timeout: Duration,
 ) -> Result<(), ()> {
     store.retry_durable_clear_if_pending().await;
+    // A Ready write which landed after a reported durability error remains
+    // pending until this owner retry confirms it. This is optional work: a
+    // retry failure must not turn access acquisition into PrivateStateIo.
+    let _ = store.persist_pending().await;
 
     let attempt = store.capture_access_attempt(lane_attempt_id);
 
