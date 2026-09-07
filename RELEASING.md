@@ -139,6 +139,11 @@ make publish-origin \
   CANDIDATE_DIRECTORY=/absolute/path/to/signed-candidate
 ```
 
+Here `CANDIDATE_DIRECTORY` is the **signed** thirteen-file set, that is, the
+`SIGNED_CANDIDATE_DIRECTORY` section 4 wrote. The mirror below takes the same
+variable name for the **unsigned** eleven-file aggregate, because it signs its
+own copy; passing the wrong one fails closed.
+
 Objects land at
 `https://updates.solstone.app/solstone-tmux/<lane>/<version>/<filename>`, and
 `<lane>/latest` (one line, `version=<version>`, the pointer the documentation
@@ -201,7 +206,5 @@ tag, release, metadata, or asset state is immutable red: the publisher never
 moves, replaces, repairs, or deletes it.
 
 GitHub does not build, validate, approve, or define the release. Skipping the
-mirror leaves a complete, correct release. The install instructions move to the
-origin with the first `release` publish; until that happens `INSTALL.md` and
-`README.md` still name GitHub, and that is correct, because the `release` lane
-is empty.
+mirror leaves a complete, correct release. From the first `release` publish onward, the
+install documentation names the origin.
