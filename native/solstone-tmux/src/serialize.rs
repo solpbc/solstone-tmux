@@ -133,16 +133,19 @@ pub fn serialize_frame(
     };
     let mut bytes = Vec::new();
     {
-        let mut serializer = serde_json::Serializer::with_formatter(&mut bytes, PythonFormatter);
+        let mut serializer = serde_json::Serializer::with_formatter(&mut bytes, SpacedFormatter);
         envelope.serialize(&mut serializer)?;
     }
     bytes.push(b'\n');
     Ok(bytes)
 }
 
-struct PythonFormatter;
+// The journal's envelope encoding separates items with ", " and keys with ": ".
+// That spacing is part of the on-the-wire bytes, pinned by the golden envelope
+// fixtures, so it is a format contract rather than a style choice.
+struct SpacedFormatter;
 
-impl Formatter for PythonFormatter {
+impl Formatter for SpacedFormatter {
     fn begin_array_value<W>(&mut self, writer: &mut W, first: bool) -> io::Result<()>
     where
         W: ?Sized + Write,

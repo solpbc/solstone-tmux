@@ -36,10 +36,6 @@ solstone-tmux status
 `setup` reads one private-link pairing link from standard input.
 `install-service` activates the current user's systemd or launchd service.
 
-On first native run, Linux adopts only the previous stream, intervals,
-retention, and status-indicator settings and continues using the existing cache
-in place. Previous credentials are not copied; pairing is fresh.
-
 ## Commands
 
 | Command | Purpose |

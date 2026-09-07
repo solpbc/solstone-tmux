@@ -24,8 +24,7 @@ pub const DEB_DESTINATION: &str = "/usr/bin/solstone-tmux";
 pub const RPM_DESTINATION: &str = "/usr/bin/solstone-tmux";
 pub const MACOS_DESTINATION: &str = "/usr/local/bin/solstone-tmux";
 
-pub const SECRET_CANARIES: [&str; 3] = [
-    "LEGACYKEYCANARY-do-not-copy",
+pub const SECRET_CANARIES: [&str; 2] = [
     "SOLSTONE_TMUX_SECRET_CANARY_DO_NOT_SHIP",
     "MINISIGN_SECRET_CANARY_DO_NOT_SHIP",
 ];

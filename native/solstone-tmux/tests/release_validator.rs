@@ -458,7 +458,6 @@ fn byte_checksum_record_and_set_mutations_are_rejected() {
 #[test]
 fn candidate_canaries_are_scoped_and_rejected() {
     for canary in [
-        "LEGACYKEYCANARY-do-not-copy",
         "SOLSTONE_TMUX_SECRET_CANARY_DO_NOT_SHIP",
         "MINISIGN_SECRET_CANARY_DO_NOT_SHIP",
     ] {

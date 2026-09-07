@@ -305,7 +305,7 @@ while IFS= read -r -d '' tracked_path; do
     tracked_file="$repo_root/$tracked_path"
     [[ -e "$tracked_file" || -L "$tracked_file" ]] || continue
     case "$tracked_path" in
-        *.py | pyproject.toml | setup.py | setup.cfg | requirements*.txt | \
+        *.py | pyproject.toml | setup.cfg | requirements*.txt | \
             Pipfile | Pipfile.lock | poetry.lock | tox.ini | pytest.ini | \
             .python-version | uv.lock | MANIFEST.in)
             echo "$tracked_path: retired Python source or packaging configuration is forbidden" >&2
@@ -349,55 +349,19 @@ for route_file in "${route_files[@]}"; do
     fi
 done
 
-# The only uv/pipx prose allowance is the bounded one-time retirement block.
-# Each uninstall command appears once inside it and neither token may appear
-# elsewhere in INSTALL.md.
+# The Python cutover is complete, so the retired installer names have no
+# remaining allowance anywhere in the public install documentation.
 install_file="$repo_root/INSTALL.md"
-retirement_start='<!-- legacy-python-retirement:start -->'
-retirement_end='<!-- legacy-python-retirement:end -->'
-if [[ "$(rg -cF "$retirement_start" "$install_file" || true)" != "1" ||
-    "$(rg -cF "$retirement_end" "$install_file" || true)" != "1" ]]; then
-    echo "$install_file: expected one bounded legacy retirement block" >&2
+if rg -i '(^|[^[:alnum:]_])(uv|pipx)([^[:alnum:]_]|$)' "$install_file" >/dev/null; then
+    echo "$install_file: retired installer names are forbidden" >&2
     failed=true
-else
-    retirement_block="$(
-        awk -v start="$retirement_start" -v end="$retirement_end" '
-            $0 == start { inside = 1; next }
-            $0 == end { inside = 0; next }
-            inside { print }
-        ' "$install_file"
-    )"
-    retirement_outside="$(
-        awk -v start="$retirement_start" -v end="$retirement_end" '
-            $0 == start { inside = 1; next }
-            $0 == end { inside = 0; next }
-            !inside { print }
-        ' "$install_file"
-    )"
-    if [[ "$(rg -cF 'uv tool uninstall solstone-tmux' <<<"$retirement_block" || true)" != "1" ||
-        "$(rg -cF 'pipx uninstall solstone-tmux' <<<"$retirement_block" || true)" != "1" ||
-        "$(rg -io '(^|[^[:alnum:]_])(uv|pipx)([^[:alnum:]_]|$)' <<<"$retirement_block" | awk 'END { print NR }')" != "2" ]]; then
-        echo "$install_file: retirement block must contain only the two approved tool references" >&2
-        failed=true
-    fi
-    if rg -i '(^|[^[:alnum:]_])(uv|pipx)([^[:alnum:]_]|$)' \
-        <<<"$retirement_outside" >/dev/null; then
-        echo "$install_file: retired installer names are allowed only in the retirement block" >&2
-        failed=true
-    fi
 fi
 
-# One legacy migration fixture retains one old endpoint as inert input so tests
-# can prove it is ignored. The exact count is enforced before that file is
-# exempted; no other tracked surface may depend on the endpoint.
-legacy_endpoint_fixture="native/solstone-tmux/tests/data/legacy/config-empty-stream.json"
-if [[ "$(rg -cF 'localhost:5015' "$repo_root/$legacy_endpoint_fixture" || true)" != "1" ]]; then
-    echo "$legacy_endpoint_fixture: expected exactly one inert localhost endpoint" >&2
-    failed=true
-fi
+# The retired endpoint has no remaining fixture exemption either: no tracked
+# file may depend on it, this guard's own pattern excepted.
 while IFS= read -r -d '' tracked_path; do
     case "$tracked_path" in
-        "$legacy_endpoint_fixture" | scripts/check-rust-guards.sh)
+        scripts/check-rust-guards.sh)
             continue
             ;;
     esac

@@ -48,7 +48,6 @@ native/solstone-tmux/
         instance_lock.rs           Exclusive data-root lock
         journal.rs                 Journal observer-client protocol
         journal_version.rs         Journal version probing and post-connect trigger
-        migration.rs               One-time Linux settings adoption
         model.rs                   Capture domain model
         name.rs                    Injective filename-safe names
         observer.rs                Poll and shutdown lifecycle
@@ -64,7 +63,7 @@ native/solstone-tmux/
         sync.rs                    Bounded sync, custody, and retention
         tmux.rs                    Tmux grammar and transactions
     tests/
-        data/                      Golden, tmux, launchd, migration, signature data
+        data/                      Golden, tmux, launchd, signature data
         support/                   Shared private-link and package test support
         *.rs                       Integration and contract tests
 packaging/
@@ -159,9 +158,8 @@ not use the bare `unsafe` token.
 ### Startup and capture
 
 `run` resolves platform roots, acquires the data-root and private-state locks,
-adopts eligible Linux settings, loads native config, recovers configured
-streams, opens a segment, optionally installs the owned tmux indicator, and
-starts capture and sync supervision.
+loads native config, recovers configured streams, opens a segment, optionally
+installs the owned tmux indicator, and starts capture and sync supervision.
 
 Each poll builds complete per-session tmux transactions, serializes compatible
 JSONL envelopes, and appends only changed observations. Rotation uses monotonic
@@ -180,9 +178,7 @@ macOS uses:
 
 The data root owns `captures/`, the process lock, and `sync-health.json`. The
 config root owns `config.json`, `credentials.json`, the private-state lock, and
-resolved local service state. A prior install's `observer.json` is tolerated as
-a legacy artifact, but the live path ignores it. Config and private state are
-separate.
+resolved local service state. Config and private state are separate.
 
 ### Segments and recovery
 
@@ -250,9 +246,8 @@ Linux installs one marker-owned systemd user unit,
 `com.solstone.tmux`. Service rendering records the canonical executable that
 was invoked, so package-specific install prefixes are not hardcoded.
 
-Install and uninstall refuse unowned or malformed artifacts. In particular,
-native service management does not adopt, replace, or remove a previous
-Python-written unit at the colliding Linux path.
+Install and uninstall refuse unowned or malformed artifacts: service
+management never adopts, replaces, or removes a unit it did not write.
 
 ## Config
 
@@ -274,12 +269,6 @@ intervals must be greater than zero. A missing stream derives from the system
 hostname. An omitted `source` defaults to `"tmux"`; an explicit value must be a
 nonempty string matching `[a-z0-9][a-z0-9_-]*` and at most 64 bytes.
 
-On Linux only, when native config is absent, startup reads the single previous
-settings file under the data root and imports exactly `stream`,
-`capture_interval`, `segment_interval`, `cache_retention_days`, and
-`status_indicator`. A legacy `source` key, valid or invalid, fails adoption
-rather than being silently ignored like other unrecognized legacy fields. It
-never imports credentials or traverses `captures/`.
 
 ## Vendored contracts
 

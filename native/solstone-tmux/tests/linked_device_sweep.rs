@@ -5,6 +5,7 @@ mod support;
 
 use std::fs;
 use std::future::Future;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
@@ -20,13 +21,12 @@ use solstone_tmux::instance_lock::InstanceLock;
 use solstone_tmux::journal::{
     INGEST_MANIFEST_DAY_PATH, INGEST_MANIFEST_PATH, INGEST_PATH, INGEST_SEGMENTS_PATH,
 };
-use solstone_tmux::migration::{MigrationOutcome, migrate_legacy_config};
 use solstone_tmux::model::CaptureResult;
 use solstone_tmux::observer::{
     CaptureProvider, ObserverConfig, ObserverOperationError, SegmentManager, ShutdownEvent,
     run_observer, shutdown_barrier, stream_directory,
 };
-use solstone_tmux::paths::{PlatformKind, ensure_private_directory};
+use solstone_tmux::paths::ensure_private_directory;
 use solstone_tmux::private_link::{
     OBSERVER_HEADER_NAME, PROTOCOL_VERSION, PROTOCOL_VERSION_HEADER_NAME, persist_credential,
 };
@@ -43,15 +43,14 @@ const LINKED_DEVICE_STREAM: &str = "host.tmux";
 const LINKED_DEVICE_SEGMENT: &str = "120000_300";
 const LINKED_DEVICE_FILE: &str = "tmux_linked_device_screen.jsonl";
 const LINKED_DEVICE_BYTES: &[u8] = b"linked-device candidate\n";
+// A configured stream that does not derive from the running hostname, so the
+// binding check must refuse before any network work happens.
+const CUSTOM_STREAM_CONFIG: &[u8] = br#"{"stream":"extro.tmux","capture_interval":7,"segment_interval":600,"cache_retention_days":14,"status_indicator":false}"#;
 
 #[tokio::test]
-async fn migrated_custom_stream_refuses_before_network_while_capture_continues() {
+async fn custom_stream_refuses_before_network_while_capture_continues() {
     let fixture = BindingFixture::new("binding-custom-stream");
-    fixture.install_legacy(real_legacy_fixture());
-    assert_eq!(
-        fixture.migrate("different-host.example"),
-        MigrationOutcome::Migrated
-    );
+    fixture.install_config(CUSTOM_STREAM_CONFIG);
     let peer = PrivateLinkPeer::start().await;
 
     let evidence = run_binding_failure(
@@ -514,20 +513,10 @@ impl BindingFixture {
         }
     }
 
-    fn install_legacy(&self, bytes: Vec<u8>) {
-        let path = self.data_root.join("config").join(CONFIG_FILENAME);
-        fs::create_dir_all(path.parent().expect("legacy parent")).expect("legacy directory");
-        fs::write(path, bytes).expect("legacy settings");
-    }
-
-    fn migrate(&self, hostname: &str) -> MigrationOutcome {
-        migrate_legacy_config(
-            PlatformKind::Linux,
-            &self.data_root,
-            &self.config_root,
-            hostname,
-        )
-        .expect("migrate settings")
+    fn install_config(&self, bytes: &[u8]) {
+        let path = self.config_root.join(CONFIG_FILENAME);
+        fs::write(&path, bytes).expect("native settings");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("settings mode");
     }
 
     fn create_candidate(&self, stream: &str) -> PathBuf {
@@ -557,15 +546,6 @@ impl CaptureProvider for CountingCapture {
             Ok(vec![golden_capture("main")])
         })
     }
-}
-
-fn real_legacy_fixture() -> Vec<u8> {
-    fs::read(
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/data/legacy")
-            .join(CONFIG_FILENAME),
-    )
-    .expect("real legacy fixture")
 }
 
 fn create_linked_device_candidate(temporary: &TestDirectory) -> PathBuf {

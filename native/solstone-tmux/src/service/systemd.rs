@@ -2,7 +2,6 @@
 // Copyright (c) 2026 sol pbc
 
 use std::ffi::{OsStr, OsString};
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::command::{CommandInvocation, CommandOperation, CommandRunner, ServiceOperation};
@@ -15,7 +14,6 @@ use super::{
 
 pub const UNIT_NAME: &str = "solstone-tmux.service";
 const OWNERSHIP_MARKER: &[u8] = b"Description=Solstone Tmux Observer\n";
-const LEGACY_PYTHON_MARKER: &[u8] = b"Description=Solstone Tmux Terminal Observer\n";
 
 pub fn artifact_path(home: &Path) -> PathBuf {
     home.join(".config/systemd/user").join(UNIT_NAME)
@@ -158,35 +156,7 @@ pub async fn status(
 }
 
 fn validate_unit(path: &Path) -> Result<bool, ServiceError> {
-    match validate_regular_file(path, Some(OWNERSHIP_MARKER)) {
-        Err(ServiceError::InvalidArtifact(_)) if is_legacy_python_unit(path)? => {
-            Err(ServiceError::LegacyPythonUnit(path.to_owned()))
-        }
-        result => result,
-    }
-}
-
-fn is_legacy_python_unit(path: &Path) -> Result<bool, ServiceError> {
-    let metadata = match fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-        Err(source) => {
-            return Err(ServiceError::Io {
-                path: path.to_owned(),
-                source,
-            });
-        }
-    };
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
-        return Ok(false);
-    }
-    let bytes = fs::read(path).map_err(|source| ServiceError::Io {
-        path: path.to_owned(),
-        source,
-    })?;
-    Ok(bytes
-        .windows(LEGACY_PYTHON_MARKER.len())
-        .any(|window| window == LEGACY_PYTHON_MARKER))
+    validate_regular_file(path, Some(OWNERSHIP_MARKER))
 }
 
 fn escape_unit_value(value: &str) -> Result<String, ServiceError> {

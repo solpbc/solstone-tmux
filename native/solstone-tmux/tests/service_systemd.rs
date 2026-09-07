@@ -138,39 +138,6 @@ fn unowned_systemd_artifact_is_rejected_before_manager_mutation() {
 }
 
 #[test]
-fn legacy_python_unit_is_actionable_for_install_and_uninstall() {
-    for action in ["install", "uninstall"] {
-        let fixture = ServiceFixture::new("systemd-legacy-python-unit");
-        let artifact = artifact_path(&fixture.home);
-        fs::create_dir_all(artifact.parent().expect("unit parent")).expect("unit parent");
-        let legacy = b"[Unit]\nDescription=Solstone Tmux Terminal Observer\nAfter=basic.target\n";
-        fs::write(&artifact, legacy).expect("legacy Python unit");
-        let runner = FixtureRunner::default();
-        let controller = fixture.controller(&runner);
-
-        let error = if action == "install" {
-            runtime()
-                .block_on(controller.0.install())
-                .expect_err("legacy Python unit must block install")
-        } else {
-            runtime()
-                .block_on(controller.0.uninstall())
-                .expect_err("legacy Python unit must block uninstall")
-        };
-
-        assert_eq!(
-            error.to_string(),
-            format!(
-                "legacy Python service at {} must be stopped, disabled, and removed before the native service can be installed",
-                artifact.display()
-            )
-        );
-        assert!(runner.calls().is_empty());
-        assert_eq!(fs::read(artifact).expect("legacy unit preserved"), legacy);
-    }
-}
-
-#[test]
 fn tmux_is_resolved_absolute_and_persisted() {
     let fixture = ServiceFixture::new("tmux-persisted");
     let runner = FixtureRunner::new(systemd_install_expectations());

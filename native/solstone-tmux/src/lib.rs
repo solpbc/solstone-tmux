@@ -13,7 +13,6 @@ pub mod indicator;
 pub mod instance_lock;
 pub mod journal;
 pub mod journal_version;
-pub mod migration;
 pub mod model;
 pub mod name;
 pub mod observer;

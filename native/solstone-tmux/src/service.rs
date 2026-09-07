@@ -60,7 +60,6 @@ pub enum ServiceError {
         source: std::io::Error,
     },
     InvalidArtifact(PathBuf),
-    LegacyPythonUnit(PathBuf),
     InvalidExecutable(PathBuf),
     InvalidUtf8Path(PathBuf),
     TmuxNotFound,
@@ -87,11 +86,6 @@ impl fmt::Display for ServiceError {
             Self::InvalidArtifact(path) => write!(
                 formatter,
                 "refusing to alter invalid or unowned service artifact {}",
-                path.display()
-            ),
-            Self::LegacyPythonUnit(path) => write!(
-                formatter,
-                "legacy Python service at {} must be stopped, disabled, and removed before the native service can be installed",
                 path.display()
             ),
             Self::InvalidExecutable(path) => {
