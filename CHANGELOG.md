@@ -6,44 +6,22 @@ Format adapted from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-09-08
+
 ### Added
 
-- publishes device descriptions and acquires relay access over paired journal connections.
-
-## [1.0.6] - 2026-08-28
-
-### Fixed
-
-- on linux, solstone-tmux keeps trying to reconnect after a reboot if tmux is not ready yet.
-
-## [1.0.5] - 2026-08-28
+- the current pairing link now works when your journal is available only remotely, and you can keep the same pairing after the first connection.
+- after connecting, the paired-device entry in the solstone app now shows this computer's name, operating system, and solstone-tmux version.
+- `solstone-tmux status` now shows the current or last known version of your paired journal, and sync progress now updates throughout larger backlogs.
 
 ### Changed
 
-- internal stability improvements; no owner-visible changes.
-
-## [1.0.4] - 2026-08-28
-
-### Changed
-
-- tmux syncing now works through your paired-device connection to your journal.
+- tmux work now appears under a new name in your journal based on the paired computer and source. earlier history stays where it is.
 
 ### Fixed
 
-- if your paired journal is temporarily unavailable when solstone-tmux starts, it now keeps trying to reconnect instead of stopping.
-- pairing now works with the current link from your journal, including when it is reachable only remotely.
-- finished tmux work now stays on this machine until your journal can confirm it has every file.
-- larger completed tmux work can now reach your journal.
-
-## [1.0.3] - 2026-08-28
-
-### Changed
-- tmux syncing now works through your paired-device connection to your journal.
-
-### Fixed
-- the current pairing link from your journal now works.
-- finished tmux work now stays on this machine until your journal can confirm it has every file.
-- larger completed tmux work can now reach your journal.
+- finished tmux work could leave this machine before your journal confirmed every file. it now stays until that confirmation, and larger completed work can reach your journal.
+- if tmux or your journal was not ready when solstone-tmux started, syncing could stop. it now keeps trying, including after a linux reboot.
 
 ## [1.0.2] - 2026-08-08
 
