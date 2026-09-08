@@ -9,7 +9,7 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
 const AUTHORITY_REPOSITORY: &str = "https://github.com/solpbc/solstone-journal";
-const AUTHORITY_COMMIT: &str = "460c0c3511ebe29b65fe93f99d2f77c6a1eaa658";
+const AUTHORITY_COMMIT: &str = "ba16c8ca55b4151430166f0e7f9b0da2d15c6f45";
 const AUTHORITY_CREATION_COMMIT: &str = "c1e9589e60213b39042b92cae94a5d2f0448535e";
 const BUNDLE_VERSION: &str = "1.0.0";
 const MANIFEST_PATH: &str = "manifest.json";

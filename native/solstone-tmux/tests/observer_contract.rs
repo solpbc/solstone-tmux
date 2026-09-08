@@ -13,11 +13,11 @@ use solstone_tmux::journal::{
 };
 
 const AUTHORITY_REPOSITORY: &str = "https://github.com/solpbc/solstone-journal";
-const AUTHORITY_COMMIT: &str = "460c0c3511ebe29b65fe93f99d2f77c6a1eaa658";
+const AUTHORITY_COMMIT: &str = "ba16c8ca55b4151430166f0e7f9b0da2d15c6f45";
 const AUTHORITY_INPUT_PATH: &str =
     "core/crates/solstone-core-repository-contracts/src/contracts/client_ingest_authority.json";
 const AUTHORITY_INPUT_SHA256: &str =
-    "277d01ae96da68a5d1c64c2243b65875425031155204cb2710dd7273e71627e5";
+    "c27f58430f00cfbcf49f693a86033b5b5a3ec6a30c6d43778170ed6d24e2e2c5";
 const BUNDLE_VERSION: &str = "10.0.0";
 const MANIFEST_PATH: &str = "manifest.json";
 const VENDORED_ROOT: &str = "native/solstone-tmux/vendor/observer-client-contract";
