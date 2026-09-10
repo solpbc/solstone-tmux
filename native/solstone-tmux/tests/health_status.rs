@@ -326,10 +326,17 @@ fn status_is_read_only_when_native_state_is_absent() {
         .expect("run status");
 
     assert_eq!(output.status.code(), Some(4));
-    assert_eq!(
-        String::from_utf8(output.stdout).expect("status stdout"),
-        "service: absent\nsync-health: unknown\njournal-version: unknown\n"
-    );
+    let stdout = String::from_utf8(output.stdout).expect("status stdout");
+    let lines = stdout.lines().collect::<Vec<_>>();
+    assert_eq!(lines.len(), 5);
+    assert_eq!(lines[0], "service: absent");
+    assert_eq!(lines[1], "sync-health: unknown");
+    assert_eq!(lines[2], "journal-version: unknown");
+    assert_eq!(lines[3], "get help: https://support.solstone.app");
+    assert!(lines[4].starts_with(
+        "report a problem: https://support.solstone.app/#report=v1&app=solstone+for+tmux"
+    ));
+    assert!(lines[4].ends_with("&state=unknown"));
     assert!(!roots.data_root().exists());
     assert!(!roots.data_root().join(LOCK_FILENAME).exists());
     assert!(!roots.data_root().join(HEALTH_FILENAME).exists());
