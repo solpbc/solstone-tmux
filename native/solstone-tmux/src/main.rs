@@ -126,6 +126,11 @@ fn run() -> Result<i32, String> {
                         println!("service: {service_line}");
                         println!("sync-health: {}", sync_health.as_str());
                         println!("journal-version: {}", journal_version.render());
+                        println!("get help: {}", solstone_tmux::support::HELP_URL);
+                        println!(
+                            "report a problem: {}",
+                            solstone_tmux::support::report_url(sync_health.as_str())
+                        );
                         if let Err(error) = &status {
                             eprintln!("solstone-tmux: {error}");
                         }

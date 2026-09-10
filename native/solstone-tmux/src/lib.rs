@@ -25,5 +25,6 @@ pub mod segment;
 pub mod serialize;
 pub mod service;
 pub mod storage;
+pub mod support;
 pub mod sync;
 pub mod tmux;
