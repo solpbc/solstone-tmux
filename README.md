@@ -12,8 +12,9 @@ Intel macOS, 32-bit systems, and Windows are not supported.
 
 ## Install
 
-Download the native release from
-[GitHub Releases](https://github.com/solpbc/solstone-tmux/releases):
+Download the native release from `updates.solstone.app`. Read
+`https://updates.solstone.app/solstone-tmux/release/latest` for the current
+version; `INSTALL.md` carries the exact URLs and filenames. The formats are:
 
 - Linux tarball: install `solstone-tmux` at
   `/usr/local/bin/solstone-tmux`.

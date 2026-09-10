@@ -7,12 +7,34 @@ tmux.
 Supported systems are Linux on x86_64 or aarch64 and macOS on Apple silicon.
 Intel macOS, 32-bit systems, and Windows are not supported.
 
-Download packages from the
-[latest solstone-tmux release](https://github.com/solpbc/solstone-tmux/releases/latest).
+Releases are published to `updates.solstone.app`. Read
+`https://updates.solstone.app/solstone-tmux/release/latest` for the current
+version:
+
+```sh
+curl -fsS https://updates.solstone.app/solstone-tmux/release/latest
+```
+
+It prints one line, `version=<VERSION>`. There is no directory listing, so fetch
+each file by name.
 
 **Verify first.** Download the package you will install, `SHA256SUMS`, and
-`SHA256SUMS.minisig` from that release. Then fetch the published key,
-authenticate the checksum file, and check the package against it:
+`SHA256SUMS.minisig`. Take one package for your system; the architecture table
+is below.
+
+```sh
+base="https://updates.solstone.app/solstone-tmux/release/<VERSION>"
+curl -fLO "$base/solstone-tmux_<VERSION>_<deb-name>.deb"            # Debian / Ubuntu
+curl -fLO "$base/solstone-tmux-<VERSION>-1.<rpm-name>.rpm"          # Fedora / RHEL
+curl -fLO "$base/solstone-tmux-<VERSION>-<tar-name>-linux.tar.gz"   # Linux tarball
+curl -fLO "$base/solstone-tmux-<VERSION>-aarch64-macos.pkg"         # Apple silicon
+curl -fLO "$base/solstone-tmux-<VERSION>-aarch64-macos.tar.gz"      # Apple silicon, archive
+curl -fLO "$base/SHA256SUMS"
+curl -fLO "$base/SHA256SUMS.minisig"
+```
+
+Then fetch the published key, authenticate the checksum file, and check the
+package against it:
 
 Install minisign if you do not have it: `apt install minisign`,
 `dnf install minisign`, or `brew install minisign` on macOS.
