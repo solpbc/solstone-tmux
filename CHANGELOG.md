@@ -6,6 +6,16 @@ Format adapted from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [2.0.1] - 2026-09-13
+
+### Added
+
+- `solstone-tmux status` now prints help and problem-report links, with the app version, system version, and current sync state filled in.
+
+### Changed
+
+- release install instructions now start at `updates.solstone.app`, with packages and their verification files at the same sol pbc release origin.
+
 ## [2.0.0] - 2026-09-08
 
 ### Added
