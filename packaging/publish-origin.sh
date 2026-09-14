@@ -316,6 +316,31 @@ if ! $dry_run; then
     fi
 fi
 
+# CHANGELOG.md mirror — lane-independent (there is one changelog, not one per
+# lane) and gated to the release lane only, matching the stricter clean-tree/
+# HEAD-bound checks above. This lets solstone.app's release-notes pages read
+# prose release notes straight from the origin instead of depending on GitHub
+# Releases for them; the origin never carried prose before this.
+if [[ "$lane" == "release" ]]; then
+    changelog_file="$repo_root/CHANGELOG.md"
+    [[ -f "$changelog_file" && ! -L "$changelog_file" ]] ||
+        die "changelog-missing: $changelog_file must be a regular file"
+    changelog_key="$PRODUCT/CHANGELOG.md"
+    if $dry_run; then
+        printf '  would publish %s/%s\n' "$ORIGIN_URL" "$changelog_key"
+    else
+        changelog_remote="$stage_root/remote-changelog"
+        if remote_get "$changelog_key" "$changelog_remote" && cmp -s "$changelog_remote" "$changelog_file"; then
+            printf '  present  %s\n' "$changelog_key"
+        else
+            remote_put "$changelog_key" "$changelog_file" "text/plain; charset=utf-8" "no-cache"
+            printf '  put      %s\n' "$changelog_key"
+        fi
+        rm -f "$changelog_remote"
+    fi
+    checkpoint "changelog"
+fi
+
 if [[ "$lane" == "dev" ]]; then
     object_cache_control="no-cache"
 else
