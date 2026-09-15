@@ -8,8 +8,8 @@ license = "AGPL-3.0-only"
 rust-version = "1.97.1"
 
 [workspace.dependencies]
-spl-core = { git = "https://github.com/solpbc/spl-rust", rev = "2095b7bf62830cf10a5b042c528955945307e964" }
-spl-transport = { git = "https://github.com/solpbc/spl-rust", rev = "2095b7bf62830cf10a5b042c528955945307e964" }
+spl-core = { git = "https://github.com/solpbc/spl-rust", rev = "41982cf700f916b629d8d3f714c1f724cb9f81de" }
+spl-transport = { git = "https://github.com/solpbc/spl-rust", rev = "41982cf700f916b629d8d3f714c1f724cb9f81de" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
