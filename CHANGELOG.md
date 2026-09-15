@@ -6,6 +6,12 @@ Format adapted from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [2.0.2] - 2026-09-15
+
+### Changed
+
+- internal stability improvements.
+
 ## [2.0.1] - 2026-09-13
 
 ### Added
