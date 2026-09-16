@@ -8,9 +8,9 @@ Format adapted from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [2.0.2] - 2026-09-15
 
-### Changed
+### Fixed
 
-- internal stability improvements.
+- fixed a TLS security issue by rejecting handshake messages received at the wrong encryption level.
 
 ## [2.0.1] - 2026-09-13
 
