@@ -4,7 +4,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use rcgen::{
@@ -180,6 +180,7 @@ struct PeerState {
     upload_stalled: Arc<Notify>,
     current_stream: Arc<AtomicU32>,
     accepted: Arc<AtomicUsize>,
+    refusal_alert: Arc<AtomicU8>,
 }
 
 pub struct PrivateLinkPeer {
@@ -233,6 +234,7 @@ impl PrivateLinkPeer {
             upload_stalled: Arc::new(Notify::new()),
             current_stream: Arc::new(AtomicU32::new(0)),
             accepted: Arc::new(AtomicUsize::new(0)),
+            refusal_alert: Arc::new(AtomicU8::new(0)),
         };
         let (controls, _) = tokio::sync::broadcast::channel(16);
         let task = tokio::spawn(serve(listener, acceptor, state.clone(), controls.clone()));
@@ -520,6 +522,13 @@ impl PrivateLinkPeer {
         let _ = self.controls.send(Control::GrantUploadCredit(credit));
     }
 
+    /// Refuse every later handshake with this TLS alert description instead of accepting it.
+    pub fn refuse_handshakes_with_alert(&self, description: u8) {
+        self.state
+            .refusal_alert
+            .store(description, Ordering::SeqCst);
+    }
+
     pub fn accepted_carriers(&self) -> usize {
         self.state.accepted.load(Ordering::SeqCst)
     }
@@ -610,6 +619,11 @@ async fn serve(
         };
         state.accepted.fetch_add(1, Ordering::SeqCst);
         state.handshake_hold.wait_if_held().await;
+        let refusal = state.refusal_alert.load(Ordering::SeqCst);
+        if refusal != 0 {
+            let _ = refuse_with_alert(tcp, refusal).await;
+            continue;
+        }
         let Ok(tls) = acceptor.accept(tcp).await else {
             continue;
         };
@@ -619,6 +633,16 @@ async fn serve(
             let _ = handle_carrier(tls, state, control_rx).await;
         });
     }
+}
+
+async fn refuse_with_alert(mut tcp: TcpStream, description: u8) -> io::Result<()> {
+    let mut header = [0u8; 5];
+    tcp.read_exact(&mut header).await?;
+    let mut hello = vec![0u8; usize::from(u16::from_be_bytes([header[3], header[4]]))];
+    tcp.read_exact(&mut hello).await?;
+    tcp.write_all(&[0x15, 0x03, 0x03, 0x00, 0x02, 0x02, description])
+        .await?;
+    tcp.flush().await
 }
 
 async fn handle_carrier(

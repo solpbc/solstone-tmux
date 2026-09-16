@@ -823,8 +823,15 @@ pub fn classify_error_response(status: u16, body: &[u8]) -> JournalError {
     let reason_code = serde_json::from_slice::<ErrorResponse>(body)
         .ok()
         .and_then(|response| JournalReasonCode::parse(&response.reason_code));
+    // A server error with no recognized reason is the journal or the bridge failing to answer
+    // (including the bridge's own 502), not the journal refusing this device.
+    let diagnostic = if reason_code.is_none() && status_class == JournalStatusClass::Server {
+        DiagnosticCode::JournalUnavailable
+    } else {
+        DiagnosticCode::JournalRejected
+    };
     JournalError {
-        diagnostic: DiagnosticCode::JournalRejected,
+        diagnostic,
         status_class: Some(status_class),
         reason_code,
     }

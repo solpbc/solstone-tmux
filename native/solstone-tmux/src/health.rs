@@ -34,6 +34,7 @@ pub enum DiagnosticCode {
     LocalSegmentInvalid,
     RequestTooLarge,
     JournalRejected,
+    JournalRevoked,
     SyncTaskExited,
     SyncTaskPanicked,
     SyncTaskCancelled,
@@ -59,6 +60,7 @@ impl DiagnosticCode {
             Self::LocalSegmentInvalid => "local_segment_invalid",
             Self::RequestTooLarge => "request_too_large",
             Self::JournalRejected => "journal_rejected",
+            Self::JournalRevoked => "journal_revoked",
             Self::SyncTaskExited => "sync_task_exited",
             Self::SyncTaskPanicked => "sync_task_panicked",
             Self::SyncTaskCancelled => "sync_task_cancelled",
@@ -86,6 +88,9 @@ impl DiagnosticCode {
             Self::LocalSegmentInvalid => "local segment is invalid",
             Self::RequestTooLarge => "local request exceeds the bridge limit",
             Self::JournalRejected => "journal request was rejected",
+            Self::JournalRevoked => {
+                "your journal refused this device's pairing; if this keeps happening, run setup with a new pairing link"
+            }
             Self::SyncTaskExited => "sync task exited unexpectedly",
             Self::SyncTaskPanicked => "sync task failed: panic",
             Self::SyncTaskCancelled => "sync task failed: task was cancelled",
@@ -179,7 +184,7 @@ impl SyncFacts {
             return HealthState::Unpaired;
         }
         match self.last_error_code {
-            Some(DiagnosticCode::JournalRejected) => HealthState::Revoked,
+            Some(DiagnosticCode::JournalRevoked) => HealthState::Revoked,
             Some(_) => HealthState::Offline,
             None if self.last_successful_contact_unix_seconds.is_some() => HealthState::Connected,
             None => HealthState::Offline,

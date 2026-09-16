@@ -16,6 +16,7 @@ use spl_transport::client::{DialedCarrier, TokenPersistHook, TransportClient};
 use spl_transport::credential::Credential;
 use spl_transport::journal_bridge::{
     BridgePolicy, CapabilityGate, CarrierOpener, JournalBridgeConfig, JournalBridgeHandle,
+    JournalBridgeTerminalReason,
 };
 use spl_transport::pairing::pair_from_link;
 
@@ -272,6 +273,12 @@ impl PrivateLinkBridge {
 
     pub fn opener(&self) -> &Arc<PrivateLinkOpener> {
         &self.opener
+    }
+
+    /// Whether the journal refused this device with TLS access denied (alert 49).
+    /// The bridge latches this once and never dials again.
+    pub fn access_denied(&self) -> bool {
+        self.handle.status().terminal_reason == Some(JournalBridgeTerminalReason::TlsAccessDenied)
     }
 
     pub async fn shutdown(self) {

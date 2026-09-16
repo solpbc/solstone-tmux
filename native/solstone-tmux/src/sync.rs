@@ -1737,6 +1737,20 @@ impl Drop for ActivityGuard {
     }
 }
 
+impl JournalSession {
+    /// A bridge 502 after the journal refused this device with access denied is the refusal,
+    /// not an outage: the bridge latches that status and stops dialing.
+    fn map_error(&self, error: JournalError) -> SyncOperationError {
+        if error.diagnostic() == DiagnosticCode::JournalUnavailable && self.bridge.access_denied() {
+            return SyncOperationError::EndSweepDiagnostic(
+                SyncFailureClass::Auth,
+                DiagnosticCode::JournalRevoked,
+            );
+        }
+        map_journal_error(error)
+    }
+}
+
 impl SyncJournal for JournalSession {
     fn upload<'a>(
         &'a mut self,
@@ -1748,7 +1762,7 @@ impl SyncJournal for JournalSession {
             self.journal
                 .ingest_upload(candidate.day(), candidate.segment(), files, source)
                 .await
-                .map_err(map_journal_error)
+                .map_err(|error| self.map_error(error))
         })
     }
 
@@ -1760,7 +1774,7 @@ impl SyncJournal for JournalSession {
             self.journal
                 .ingest_manifest(source)
                 .await
-                .map_err(map_journal_error)
+                .map_err(|error| self.map_error(error))
         })
     }
 
@@ -1774,7 +1788,7 @@ impl SyncJournal for JournalSession {
             self.journal
                 .ingest_manifest_day(day, source)
                 .await
-                .map_err(map_journal_error)
+                .map_err(|error| self.map_error(error))
         })
     }
 
@@ -1788,7 +1802,7 @@ impl SyncJournal for JournalSession {
             self.journal
                 .ingest_segments(day, source)
                 .await
-                .map_err(map_journal_error)
+                .map_err(|error| self.map_error(error))
         })
     }
 }
@@ -1987,7 +2001,7 @@ fn map_journal_error(error: JournalError) -> SyncOperationError {
                 | JournalReasonCode::PlRevoked,
             ) => SyncOperationError::EndSweepDiagnostic(
                 SyncFailureClass::Auth,
-                DiagnosticCode::JournalRejected,
+                DiagnosticCode::JournalRevoked,
             ),
             Some(
                 JournalReasonCode::IngestContractInvalid
@@ -2034,7 +2048,7 @@ fn map_diagnostic(code: DiagnosticCode) -> SyncOperationError {
 
 fn diagnostic_for_failure(failure: SyncFailureClass) -> DiagnosticCode {
     match failure {
-        SyncFailureClass::Auth => DiagnosticCode::JournalRejected,
+        SyncFailureClass::Auth => DiagnosticCode::JournalRevoked,
         SyncFailureClass::Timeout => DiagnosticCode::JournalTimeout,
         SyncFailureClass::Contract => DiagnosticCode::JournalContractInvalid,
         SyncFailureClass::Direct | SyncFailureClass::Relay => DiagnosticCode::JournalUnavailable,

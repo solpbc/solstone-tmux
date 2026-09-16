@@ -6,6 +6,10 @@ Format adapted from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- `solstone-tmux status` could show `revoked` when your journal was down, restarting, or refused a request for a reason unrelated to pairing. it now shows `offline` in those cases.
+
 ## [2.0.2] - 2026-09-15
 
 ### Fixed
