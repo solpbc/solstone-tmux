@@ -8,7 +8,7 @@ Format adapted from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
-- `solstone-tmux status` could show `revoked` when your journal was down, restarting, or refused a request for a reason unrelated to pairing. it now shows `offline` in those cases.
+- `solstone-tmux status` could show `revoked` when your journal was down, restarting, or a single request failed for a reason unrelated to pairing. it now shows `offline` in those cases. a computer that's no longer paired still shows `revoked` right away, and if this computer's connection keeps being refused after it reaches your journal, it shows `revoked` once that has gone on for about 30 minutes; time your journal is simply unreachable doesn't count.
 
 ## [2.0.2] - 2026-09-15
 

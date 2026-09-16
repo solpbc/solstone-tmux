@@ -10,15 +10,19 @@ mod support;
 use solstone_tmux::config::DEFAULT_SOURCE;
 use solstone_tmux::health::{DiagnosticCode, HealthState, SyncFacts};
 use solstone_tmux::instance_lock::InstanceLock;
+use solstone_tmux::journal::classify_error_response;
 use solstone_tmux::paths::ensure_private_directory;
-use solstone_tmux::sync::{JournalSession, SyncJournal, SyncOperationError};
+use solstone_tmux::sync::{
+    JournalSession, SyncFailureClass, SyncJournal, SyncOperationError, map_bridge_error,
+};
 use spl_transport::credential::Credential;
+use spl_transport::journal_bridge::JournalBridgeTerminalReason;
 use support::TestDirectory;
 use support::private_link_peer::PrivateLinkPeer;
 
 const ACCESS_DENIED: u8 = 49;
 const CERTIFICATE_UNKNOWN: u8 = 46;
-const INTERNAL_ERROR: u8 = 80;
+const UNKNOWN_CA: u8 = 48;
 
 #[test]
 fn only_a_revocation_diagnostic_reads_revoked() {
@@ -144,7 +148,7 @@ fn only_an_access_denied_handshake_reads_revoked() {
                 HealthState::Offline,
             ),
             (
-                INTERNAL_ERROR,
+                UNKNOWN_CA,
                 DiagnosticCode::JournalUnavailable,
                 HealthState::Offline,
             ),
@@ -162,6 +166,45 @@ fn only_an_access_denied_handshake_reads_revoked() {
             peer.shutdown().await;
         }
     });
+}
+
+// Protocol: SPL session § 7, "every other code". Falsified by recognizing only the access-denied
+// stop: a device the bridge gave up on after repeated refusals would read offline forever.
+#[test]
+fn any_bridge_stop_turns_its_502_into_a_revocation() {
+    let bridge_502 = || classify_error_response(502, b"journal unreachable");
+    for stop in [
+        JournalBridgeTerminalReason::TlsAccessDenied,
+        JournalBridgeTerminalReason::RefusalsExhausted,
+    ] {
+        assert_eq!(
+            map_bridge_error(bridge_502(), Some(stop)),
+            SyncOperationError::EndSweepDiagnostic(
+                SyncFailureClass::Auth,
+                DiagnosticCode::JournalRevoked
+            ),
+            "{stop:?}"
+        );
+    }
+    assert_eq!(
+        map_bridge_error(bridge_502(), None),
+        SyncOperationError::EndSweepDiagnostic(
+            SyncFailureClass::Direct,
+            DiagnosticCode::JournalUnavailable
+        )
+    );
+    // A local failure is never attributed to the journal, stopped bridge or not.
+    let local = classify_error_response(
+        400,
+        br#"{"error":"x","reason_code":"invalid_day","detail":"x"}"#,
+    );
+    assert_ne!(
+        map_bridge_error(local, Some(JournalBridgeTerminalReason::TlsAccessDenied)),
+        SyncOperationError::EndSweepDiagnostic(
+            SyncFailureClass::Auth,
+            DiagnosticCode::JournalRevoked
+        )
+    );
 }
 
 async fn start_session(credential: Credential, temporary: &TestDirectory) -> JournalSession {

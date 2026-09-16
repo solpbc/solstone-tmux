@@ -89,7 +89,7 @@ impl DiagnosticCode {
             Self::RequestTooLarge => "local request exceeds the bridge limit",
             Self::JournalRejected => "journal request was rejected",
             Self::JournalRevoked => {
-                "your journal refused this device's pairing; if this keeps happening, run setup with a new pairing link"
+                "this device can't connect to your journal with its saved pairing; run setup with a new pairing link"
             }
             Self::SyncTaskExited => "sync task exited unexpectedly",
             Self::SyncTaskPanicked => "sync task failed: panic",

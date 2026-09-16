@@ -11,9 +11,14 @@ use rcgen::{
     BasicConstraints, CertificateParams, ExtendedKeyUsagePurpose, IsCa, KeyPair, KeyUsagePurpose,
     PKCS_ECDSA_P256_SHA256,
 };
-use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
+use rustls::client::danger::HandshakeSignatureValid;
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, UnixTime};
 use rustls::server::WebPkiClientVerifier;
-use rustls::{RootCertStore, ServerConfig};
+use rustls::server::danger::{ClientCertVerified, ClientCertVerifier};
+use rustls::{
+    CertificateError, DigitallySignedStruct, DistinguishedName, OtherError, RootCertStore,
+    ServerConfig, SignatureScheme,
+};
 use spl_core::frame::{
     FLAG_CLOSE, FLAG_DATA, FLAG_OPEN, FLAG_RESET, FLAG_WINDOW, Frame, FrameDecoder,
     RECOMMENDED_CHUNK,
@@ -214,7 +219,8 @@ impl PrivateLinkPeer {
         let address = listener.local_addr().expect("read peer address");
         assert!(address.ip().is_loopback(), "peer did not bind loopback");
 
-        let (credential, acceptor) = credential_and_acceptor(address.port());
+        let refusal_alert = Arc::new(AtomicU8::new(0));
+        let (credential, acceptor) = credential_and_acceptor(address.port(), refusal_alert.clone());
         let state = PeerState {
             responses: Arc::new(Mutex::new(VecDeque::new())),
             system_status_responses: Arc::new(Mutex::new(VecDeque::new())),
@@ -234,7 +240,7 @@ impl PrivateLinkPeer {
             upload_stalled: Arc::new(Notify::new()),
             current_stream: Arc::new(AtomicU32::new(0)),
             accepted: Arc::new(AtomicUsize::new(0)),
-            refusal_alert: Arc::new(AtomicU8::new(0)),
+            refusal_alert,
         };
         let (controls, _) = tokio::sync::broadcast::channel(16);
         let task = tokio::spawn(serve(listener, acceptor, state.clone(), controls.clone()));
@@ -522,7 +528,8 @@ impl PrivateLinkPeer {
         let _ = self.controls.send(Control::GrantUploadCredit(credit));
     }
 
-    /// Refuse every later handshake with this TLS alert description instead of accepting it.
+    /// Refuse every later client certificate after the TLS 1.3 handshake, the way a journal
+    /// does: 49 (access denied), 46 (certificate unknown) or 48 (unknown CA, any other code).
     pub fn refuse_handshakes_with_alert(&self, description: u8) {
         self.state
             .refusal_alert
@@ -539,7 +546,63 @@ impl PrivateLinkPeer {
     }
 }
 
-fn credential_and_acceptor(port: u16) -> (Credential, TlsAcceptor) {
+/// A journal-like client verifier: the real chain check, then an optional refusal.
+#[derive(Debug)]
+struct RefusingVerifier {
+    inner: Arc<dyn ClientCertVerifier>,
+    refusal: Arc<AtomicU8>,
+}
+
+impl ClientCertVerifier for RefusingVerifier {
+    fn root_hint_subjects(&self) -> &[DistinguishedName] {
+        self.inner.root_hint_subjects()
+    }
+
+    fn verify_client_cert(
+        &self,
+        end_entity: &CertificateDer<'_>,
+        intermediates: &[CertificateDer<'_>],
+        now: UnixTime,
+    ) -> Result<ClientCertVerified, rustls::Error> {
+        let verified = self
+            .inner
+            .verify_client_cert(end_entity, intermediates, now)?;
+        let error = match self.refusal.load(Ordering::SeqCst) {
+            0 => return Ok(verified),
+            49 => CertificateError::ApplicationVerificationFailure,
+            46 => CertificateError::Other(OtherError(Arc::new(io::Error::other(
+                "authorization unreadable",
+            )))),
+            48 => CertificateError::UnknownIssuer,
+            other => panic!("unsupported refusal alert {other}"),
+        };
+        Err(rustls::Error::InvalidCertificate(error))
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        self.inner.verify_tls12_signature(message, cert, dss)
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        self.inner.verify_tls13_signature(message, cert, dss)
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        self.inner.supported_verify_schemes()
+    }
+}
+
+fn credential_and_acceptor(port: u16, refusal: Arc<AtomicU8>) -> (Credential, TlsAcceptor) {
     let ca_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("generate peer CA key");
     let mut ca_params =
         CertificateParams::new(Vec::<String>::new()).expect("construct peer CA parameters");
@@ -580,7 +643,10 @@ fn credential_and_acceptor(port: u16) -> (Credential, TlsAcceptor) {
         ServerConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
             .with_safe_default_protocol_versions()
             .expect("select peer TLS versions")
-            .with_client_cert_verifier(verifier)
+            .with_client_cert_verifier(Arc::new(RefusingVerifier {
+                inner: verifier,
+                refusal,
+            }))
             .with_single_cert(
                 vec![CertificateDer::from(server.der().to_vec()), ca_der.clone()],
                 PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(server_key.serialize_der())),
@@ -619,11 +685,6 @@ async fn serve(
         };
         state.accepted.fetch_add(1, Ordering::SeqCst);
         state.handshake_hold.wait_if_held().await;
-        let refusal = state.refusal_alert.load(Ordering::SeqCst);
-        if refusal != 0 {
-            let _ = refuse_with_alert(tcp, refusal).await;
-            continue;
-        }
         let Ok(tls) = acceptor.accept(tcp).await else {
             continue;
         };
@@ -633,16 +694,6 @@ async fn serve(
             let _ = handle_carrier(tls, state, control_rx).await;
         });
     }
-}
-
-async fn refuse_with_alert(mut tcp: TcpStream, description: u8) -> io::Result<()> {
-    let mut header = [0u8; 5];
-    tcp.read_exact(&mut header).await?;
-    let mut hello = vec![0u8; usize::from(u16::from_be_bytes([header[3], header[4]]))];
-    tcp.read_exact(&mut hello).await?;
-    tcp.write_all(&[0x15, 0x03, 0x03, 0x00, 0x02, 0x02, description])
-        .await?;
-    tcp.flush().await
 }
 
 async fn handle_carrier(

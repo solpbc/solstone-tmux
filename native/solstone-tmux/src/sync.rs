@@ -15,6 +15,7 @@ use std::time::Duration;
 
 use spl_transport::client::TokenPersistHook;
 use spl_transport::credential::Credential;
+use spl_transport::journal_bridge::JournalBridgeTerminalReason;
 use time::{Date, Month};
 use tokio::sync::{Mutex as AsyncMutex, Notify, OwnedSemaphorePermit, Semaphore, oneshot, watch};
 use tokio::time::Instant;
@@ -1738,17 +1739,24 @@ impl Drop for ActivityGuard {
 }
 
 impl JournalSession {
-    /// A bridge 502 after the journal refused this device with access denied is the refusal,
-    /// not an outage: the bridge latches that status and stops dialing.
     fn map_error(&self, error: JournalError) -> SyncOperationError {
-        if error.diagnostic() == DiagnosticCode::JournalUnavailable && self.bridge.access_denied() {
-            return SyncOperationError::EndSweepDiagnostic(
-                SyncFailureClass::Auth,
-                DiagnosticCode::JournalRevoked,
-            );
-        }
-        map_journal_error(error)
+        map_bridge_error(error, self.bridge.stop_reason())
     }
+}
+
+/// A bridge 502 after the bridge stopped dialing is the journal refusing this device, not an
+/// outage: the bridge stops on access denied (49) and once other refusals reach its bound.
+pub fn map_bridge_error(
+    error: JournalError,
+    stop: Option<JournalBridgeTerminalReason>,
+) -> SyncOperationError {
+    if error.diagnostic() == DiagnosticCode::JournalUnavailable && stop.is_some() {
+        return SyncOperationError::EndSweepDiagnostic(
+            SyncFailureClass::Auth,
+            DiagnosticCode::JournalRevoked,
+        );
+    }
+    map_journal_error(error)
 }
 
 impl SyncJournal for JournalSession {

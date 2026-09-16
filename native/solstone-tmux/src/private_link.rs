@@ -275,10 +275,11 @@ impl PrivateLinkBridge {
         &self.opener
     }
 
-    /// Whether the journal refused this device with TLS access denied (alert 49).
-    /// The bridge latches this once and never dials again.
-    pub fn access_denied(&self) -> bool {
-        self.handle.status().terminal_reason == Some(JournalBridgeTerminalReason::TlsAccessDenied)
+    /// Why the bridge stopped dialing, if it has: the journal refused this device
+    /// with access denied (alert 49), or other refusals reached the bridge's bound.
+    /// Either way the bridge never dials again and every request answers 502.
+    pub fn stop_reason(&self) -> Option<JournalBridgeTerminalReason> {
+        self.handle.status().terminal_reason
     }
 
     pub async fn shutdown(self) {
