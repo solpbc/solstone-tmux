@@ -125,7 +125,7 @@ binary, but only the pkg is notarized and stapled.
 
 `setup` and `install-service` are separate steps:
 
-1. `setup` reads one private-link pairing link from standard input and stores
+1. `setup` reads one private network pairing link from standard input and stores
    the new pairing:
 
    ```sh

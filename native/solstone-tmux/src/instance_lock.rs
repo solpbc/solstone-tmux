@@ -270,7 +270,7 @@ impl fmt::Display for InstanceLockError {
         match self {
             Self::AlreadyLocked(path) => write!(
                 formatter,
-                "another observer is already using this data root (lock: {})",
+                "another solstone-tmux process is already using this data folder (lock: {})",
                 path.display()
             ),
             Self::InvalidTarget(path) => {

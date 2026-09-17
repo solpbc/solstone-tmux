@@ -289,7 +289,7 @@ pub fn load_local_observer(config_root: &Path) -> Result<LocalObserver, ServiceE
     })?;
     let state: LocalObserver = serde_json::from_slice(&bytes).map_err(|error| {
         ServiceError::InvalidState(format!(
-            "{} does not contain valid local observer state: {error}",
+            "{} does not contain valid local solstone-tmux state: {error}",
             path.display()
         ))
     })?;

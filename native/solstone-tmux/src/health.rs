@@ -72,12 +72,14 @@ impl DiagnosticCode {
     pub const fn message(self) -> &'static str {
         match self {
             Self::SetupInputInvalid => "setup input is invalid",
-            Self::SetupUnavailable => "setup is unavailable; stop the observer and retry",
-            Self::PairingFailed => "private-link pairing failed; verify the link and retry setup",
-            Self::PrivateStateInvalid => "private-link state is invalid",
-            Self::PrivateStateIo => "private-link state could not be accessed",
+            Self::SetupUnavailable => "setup is unavailable; stop solstone-tmux and try again",
+            Self::PairingFailed => {
+                "private network pairing failed; check the pairing link and try setup again"
+            }
+            Self::PrivateStateInvalid => "private network state is invalid",
+            Self::PrivateStateIo => "private network state could not be accessed",
             Self::HealthSnapshotIo => "sync health snapshot could not be written",
-            Self::BridgeUnavailable => "private-link bridge is unavailable",
+            Self::BridgeUnavailable => "the private network is unavailable",
             Self::JournalUnavailable => "paired journal is unavailable",
             Self::JournalTimeout => "paired journal request timed out",
             Self::JournalResponseTooLarge => "paired journal response exceeds the supported size",

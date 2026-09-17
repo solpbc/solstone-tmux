@@ -484,7 +484,7 @@ fn observer_join_result(result: Result<ObserverExit, JoinError>) -> ObserverExit
             exit_code: 1,
             shutdown_event: None,
             failures: vec![format!(
-                "observer task failed: {}",
+                "solstone-tmux stopped unexpectedly: {}",
                 join_error_message(error)
             )],
         },

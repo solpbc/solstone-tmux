@@ -34,7 +34,7 @@ solstone-tmux install-service
 solstone-tmux status
 ```
 
-`setup` reads one private-link pairing link from standard input.
+`setup` reads one private network pairing link from standard input.
 `install-service` activates the current user's systemd or launchd service.
 
 ## Commands
@@ -42,7 +42,7 @@ solstone-tmux status
 | Command | Purpose |
 | --- | --- |
 | `solstone-tmux run` | Run in the foreground; this is the default command |
-| `solstone-tmux setup` | Pair through one standard-input private link |
+| `solstone-tmux setup` | Pair through one private network link on standard input |
 | `solstone-tmux status` | Report service and sync health |
 | `solstone-tmux install-service` | Install and activate the user service |
 | `solstone-tmux uninstall-service` | Remove the owned user service |

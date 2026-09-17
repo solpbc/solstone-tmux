@@ -87,7 +87,7 @@ fn run() -> Result<i32, String> {
             let runtime = runtime()?;
             let runner = TokioCommandRunner;
             let binary = std::env::current_exe()
-                .map_err(|error| format!("could not resolve the observer executable: {error}"))?;
+                .map_err(|error| format!("could not find the solstone-tmux executable: {error}"))?;
             let service = ServiceController::new(platform, &environment, &runner, binary);
             runtime.block_on(async {
                 match command {

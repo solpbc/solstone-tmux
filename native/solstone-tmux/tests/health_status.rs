@@ -296,12 +296,12 @@ fn health_write_failures_use_the_health_diagnostic_and_setup_guidance_is_actiona
         assert!(
             DiagnosticCode::SetupUnavailable
                 .message()
-                .contains("stop the observer")
+                .contains("stop solstone-tmux")
         );
         assert!(
             DiagnosticCode::PairingFailed
                 .message()
-                .contains("verify the link")
+                .contains("check the pairing link")
         );
         assert_eq!(
             DiagnosticCode::JournalResponseTooLarge.as_str(),

@@ -30,7 +30,7 @@ fn production_run_holds_lock_before_config_or_observer_side_effects() {
 
     assert_eq!(second.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&second.stderr);
-    assert!(stderr.contains("another observer is already using this data root"));
+    assert!(stderr.contains("another solstone-tmux process is already using this data folder"));
     assert!(!stderr.contains("native stream name"));
     assert!(first.try_wait().expect("first run status").is_none());
 
