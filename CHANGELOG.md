@@ -6,6 +6,10 @@ Format adapted from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- `solstone-tmux setup` now confirms pairing and shows your journal's mark: two colors and two words, so you can check it matches what your journal shows.
+
 ## [2.0.3] - 2026-09-16
 
 ### Fixed

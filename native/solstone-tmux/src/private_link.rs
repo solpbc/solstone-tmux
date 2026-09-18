@@ -311,11 +311,26 @@ pub fn pairing_ceremony_identity(
     }
 }
 
+/// The spoken form of a paired journal's mark: the two chip-tint names and
+/// the two identity words, in the fixed order the mark is always read in
+/// (`vpx/design-system/journal-mark.md` § 2.3, § 8.2's `word·word` naming
+/// convention wherever text runs). `None` when the paired instance ID is not
+/// a well-formed journal ID — this never blocks pairing success, it only
+/// means the confirmation line has no mark to show.
+pub fn format_spoken_mark(jid: &str) -> Option<String> {
+    let mark = spl_core::mark::mark_from_jid(jid).ok()?;
+    let spec = mark.to_render_spec();
+    Some(format!(
+        "{}, {} · {}·{}",
+        spec.icon1.color.name, spec.icon2.color.name, spec.words[0], spec.words[1]
+    ))
+}
+
 pub async fn setup<R>(
     platform: PlatformKind,
     environment: &dyn Environment,
     input: R,
-) -> Result<(), DiagnosticCode>
+) -> Result<Option<String>, DiagnosticCode>
 where
     R: Read,
 {
@@ -327,7 +342,7 @@ pub async fn setup_with_identity<R, E>(
     environment: &dyn Environment,
     input: R,
     hostname: Result<String, E>,
-) -> Result<(), DiagnosticCode>
+) -> Result<Option<String>, DiagnosticCode>
 where
     R: Read,
     E: std::fmt::Debug,
@@ -352,7 +367,7 @@ async fn setup_with_pairer<R, E, F, Fut>(
     input: R,
     hostname: Result<String, E>,
     pairer: F,
-) -> Result<(), DiagnosticCode>
+) -> Result<Option<String>, DiagnosticCode>
 where
     R: Read,
     E: std::fmt::Debug,
@@ -370,9 +385,10 @@ where
     let (device_label, additional_fields) = pairing_ceremony_identity(platform, hostname);
     let link = read_pair_link(input)?;
     let credential = pairer(link, device_label, additional_fields).await?;
+    let spoken_mark = format_spoken_mark(&credential.instance_id);
     persist_credential(&config_root, &credential)?;
     crate::journal_version::clear_cached_version(&config_root);
-    Ok(())
+    Ok(spoken_mark)
 }
 
 pub fn acquire_private_state_lock(config_root: &Path) -> Result<File, DiagnosticCode> {

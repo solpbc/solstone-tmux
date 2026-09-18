@@ -69,7 +69,14 @@ fn run() -> Result<i32, String> {
             let runtime = runtime()?;
             let stdin = std::io::stdin();
             match runtime.block_on(private_link::setup(platform, &environment, stdin.lock())) {
-                Ok(()) => Ok(0),
+                Ok(Some(spoken_mark)) => {
+                    println!("paired. your journal's mark: {spoken_mark}");
+                    Ok(0)
+                }
+                Ok(None) => {
+                    println!("paired.");
+                    Ok(0)
+                }
                 Err(code) => {
                     emit_diagnostic(code);
                     Ok(1)

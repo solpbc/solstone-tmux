@@ -11,7 +11,8 @@ use serde_json::Value;
 use solstone_tmux::config::system_hostname;
 use solstone_tmux::paths::{PlatformKind, resolve_config_root, resolve_data_root};
 use solstone_tmux::private_link::{
-    CREDENTIALS_FILENAME, pairing_ceremony_identity, setup, setup_with_identity,
+    CREDENTIALS_FILENAME, format_spoken_mark, load_credential, pairing_ceremony_identity, setup,
+    setup_with_identity,
 };
 use spl_core::PairRequest;
 use support::FakeEnvironment;
@@ -232,6 +233,57 @@ fn assert_captured_json(body: &[u8], platform: PlatformKind) {
             .as_str()
             .is_some_and(|csr| csr.contains("BEGIN CERTIFICATE REQUEST"))
     );
+}
+
+#[test]
+fn relay_pairing_returns_the_paired_journals_spoken_mark() {
+    runtime().block_on(async {
+        let peer = RelayPairingPeer::start().await;
+        let temporary = TestDirectory::new("pairing-setup-relay-spoken-mark");
+        let (environment, _, config_root) = platform_roots(temporary.path(), PlatformKind::Linux);
+        let spoken_mark = setup(
+            PlatformKind::Linux,
+            &environment,
+            Cursor::new(peer.pair_link().to_owned()),
+        )
+        .await
+        .expect("relay pairing");
+        let persisted = load_credential(&config_root)
+            .expect("load credential")
+            .expect("credential exists");
+        assert_eq!(
+            spoken_mark,
+            format_spoken_mark(&persisted.instance_id),
+            "returned spoken mark must match the mark derived from the paired instance ID"
+        );
+        assert!(
+            spoken_mark.is_some(),
+            "relay pairing carries a well-formed journal ID"
+        );
+        peer.shutdown().await;
+    });
+}
+
+#[test]
+fn direct_pairing_without_a_well_formed_journal_id_still_succeeds_with_no_spoken_mark() {
+    runtime().block_on(async {
+        let peer = DirectPairingPeer::start().await;
+        let temporary = TestDirectory::new("pairing-setup-direct-no-spoken-mark");
+        let (environment, _, config_root) = platform_roots(temporary.path(), PlatformKind::Linux);
+        let spoken_mark = setup(
+            PlatformKind::Linux,
+            &environment,
+            Cursor::new(peer.pair_link().to_owned()),
+        )
+        .await
+        .expect("direct pairing");
+        assert_eq!(
+            spoken_mark, None,
+            "the fixture's direct-pairing instance ID is not a well-formed journal ID"
+        );
+        assert!(config_root.join(CREDENTIALS_FILENAME).is_file());
+        peer.shutdown().await;
+    });
 }
 
 fn platform_roots(base: &Path, platform: PlatformKind) -> (FakeEnvironment, PathBuf, PathBuf) {
