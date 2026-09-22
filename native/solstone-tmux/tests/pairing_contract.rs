@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
+use spl_core::pairlink::{self, ParsedPairLink};
 
 const AUTHORITY_REPOSITORY: &str = "https://github.com/solpbc/solstone-journal";
 const AUTHORITY_COMMIT: &str = "ba16c8ca55b4151430166f0e7f9b0da2d15c6f45";
@@ -136,6 +137,22 @@ fn vendored_contract_matches_provenance() {
         actual, expected_with_manifest,
         "vendored contract directory inventory differs"
     );
+}
+
+#[test]
+fn shared_pairlink_parser_admits_public_ipv4_direct_candidates() {
+    let mut blob = vec![0x04, 0x01, 192, 0, 2, 42];
+    blob.extend_from_slice(&7657_u16.to_be_bytes());
+    blob.extend_from_slice(&[0x11; 16]);
+    blob.extend_from_slice(&[0x22; 16]);
+
+    let direct = match pairlink::parse_blob(&blob).unwrap() {
+        ParsedPairLink::Direct(direct) => direct,
+        ParsedPairLink::Relay(_) => panic!("public IPv4 direct candidate parsed as relay"),
+    };
+    assert_eq!(direct.candidates.len(), 1);
+    assert_eq!(direct.candidates[0].host, "192.0.2.42");
+    assert_eq!(direct.candidates[0].port, 7657);
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {

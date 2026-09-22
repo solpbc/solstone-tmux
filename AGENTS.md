@@ -212,7 +212,7 @@ ready, renewal, and disable state before installing the next opener transport.
 then attempts its durable clear. Missing APIs and optional failures do not
 affect capture, ingest, uploads, or status; optional persistence failure is not
 the mandatory shutdown `PrivateStateIo` path. The loopback capability gate
-remains enabled: authenticated PUT is admitted only for
+remains enabled: authenticated PUT and DELETE are admitted only for
 `/app/network/api/clients/self` and `/app/link/api/clients/self`; Host,
 capability-cookie, caller Authorization, and reserved observer-header checks
 remain enforced locally with 403. No `enroll_device`; journal name/version never

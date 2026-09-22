@@ -129,7 +129,7 @@ fn relay_only_credential_starts_the_private_link_bridge() {
 }
 
 #[test]
-fn loopback_capability_gate_allows_only_authenticated_clients_self_put() {
+fn loopback_capability_gate_allows_only_authenticated_clients_self_mutations() {
     runtime().block_on(async {
         let peer = PrivateLinkPeer::start().await;
         let temporary = TestDirectory::new("bridge-capability-put");
@@ -156,9 +156,8 @@ fn loopback_capability_gate_allows_only_authenticated_clients_self_put() {
             .expect("local response");
         assert_eq!(no_capability.status(), StatusCode::FORBIDDEN);
         let wrong_capability = anonymous
-            .put(format!("{origin}/app/network/api/clients/self"))
+            .delete(format!("{origin}/app/network/api/clients/self"))
             .header("cookie", "solstone_tmux_cap=wrong")
-            .body("{}")
             .send()
             .await
             .expect("local response");
@@ -189,30 +188,65 @@ fn loopback_capability_gate_allows_only_authenticated_clients_self_put() {
         assert_eq!(admitted.status(), StatusCode::OK);
         assert_eq!(peer.requests().len(), 1);
 
+        peer.enqueue_clients_self_response(200, br#"{}"#.to_vec());
+        let deleted_network_self = authenticated
+            .delete(format!("{origin}/app/network/api/clients/self"))
+            .send()
+            .await
+            .expect("forwarded network self delete");
+        assert_eq!(deleted_network_self.status(), StatusCode::OK);
+
+        peer.enqueue_response(200, br#"{}"#.to_vec());
+        let deleted_link_self = authenticated
+            .delete(format!("{origin}/app/link/api/clients/self"))
+            .send()
+            .await
+            .expect("forwarded link self delete");
+        assert_eq!(deleted_link_self.status(), StatusCode::OK);
+
         let blocked = authenticated
-            .put(format!("{origin}/app/network/api/other"))
-            .body("{}")
+            .delete(format!("{origin}/app/network/api/other"))
             .send()
             .await
             .expect("local rejection");
         assert_eq!(blocked.status(), StatusCode::METHOD_NOT_ALLOWED);
+        let close_path = authenticated
+            .delete(format!("{origin}/app/network/api/clients/self/"))
+            .send()
+            .await
+            .expect("local rejection");
+        assert_eq!(close_path.status(), StatusCode::METHOD_NOT_ALLOWED);
         let reserved = authenticated
-            .put(format!("{origin}/app/network/api/clients/self"))
+            .delete(format!("{origin}/app/network/api/clients/self"))
             .header("authorization", "Bearer caller")
-            .body("{}")
             .send()
             .await
             .expect("local rejection");
         assert_eq!(reserved.status(), StatusCode::FORBIDDEN);
         let reserved_observer = authenticated
-            .put(format!("{origin}/app/network/api/clients/self"))
+            .delete(format!("{origin}/app/network/api/clients/self"))
             .header("x-solstone-observer", "caller")
-            .body("{}")
             .send()
             .await
             .expect("local rejection");
         assert_eq!(reserved_observer.status(), StatusCode::FORBIDDEN);
-        assert_eq!(peer.requests().len(), 1, "rejected requests reach peer");
+        let requests = peer.requests();
+        assert_eq!(requests.len(), 3, "rejected requests reach peer");
+        assert_eq!(requests[0].method(), "PUT");
+        assert_eq!(
+            requests[0].path_without_query(),
+            "/app/network/api/clients/self"
+        );
+        assert_eq!(requests[1].method(), "DELETE");
+        assert_eq!(
+            requests[1].path_without_query(),
+            "/app/network/api/clients/self"
+        );
+        assert_eq!(requests[2].method(), "DELETE");
+        assert_eq!(
+            requests[2].path_without_query(),
+            "/app/link/api/clients/self"
+        );
 
         bridge.shutdown().await;
         peer.shutdown().await;
