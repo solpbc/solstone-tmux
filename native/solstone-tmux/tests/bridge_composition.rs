@@ -16,9 +16,7 @@ use solstone_tmux::clock::{Clock, SystemClock};
 use solstone_tmux::config::DEFAULT_SOURCE;
 use solstone_tmux::health::DiagnosticCode;
 use solstone_tmux::instance_lock::InstanceLock;
-use solstone_tmux::journal::{
-    INGEST_MANIFEST_DAY_PATH, INGEST_MANIFEST_PATH, INGEST_SEGMENTS_PATH,
-};
+use solstone_tmux::journal::INGEST_SEGMENTS_PATH;
 use solstone_tmux::model::CaptureResult;
 use solstone_tmux::observer::{
     CaptureProvider, ObserverConfig, ObserverOperationError, SegmentLifecycle, ShutdownEvent,
@@ -303,14 +301,14 @@ fn journal_response_body_limit_applies_to_success_and_error_responses() {
         peer.enqueue_response(200, oversized.clone());
         let error = session
             .journal()
-            .ingest_manifest_day("20260815", DEFAULT_SOURCE)
+            .ingest_segments("20260815", DEFAULT_SOURCE)
             .await
             .expect_err("oversized successful day manifest accepted");
         assert_eq!(error.diagnostic(), DiagnosticCode::JournalResponseTooLarge);
         peer.enqueue_response(403, oversized);
         let error = session
             .journal()
-            .ingest_manifest(DEFAULT_SOURCE)
+            .ingest_segments("20260815", DEFAULT_SOURCE)
             .await
             .expect_err("oversized error manifest accepted");
         assert_eq!(error.diagnostic(), DiagnosticCode::JournalResponseTooLarge);
@@ -337,18 +335,24 @@ fn linked_device_session_composes_on_the_production_runtime_shape() {
         let session = JournalSession::start(credential, temporary.path().to_path_buf(), refresh)
             .await
             .expect("linked-device session");
-        peer.enqueue_response(200, br#"{"days":{}}"#.to_vec());
+        peer.enqueue_response(
+            200,
+            br#"{"total":0,"items":[],"protocol_version":3}"#.to_vec(),
+        );
         session
             .journal()
-            .ingest_manifest(DEFAULT_SOURCE)
+            .ingest_segments("20260815", DEFAULT_SOURCE)
             .await
-            .expect("manifest");
+            .expect("segments");
         let requests = peer
             .requests()
             .into_iter()
             .filter(|r| !r.path_without_query().starts_with("/app/network/api/"))
             .collect::<Vec<_>>();
-        assert_eq!(requests[0].path_without_query(), INGEST_MANIFEST_PATH);
+        assert_eq!(
+            requests[0].path_without_query(),
+            INGEST_SEGMENTS_PATH.replace("{day}", "20260815")
+        );
         assert_eq!(requests[0].query_param("source"), Some(DEFAULT_SOURCE));
         session.shutdown().await.expect("shutdown");
         peer.shutdown().await;
@@ -376,7 +380,7 @@ fn v3_routes_refuse_unconfined_day_values() {
         for path in [
             &format!(
                 "{}?foreign",
-                INGEST_MANIFEST_DAY_PATH.replace("{day}", "20260815")
+                INGEST_SEGMENTS_PATH.replace("{day}", "20260815")
             ),
             &format!(
                 "{}#foreign",
@@ -388,7 +392,7 @@ fn v3_routes_refuse_unconfined_day_values() {
         assert!(
             session
                 .journal()
-                .ingest_manifest_day("20260815?foreign", DEFAULT_SOURCE)
+                .ingest_segments("20260815?foreign", DEFAULT_SOURCE)
                 .await
                 .is_err()
         );
@@ -407,6 +411,7 @@ fn v3_routes_refuse_unconfined_day_values() {
 fn slow_large_multipart_preserves_capture_on_the_production_runtime() {
     runtime().block_on(async {
         let peer = PrivateLinkPeer::start().await;
+        peer.answer_uploads_with_received_descriptors();
         peer.withhold_upload_credit();
         let temporary = TestDirectory::new("bridge-multipart-backpressure-v3");
         ensure_private_directory(temporary.path()).expect("private root");
@@ -428,7 +433,6 @@ fn slow_large_multipart_preserves_capture_on_the_production_runtime() {
         .expect("session");
         let capture = temporary.path().join("capture.jsonl");
         fs::write(&capture, vec![b'x'; 1024 * 1024]).expect("capture bytes");
-        peer.enqueue_response(200, br#"{"status":"ok","segment":"143000_1"}"#.to_vec());
         let capture_polls = Arc::new(AtomicUsize::new(0));
         let capture_polled = Arc::new(Notify::new());
         let (observer_stop, observer_shutdown) = oneshot::channel();

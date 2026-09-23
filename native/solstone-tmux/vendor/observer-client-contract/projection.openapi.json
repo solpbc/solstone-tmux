@@ -126,7 +126,6 @@
               "speaker_review_unavailable",
               "speaker_sentence_missing",
               "speaker_voiceprint_busy",
-              "support_portal_failed",
               "talent_not_found",
               "talent_operation_failed",
               "talent_run_malformed",
@@ -142,6 +141,41 @@
           "error",
           "reason_code",
           "detail"
+        ],
+        "type": "object"
+      },
+      "FileDescriptor": {
+        "additionalProperties": true,
+        "properties": {
+          "disposition": {
+            "enum": [
+              "written",
+              "already_held",
+              "received_not_written"
+            ],
+            "type": "string"
+          },
+          "sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "size": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "submitted": {
+            "type": "string"
+          },
+          "written": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "submitted",
+          "written",
+          "size",
+          "sha256",
+          "disposition"
         ],
         "type": "object"
       },
@@ -236,7 +270,7 @@
   "info": {
     "description": "Generated from client_ingest_authority.json. Covers only the four Rust-served linked-device devices/ingest operations.",
     "title": "Linked-device v3 ingest client contract",
-    "version": "10.0.0",
+    "version": "12.2.0",
     "x-generated": true,
     "x-generated-by": "solstone-core-repository-contracts"
   },
@@ -295,7 +329,17 @@
                     "summary": "Duplicate segment",
                     "value": {
                       "existing_segment": "143000_1",
+                      "file_descriptors": [
+                        {
+                          "disposition": "already_held",
+                          "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+                          "size": 524288,
+                          "submitted": "audio.m4a",
+                          "written": "audio.m4a"
+                        }
+                      ],
                       "message": "All files already received",
+                      "meta": {},
                       "status": "duplicate"
                     }
                   },
@@ -303,9 +347,19 @@
                     "summary": "New segment accepted",
                     "value": {
                       "bytes": 524288,
+                      "file_descriptors": [
+                        {
+                          "disposition": "written",
+                          "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+                          "size": 524288,
+                          "submitted": "audio.m4a",
+                          "written": "audio.m4a"
+                        }
+                      ],
                       "files": [
                         "audio.m4a"
                       ],
+                      "meta": {},
                       "segment": "143000_1",
                       "status": "ok"
                     }
@@ -321,6 +375,10 @@
                       "type": "string"
                     },
                     "file_descriptors": {
+                      "description": "One custody receipt per submitted file, returned only after the journal durably recorded the upload. A device proves custody of a file when its `sha256` and `size` equal the local file's and its `disposition` is `written` or `already_held`; `received_not_written` is never custody.",
+                      "items": {
+                        "$ref": "#/components/schemas/FileDescriptor"
+                      },
                       "type": "array"
                     },
                     "files": {
@@ -402,9 +460,12 @@
                 }
               }
             },
-            "description": "Held sidecar bytes conflict.",
+            "description": "Held sidecar bytes conflict, or the device's stream binding is refused.",
             "x-reason-codes": [
-              "content_conflict"
+              "content_conflict",
+              "pairing_identity_unavailable",
+              "foreign_stream_binding",
+              "malformed_evidence_row"
             ]
           },
           "413": {
@@ -439,7 +500,10 @@
                 }
               }
             },
-            "description": "Journal write or notification failed."
+            "description": "Journal write or notification failed, or the owner removed the requested segment (`reason_code: segment_removed`, body `status: failed`). A device that knows `segment_removed` stops re-sending that segment.",
+            "x-reason-codes": [
+              "segment_removed"
+            ]
           }
         },
         "summary": "Upload one capture segment from a linked device",
@@ -450,7 +514,8 @@
     },
     "/app/devices/ingest/manifest": {
       "get": {
-        "description": "Return days with uploaded linked-device segment history.",
+        "deprecated": true,
+        "description": "Deprecated. Return days with uploaded linked-device segment history. A device proves custody from the upload response's `file_descriptors` and reads `segments/{day}` only when its own record of an upload is missing; this operation keeps answering until devices in the field no longer call it.",
         "operationId": "client.ingestManifest",
         "parameters": [
           {
@@ -559,7 +624,8 @@
     },
     "/app/devices/ingest/manifest/{day}": {
       "get": {
-        "description": "Return file names, sizes, sha256 hashes, and custody status for every segment on one day.",
+        "deprecated": true,
+        "description": "Deprecated. Return file names, sizes, sha256 hashes, and custody status for every segment on one day, the same listing `segments/{day}` returns. This operation keeps answering until devices in the field no longer call it.",
         "operationId": "client.ingestManifestDay",
         "parameters": [
           {
@@ -813,6 +879,17 @@
     }
   },
   "x-vocabularies": {
+    "FileDescriptor.disposition": {
+      "classification": "closed",
+      "id": "FileDescriptor.disposition",
+      "source_pointer": "/components/schemas/FileDescriptor/properties/disposition",
+      "unknown_value_behavior": "reject",
+      "values": [
+        "written",
+        "already_held",
+        "received_not_written"
+      ]
+    },
     "SegmentFile.status": {
       "classification": "closed",
       "id": "SegmentFile.status",

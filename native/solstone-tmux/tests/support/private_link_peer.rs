@@ -181,6 +181,7 @@ struct PeerState {
     handshake_hold: Arc<PathHold>,
     relay_access_hold: Arc<PathHold>,
     system_status_hold: Arc<PathHold>,
+    answer_uploads_with_descriptors: Arc<AtomicBool>,
     withhold_credit: Arc<AtomicBool>,
     upload_stalled: Arc<Notify>,
     current_stream: Arc<AtomicU32>,
@@ -236,6 +237,7 @@ impl PrivateLinkPeer {
             handshake_hold: Arc::new(PathHold::default()),
             relay_access_hold: Arc::new(PathHold::default()),
             system_status_hold: Arc::new(PathHold::default()),
+            answer_uploads_with_descriptors: Arc::new(AtomicBool::new(false)),
             withhold_credit: Arc::new(AtomicBool::new(false)),
             upload_stalled: Arc::new(Notify::new()),
             current_stream: Arc::new(AtomicU32::new(0)),
@@ -251,6 +253,12 @@ impl PrivateLinkPeer {
             controls,
             task,
         }
+    }
+
+    pub fn answer_uploads_with_received_descriptors(&self) {
+        self.state
+            .answer_uploads_with_descriptors
+            .store(true, Ordering::SeqCst);
     }
 
     pub fn credential(&self) -> Credential {
@@ -801,8 +809,8 @@ async fn handle_carrier(
                         let is_system_status = path.as_deref() == Some("/api/system/status");
                         let is_clients_self = path.as_deref() == Some("/app/network/api/clients/self");
                         let is_relay_access = path.as_deref() == Some("/app/network/api/relay/access");
-                        if let (Some(request), false) = (parsed, is_system_status) {
-                            lock(&state.requests).push(request);
+                        if let (Some(request), false) = (&parsed, is_system_status) {
+                            lock(&state.requests).push(request.clone());
                         }
                         state.request_count.fetch_add(1, Ordering::SeqCst);
                         if is_clients_self {
@@ -826,7 +834,77 @@ async fn handle_carrier(
                         } else if is_system_status {
                             state.system_status_hold.wait_if_held().await;
                         }
-                        let response = if is_system_status {
+                        let is_upload = parsed
+                            .as_ref()
+                            .map(|req| {
+                                req.method() == "POST"
+                                    && req.path_without_query() == "/app/devices/ingest"
+                            })
+                            .unwrap_or(false);
+                        let response = if is_upload {
+                            if let Some(queued) = lock(&state.responses).pop_front() {
+                                queued
+                            } else if state.answer_uploads_with_descriptors.load(Ordering::SeqCst) {
+                                if let Some(ref req) = parsed {
+                                    let content_type = req.header("content-type").unwrap_or_default();
+                                    if let Ok(parts) = parse_multipart_parts(content_type, req.body()) {
+                                        let mut segment_key = "143000_1".to_string();
+                                        if let Some(env_part) = parts.first()
+                                            && let Ok(val) =
+                                                serde_json::from_slice::<serde_json::Value>(env_part.body)
+                                            && let Some(seg) =
+                                                val.get("segment").and_then(|s| s.as_str())
+                                        {
+                                            segment_key = seg.to_string();
+                                        }
+                                        let mut descriptors = Vec::new();
+                                        for part in &parts[1..] {
+                                            let filename = part.filename.clone().unwrap_or_default();
+                                            let digest = spl_core::ca::sha256(part.body);
+                                            let sha256_hex =
+                                                solstone_tmux::journal_version::hex_encode(&digest);
+                                            descriptors.push(serde_json::json!({
+                                                "submitted": filename,
+                                                "written": filename,
+                                                "size": part.body.len(),
+                                                "sha256": sha256_hex,
+                                                "disposition": "written",
+                                            }));
+                                        }
+                                        let body = serde_json::json!({
+                                            "status": "ok",
+                                            "segment": segment_key,
+                                            "file_descriptors": descriptors,
+                                        });
+                                        PeerResponse::Structured {
+                                            status: 200,
+                                            body: serde_json::to_vec(&body).unwrap_or_default(),
+                                            delay: None,
+                                        }
+                                    } else {
+                                        PeerResponse::Structured {
+                                            status: 400,
+                                            body: Vec::new(),
+                                            delay: None,
+                                        }
+                                    }
+                                } else {
+                                    PeerResponse::Structured {
+                                        status: 400,
+                                        body: Vec::new(),
+                                        delay: None,
+                                    }
+                                }
+                            } else {
+                                lock(&state.responses)
+                                    .pop_front()
+                                    .unwrap_or(PeerResponse::Structured {
+                                        status: 500,
+                                        body: Vec::new(),
+                                        delay: None,
+                                    })
+                            }
+                        } else if is_system_status {
                             lock(&state.system_status_responses)
                                 .back()
                                 .cloned()
@@ -1014,4 +1092,87 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
     }
+}
+
+#[derive(Clone, Debug)]
+pub struct MultipartPart<'a> {
+    pub name: String,
+    pub filename: Option<String>,
+    pub content_type: String,
+    pub body: &'a [u8],
+}
+
+pub fn parse_multipart_parts<'a>(
+    content_type: &str,
+    body: &'a [u8],
+) -> Result<Vec<MultipartPart<'a>>, String> {
+    let boundary = content_type
+        .split(';')
+        .map(str::trim)
+        .find_map(|parameter| parameter.strip_prefix("boundary="))
+        .map(|boundary| boundary.trim_matches('"'))
+        .filter(|boundary| !boundary.is_empty())
+        .ok_or_else(|| "multipart boundary is missing".to_owned())?;
+    let opening = format!("--{boundary}\r\n");
+    let separator = format!("\r\n--{boundary}");
+    let mut remainder = body
+        .strip_prefix(opening.as_bytes())
+        .ok_or_else(|| "multipart body has no opening boundary".to_owned())?;
+    let mut parts = Vec::new();
+    loop {
+        let separator_offset = find_bytes(remainder, separator.as_bytes())
+            .ok_or_else(|| "multipart part has no closing boundary".to_owned())?;
+        parts.push(parse_multipart_part(&remainder[..separator_offset])?);
+        remainder = &remainder[separator_offset + separator.len()..];
+        if remainder == b"--\r\n" {
+            return Ok(parts);
+        }
+        remainder = remainder
+            .strip_prefix(b"\r\n")
+            .ok_or_else(|| "multipart boundary is malformed".to_owned())?;
+    }
+}
+
+pub fn parse_multipart_part(bytes: &[u8]) -> Result<MultipartPart<'_>, String> {
+    let headers_end = find_bytes(bytes, b"\r\n\r\n")
+        .ok_or_else(|| "multipart part has no header separator".to_owned())?;
+    let headers = std::str::from_utf8(&bytes[..headers_end])
+        .map_err(|_| "multipart headers are not UTF-8".to_owned())?;
+    let disposition = headers
+        .split("\r\n")
+        .find_map(|header| header.strip_prefix("Content-Disposition: "))
+        .ok_or_else(|| "multipart part has no content disposition".to_owned())?;
+    let content_type = headers
+        .split("\r\n")
+        .find_map(|header| header.strip_prefix("Content-Type: "))
+        .ok_or_else(|| "multipart part has no content type".to_owned())?
+        .to_owned();
+    if !disposition.starts_with("form-data") {
+        return Err("multipart disposition is not form-data".to_owned());
+    }
+    let name = multipart_disposition_parameter(disposition, "name")
+        .ok_or_else(|| "multipart part has no name".to_owned())?;
+    Ok(MultipartPart {
+        name,
+        filename: multipart_disposition_parameter(disposition, "filename"),
+        content_type,
+        body: &bytes[headers_end + b"\r\n\r\n".len()..],
+    })
+}
+
+pub fn multipart_disposition_parameter(disposition: &str, parameter: &str) -> Option<String> {
+    disposition.split(';').skip(1).find_map(|attribute| {
+        let (name, value) = attribute.trim().split_once('=')?;
+        (name == parameter).then(|| value.trim_matches('"').to_owned())
+    })
+}
+
+pub fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    (!needle.is_empty())
+        .then(|| {
+            haystack
+                .windows(needle.len())
+                .position(|window| window == needle)
+        })
+        .flatten()
 }

@@ -13,14 +13,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 use solstone_tmux::clock::{Clock, TestClock};
 use solstone_tmux::config::{CONFIG_FILENAME, RuntimeConfig};
 use solstone_tmux::health::{DiagnosticCode, HEALTH_FILENAME, HealthWriter};
 use solstone_tmux::instance_lock::InstanceLock;
-use solstone_tmux::journal::{
-    INGEST_MANIFEST_DAY_PATH, INGEST_MANIFEST_PATH, INGEST_PATH, INGEST_SEGMENTS_PATH,
-};
+use solstone_tmux::journal::INGEST_PATH;
 use solstone_tmux::model::CaptureResult;
 use solstone_tmux::observer::{
     CaptureProvider, ObserverConfig, ObserverOperationError, SegmentManager, ShutdownEvent,
@@ -93,10 +90,11 @@ fn linked_device_sweep_diagnostics_are_actionable() {
 }
 
 #[test]
-fn linked_device_sweep_uses_exactly_the_four_v3_operations_without_legacy_headers() {
+fn linked_device_sweep_uses_exactly_the_v3_upload_operation_without_legacy_headers() {
     linked_device_runtime().block_on(async {
         let peer = PrivateLinkPeer::start().await;
-        let temporary = TestDirectory::new("linked-device-four-v3-operations");
+        peer.answer_uploads_with_received_descriptors();
+        let temporary = TestDirectory::new("linked-device-upload-operation");
         ensure_private_directory(temporary.path()).expect("private root");
         let lock = InstanceLock::acquire(temporary.path()).expect("acquire lock");
         let candidate = create_linked_device_candidate(&temporary);
@@ -109,11 +107,10 @@ fn linked_device_sweep_uses_exactly_the_four_v3_operations_without_legacy_header
             lock.identity().clone(),
         );
         let mut session =
-            JournalSession::start(credential, temporary.path().to_path_buf(), refresh)
+            JournalSession::start(credential.clone(), temporary.path().to_path_buf(), refresh)
                 .await
                 .expect("linked-device session");
-        enqueue_v3_success_chain(&peer);
-        let mut scheduler = linked_device_scheduler(&temporary, -1);
+        let mut scheduler = linked_device_scheduler(&temporary, -1, &credential);
 
         let summary = scheduler
             .run_sweep(&mut session, linked_device_no_shutdown())
@@ -134,18 +131,7 @@ fn linked_device_sweep_uses_exactly_the_four_v3_operations_without_legacy_header
                     request.path_without_query().to_owned()
                 ))
                 .collect::<Vec<_>>(),
-            vec![
-                ("POST".to_owned(), INGEST_PATH.to_owned()),
-                ("GET".to_owned(), INGEST_MANIFEST_PATH.to_owned()),
-                (
-                    "GET".to_owned(),
-                    INGEST_MANIFEST_DAY_PATH.replace("{day}", LINKED_DEVICE_DAY),
-                ),
-                (
-                    "GET".to_owned(),
-                    INGEST_SEGMENTS_PATH.replace("{day}", LINKED_DEVICE_DAY),
-                ),
-            ],
+            vec![("POST".to_owned(), INGEST_PATH.to_owned())],
             "the real mTLS peer must observe no registration or extra liveness request",
         );
         for request in &ingest_requests {
@@ -176,6 +162,7 @@ fn linked_device_sweep_uses_exactly_the_four_v3_operations_without_legacy_header
 fn linked_device_sweep_sends_the_configured_source_on_every_v3_operation() {
     linked_device_runtime().block_on(async {
         let peer = PrivateLinkPeer::start().await;
+        peer.answer_uploads_with_received_descriptors();
         let temporary = TestDirectory::new("linked-device-configured-source");
         ensure_private_directory(temporary.path()).expect("private root");
         let lock = InstanceLock::acquire(temporary.path()).expect("acquire lock");
@@ -189,11 +176,11 @@ fn linked_device_sweep_sends_the_configured_source_on_every_v3_operation() {
             lock.identity().clone(),
         );
         let mut session =
-            JournalSession::start(credential, temporary.path().to_path_buf(), refresh)
+            JournalSession::start(credential.clone(), temporary.path().to_path_buf(), refresh)
                 .await
                 .expect("linked-device session");
-        enqueue_v3_success_chain(&peer);
-        let mut scheduler = linked_device_scheduler_with_source(&temporary, -1, "studio");
+        let mut scheduler =
+            linked_device_scheduler_with_source(&temporary, -1, "studio", &credential);
 
         let summary = scheduler
             .run_sweep(&mut session, linked_device_no_shutdown())
@@ -214,18 +201,7 @@ fn linked_device_sweep_sends_the_configured_source_on_every_v3_operation() {
                     request.path_without_query().to_owned()
                 ))
                 .collect::<Vec<_>>(),
-            vec![
-                ("POST".to_owned(), INGEST_PATH.to_owned()),
-                ("GET".to_owned(), INGEST_MANIFEST_PATH.to_owned()),
-                (
-                    "GET".to_owned(),
-                    INGEST_MANIFEST_DAY_PATH.replace("{day}", LINKED_DEVICE_DAY),
-                ),
-                (
-                    "GET".to_owned(),
-                    INGEST_SEGMENTS_PATH.replace("{day}", LINKED_DEVICE_DAY),
-                ),
-            ],
+            vec![("POST".to_owned(), INGEST_PATH.to_owned())],
             "the real mTLS peer must observe no registration or extra liveness request",
         );
         for request in &requests {
@@ -252,7 +228,7 @@ fn linked_device_403_and_426_retain_every_candidate_for_each_operation_class() {
             (426, "protocol_version_legacy"),
             (426, "protocol_version_future"),
         ] {
-            for operation in ["upload", "manifest", "manifest_day", "segments"] {
+            for operation in ["upload"] {
                 let peer = PrivateLinkPeer::start().await;
                 let temporary = TestDirectory::new(&format!(
                     "linked-device-{status}-{reason_code}-{operation}"
@@ -269,14 +245,14 @@ fn linked_device_403_and_426_retain_every_candidate_for_each_operation_class() {
                     lock.identity().clone(),
                 );
                 let mut session = JournalSession::start(
-                    credential,
+                    credential.clone(),
                     temporary.path().to_path_buf(),
                     refresh,
                 )
                 .await
                 .expect("linked-device session");
                 enqueue_v3_rejection(&peer, operation, status, reason_code);
-                let mut scheduler = linked_device_scheduler(&temporary, 0);
+                let mut scheduler = linked_device_scheduler(&temporary, 0, &credential);
 
                 let summary = scheduler
                     .run_sweep(&mut session, linked_device_no_shutdown())
@@ -318,6 +294,522 @@ fn linked_device_403_and_426_retain_every_candidate_for_each_operation_class() {
                 peer.shutdown().await;
             }
         }
+    });
+}
+
+#[test]
+fn peer_hashes_uploaded_parts_and_acks() {
+    linked_device_runtime().block_on(async {
+        let peer = PrivateLinkPeer::start().await;
+        peer.answer_uploads_with_received_descriptors();
+        let temporary = TestDirectory::new("peer-hashes-uploaded-parts");
+        ensure_private_directory(temporary.path()).expect("private root");
+        let lock = InstanceLock::acquire(temporary.path()).expect("acquire lock");
+        let candidate = create_linked_device_candidate(&temporary);
+        assert!(candidate.exists());
+        let credential = peer.credential();
+        let refresh = solstone_tmux::journal_version::VersionRefreshState::new(
+            temporary.path().to_path_buf(),
+            temporary.path().to_path_buf(),
+            credential.instance_id.clone(),
+            &credential.ca_fp_prefix,
+            lock.identity().clone(),
+        );
+        let mut session =
+            JournalSession::start(credential.clone(), temporary.path().to_path_buf(), refresh)
+                .await
+                .expect("linked-device session");
+        let mut scheduler = linked_device_scheduler(&temporary, -1, &credential);
+
+        let summary = scheduler
+            .run_sweep(&mut session, linked_device_no_shutdown())
+            .await;
+
+        assert_eq!(summary.attempted, 1);
+        assert_eq!(summary.custodied, 1);
+
+        let ack_path = temporary
+            .path()
+            .join("sync-ledger")
+            .join(LINKED_DEVICE_DAY)
+            .join(LINKED_DEVICE_STREAM)
+            .join(LINKED_DEVICE_SEGMENT)
+            .join("ack.json");
+        let ack_bytes = fs::read(&ack_path).expect("read ack.json");
+        let ack_json: serde_json::Value =
+            serde_json::from_slice(&ack_bytes).expect("parse ack.json");
+        let digest = spl_core::ca::sha256(LINKED_DEVICE_BYTES);
+        let expected_sha256 = solstone_tmux::journal_version::hex_encode(&digest);
+        assert_eq!(ack_json["files"][0]["sha256"], expected_sha256);
+
+        let requests = peer.requests();
+        for req in requests {
+            assert!(
+                !req.path_without_query().contains("manifest"),
+                "no manifest request"
+            );
+        }
+
+        session.shutdown().await.expect("shutdown session");
+        peer.shutdown().await;
+    });
+}
+
+#[test]
+fn segment_removed_keeps_the_segment_and_continues() {
+    linked_device_runtime().block_on(async {
+        let peer = PrivateLinkPeer::start().await;
+        peer.answer_uploads_with_received_descriptors();
+        let temporary = TestDirectory::new("segment-removed-continues");
+        ensure_private_directory(temporary.path()).expect("private root");
+        let lock = InstanceLock::acquire(temporary.path()).expect("acquire lock");
+
+        let cand1 = create_linked_device_candidate(&temporary);
+        let cand2 = temporary
+            .path()
+            .join("captures")
+            .join(LINKED_DEVICE_DAY)
+            .join(LINKED_DEVICE_STREAM)
+            .join("120100_300")
+            .join(LINKED_DEVICE_FILE);
+        fs::create_dir_all(cand2.parent().unwrap()).unwrap();
+        fs::write(&cand2, b"second candidate\n").unwrap();
+
+        let credential = peer.credential();
+        let refresh = solstone_tmux::journal_version::VersionRefreshState::new(
+            temporary.path().to_path_buf(),
+            temporary.path().to_path_buf(),
+            credential.instance_id.clone(),
+            &credential.ca_fp_prefix,
+            lock.identity().clone(),
+        );
+        let mut session =
+            JournalSession::start(credential.clone(), temporary.path().to_path_buf(), refresh)
+                .await
+                .expect("linked-device session");
+
+        peer.enqueue_response(
+            500,
+            serde_json::to_vec(&serde_json::json!({
+                "status": "failed",
+                "error": "Ingest request failed",
+                "reason_code": "segment_removed",
+                "detail": "the owner removed this segment"
+            }))
+            .unwrap(),
+        );
+
+        let clock = Arc::new(test_clock());
+        let scheduler = SyncScheduler::new(
+            temporary.path().to_path_buf(),
+            solstone_tmux::name::derive_component(LINKED_DEVICE_STREAM).expect("derived stream"),
+            solstone_tmux::config::DEFAULT_SOURCE.to_owned(),
+            -1,
+            Arc::clone(&clock) as Arc<dyn Clock>,
+            SyncWake::default(),
+            solstone_tmux::sync::JournalIdentity {
+                instance_id: credential.instance_id.clone(),
+                ca_fp_prefix_hex: solstone_tmux::journal_version::hex_encode(
+                    &credential.ca_fp_prefix,
+                ),
+                pairing_generation_hex: solstone_tmux::journal_version::hex_encode(
+                    &solstone_tmux::post_connect::compute_pairing_generation(
+                        &credential.client_cert_pem,
+                    ),
+                ),
+            },
+        );
+
+        let (activity, _rx) = watch::channel(SyncActivity::Idle);
+        let health = HealthWriter::new(temporary.path().to_path_buf(), &lock);
+        let (stop, shutdown) = watch::channel(false);
+        let mut scheduler = scheduler.with_observability(activity, health);
+
+        let task = tokio::spawn(async move {
+            scheduler.run_with_shutdown(&mut session, shutdown).await;
+            (scheduler, session)
+        });
+
+        let health_json = wait_for_idle_snapshot(temporary.path()).await;
+        assert_eq!(health_json["state"], "connected");
+        assert!(health_json["last_error_code"].is_null());
+        assert_eq!(health_json["recent_error_count"], 0);
+        assert_eq!(health_json["pending_segments"], 1);
+
+        assert!(cand1.exists(), "removed segment still on disk");
+        assert!(cand2.exists());
+
+        stop.send_replace(true);
+        let (_scheduler, mut session) = task.await.expect("join task");
+
+        clock.set_wall(clock.wall_now() + time::Duration::hours(48));
+        clock.set_monotonic(clock.monotonic_now() + Duration::from_secs(48 * 3600));
+
+        let before_requests = peer.requests().len();
+
+        let mut fresh_scheduler = SyncScheduler::new(
+            temporary.path().to_path_buf(),
+            solstone_tmux::name::derive_component(LINKED_DEVICE_STREAM).expect("derived stream"),
+            solstone_tmux::config::DEFAULT_SOURCE.to_owned(),
+            -1,
+            Arc::clone(&clock) as Arc<dyn Clock>,
+            SyncWake::default(),
+            solstone_tmux::sync::JournalIdentity {
+                instance_id: credential.instance_id.clone(),
+                ca_fp_prefix_hex: solstone_tmux::journal_version::hex_encode(
+                    &credential.ca_fp_prefix,
+                ),
+                pairing_generation_hex: solstone_tmux::journal_version::hex_encode(
+                    &solstone_tmux::post_connect::compute_pairing_generation(
+                        &credential.client_cert_pem,
+                    ),
+                ),
+            },
+        );
+
+        let summary = fresh_scheduler
+            .run_sweep(&mut session, linked_device_no_shutdown())
+            .await;
+        assert_eq!(summary.attempted, 0);
+
+        let all_requests = peer.requests();
+        let sweep2_requests = &all_requests[before_requests..];
+        for req in sweep2_requests {
+            if req.method() == "POST" && req.path_without_query() == INGEST_PATH {
+                let env = captured_upload_envelope(req);
+                let seg = env["segment"].as_str().unwrap_or_default();
+                assert_ne!(
+                    seg, "120000_300",
+                    "removed segment must not be uploaded again"
+                );
+                assert_ne!(
+                    seg, "120100_300",
+                    "acked segment must not be uploaded again"
+                );
+            }
+        }
+
+        assert!(
+            cand1.parent().unwrap().is_dir(),
+            "local directory for removed segment is still present on disk"
+        );
+        assert!(cand1.exists(), "removed segment file still on disk");
+        assert!(
+            cand2.parent().unwrap().is_dir(),
+            "local directory for acked segment is still present on disk"
+        );
+        assert!(cand2.exists(), "acked segment file still on disk");
+
+        session.shutdown().await.expect("shutdown session");
+        peer.shutdown().await;
+    });
+}
+
+#[test]
+fn journal_write_failed_ends_the_sweep() {
+    linked_device_runtime().block_on(async {
+        let peer = PrivateLinkPeer::start().await;
+        let temporary = TestDirectory::new("journal-write-failed");
+        ensure_private_directory(temporary.path()).expect("private root");
+        let lock = InstanceLock::acquire(temporary.path()).expect("acquire lock");
+        let _cand1 = create_linked_device_candidate(&temporary);
+        let cand2 = temporary
+            .path()
+            .join("captures")
+            .join(LINKED_DEVICE_DAY)
+            .join(LINKED_DEVICE_STREAM)
+            .join("120100_300")
+            .join(LINKED_DEVICE_FILE);
+        fs::create_dir_all(cand2.parent().unwrap()).unwrap();
+        fs::write(&cand2, b"second\n").unwrap();
+
+        let credential = peer.credential();
+        let refresh = solstone_tmux::journal_version::VersionRefreshState::new(
+            temporary.path().to_path_buf(),
+            temporary.path().to_path_buf(),
+            credential.instance_id.clone(),
+            &credential.ca_fp_prefix,
+            lock.identity().clone(),
+        );
+        let mut session =
+            JournalSession::start(credential.clone(), temporary.path().to_path_buf(), refresh)
+                .await
+                .expect("linked-device session");
+
+        peer.enqueue_response(
+            500,
+            serde_json::to_vec(&serde_json::json!({
+                "status": "failed",
+                "error": "Ingest request failed",
+                "reason_code": "journal_write_failed",
+                "detail": "journal write failed"
+            }))
+            .unwrap(),
+        );
+
+        let (activity, _rx) = watch::channel(SyncActivity::Idle);
+        let health = HealthWriter::new(temporary.path().to_path_buf(), &lock);
+        let (stop, shutdown) = watch::channel(false);
+        let mut scheduler = linked_device_scheduler(&temporary, -1, &credential)
+            .with_observability(activity, health);
+
+        let task = tokio::spawn(async move {
+            scheduler.run_with_shutdown(&mut session, shutdown).await;
+            session.shutdown().await.expect("shutdown session");
+        });
+
+        let health_json = wait_for_idle_snapshot(temporary.path()).await;
+        assert_eq!(health_json["state"], "offline");
+
+        stop.send_replace(true);
+        task.await.expect("join task");
+        peer.shutdown().await;
+    });
+}
+
+#[test]
+fn content_conflict_follows_the_hourly_bound() {
+    linked_device_runtime().block_on(async {
+        let peer = PrivateLinkPeer::start().await;
+        peer.answer_uploads_with_received_descriptors();
+        let temporary = TestDirectory::new("content-conflict-bound");
+        ensure_private_directory(temporary.path()).expect("private root");
+        let lock = InstanceLock::acquire(temporary.path()).expect("acquire lock");
+        let _cand1 = create_linked_device_candidate(&temporary);
+        let cand2 = temporary
+            .path()
+            .join("captures")
+            .join(LINKED_DEVICE_DAY)
+            .join(LINKED_DEVICE_STREAM)
+            .join("120100_300")
+            .join(LINKED_DEVICE_FILE);
+        fs::create_dir_all(cand2.parent().unwrap()).unwrap();
+        fs::write(&cand2, b"second\n").unwrap();
+
+        let credential = peer.credential();
+        let refresh = solstone_tmux::journal_version::VersionRefreshState::new(
+            temporary.path().to_path_buf(),
+            temporary.path().to_path_buf(),
+            credential.instance_id.clone(),
+            &credential.ca_fp_prefix,
+            lock.identity().clone(),
+        );
+        let mut session =
+            JournalSession::start(credential.clone(), temporary.path().to_path_buf(), refresh)
+                .await
+                .expect("linked-device session");
+
+        peer.enqueue_response(
+            409,
+            serde_json::to_vec(&serde_json::json!({
+                "status": "failed",
+                "error": "Ingest request failed",
+                "reason_code": "content_conflict",
+                "detail": "held bytes conflict"
+            }))
+            .unwrap(),
+        );
+
+        let clock = Arc::new(test_clock());
+        let mut scheduler = SyncScheduler::new(
+            temporary.path().to_path_buf(),
+            solstone_tmux::name::derive_component(LINKED_DEVICE_STREAM).expect("derived stream"),
+            solstone_tmux::config::DEFAULT_SOURCE.to_owned(),
+            -1,
+            Arc::clone(&clock) as Arc<dyn Clock>,
+            SyncWake::default(),
+            solstone_tmux::sync::JournalIdentity {
+                instance_id: credential.instance_id.clone(),
+                ca_fp_prefix_hex: solstone_tmux::journal_version::hex_encode(
+                    &credential.ca_fp_prefix,
+                ),
+                pairing_generation_hex: solstone_tmux::journal_version::hex_encode(
+                    &solstone_tmux::post_connect::compute_pairing_generation(
+                        &credential.client_cert_pem,
+                    ),
+                ),
+            },
+        );
+
+        let summary = scheduler
+            .run_sweep(&mut session, linked_device_no_shutdown())
+            .await;
+
+        assert_eq!(summary.attempted, 2);
+        assert_eq!(summary.custodied, 1);
+        assert_eq!(summary.failure, None);
+
+        clock.set_wall(clock.wall_now() + time::Duration::minutes(50));
+        clock.set_monotonic(clock.monotonic_now() + Duration::from_secs(50 * 60));
+        let requests_before = peer.requests().len();
+        let summary_early = scheduler
+            .run_sweep(&mut session, linked_device_no_shutdown())
+            .await;
+        assert_eq!(summary_early.attempted, 0);
+        assert_eq!(summary_early.custodied, 0);
+        assert_eq!(
+            peer.requests().len(),
+            requests_before,
+            "no upload before 1h"
+        );
+
+        clock.set_wall(clock.wall_now() + time::Duration::minutes(20));
+        clock.set_monotonic(clock.monotonic_now() + Duration::from_secs(20 * 60));
+        let summary_late = scheduler
+            .run_sweep(&mut session, linked_device_no_shutdown())
+            .await;
+        assert_eq!(summary_late.attempted, 1);
+        assert_eq!(summary_late.custodied, 1);
+
+        session.shutdown().await.expect("shutdown session");
+        peer.shutdown().await;
+    });
+}
+
+#[test]
+fn linked_device_required_ends_the_sweep_without_a_per_segment_bound() {
+    linked_device_runtime().block_on(async {
+        for (status, reason_code) in [
+            (403, "linked_device_required"),
+            (426, "protocol_version_legacy"),
+            (426, "protocol_version_future"),
+        ] {
+            let peer = PrivateLinkPeer::start().await;
+            let temporary = TestDirectory::new(&format!("dev-req-{status}-{reason_code}"));
+            ensure_private_directory(temporary.path()).expect("private root");
+            let lock = InstanceLock::acquire(temporary.path()).expect("acquire lock");
+            let cand1 = create_linked_device_candidate(&temporary);
+            let cand2 = temporary
+                .path()
+                .join("captures")
+                .join(LINKED_DEVICE_DAY)
+                .join(LINKED_DEVICE_STREAM)
+                .join("120100_300")
+                .join(LINKED_DEVICE_FILE);
+            fs::create_dir_all(cand2.parent().unwrap()).unwrap();
+            fs::write(&cand2, b"second\n").unwrap();
+
+            let credential = peer.credential();
+            let refresh = solstone_tmux::journal_version::VersionRefreshState::new(
+                temporary.path().to_path_buf(),
+                temporary.path().to_path_buf(),
+                credential.instance_id.clone(),
+                &credential.ca_fp_prefix,
+                lock.identity().clone(),
+            );
+            let mut session =
+                JournalSession::start(credential.clone(), temporary.path().to_path_buf(), refresh)
+                    .await
+                    .expect("linked-device session");
+
+            peer.enqueue_response(
+                status,
+                serde_json::to_vec(&serde_json::json!({
+                    "status": "failed",
+                    "error": "linked device rejected",
+                    "reason_code": reason_code,
+                    "detail": "device refusal"
+                }))
+                .unwrap(),
+            );
+
+            let mut scheduler = linked_device_scheduler(&temporary, 0, &credential);
+            let summary = scheduler
+                .run_sweep(&mut session, linked_device_no_shutdown())
+                .await;
+
+            assert_eq!(summary.attempted, 1, "{reason_code}");
+            assert_eq!(summary.custodied, 0);
+            assert_eq!(
+                summary.failure,
+                Some(solstone_tmux::sync::SyncFailureClass::Contract)
+            );
+
+            let ingest_posts = peer
+                .requests()
+                .into_iter()
+                .filter(|req| req.path_without_query() == INGEST_PATH)
+                .count();
+            assert_eq!(ingest_posts, 1, "exactly one POST");
+            assert!(cand1.exists());
+            assert!(cand2.exists());
+
+            let state1 = temporary
+                .path()
+                .join("sync-ledger")
+                .join(LINKED_DEVICE_DAY)
+                .join(LINKED_DEVICE_STREAM)
+                .join(LINKED_DEVICE_SEGMENT)
+                .join("state.json");
+            let state2 = temporary
+                .path()
+                .join("sync-ledger")
+                .join(LINKED_DEVICE_DAY)
+                .join(LINKED_DEVICE_STREAM)
+                .join("120100_300")
+                .join("state.json");
+            assert!(
+                !state1.exists(),
+                "no per-segment state.json for device refusal"
+            );
+            assert!(!state2.exists());
+
+            session.shutdown().await.expect("shutdown session");
+            peer.shutdown().await;
+        }
+    });
+}
+
+#[test]
+fn non_json_server_error_ends_the_sweep() {
+    linked_device_runtime().block_on(async {
+        let peer = PrivateLinkPeer::start().await;
+        let temporary = TestDirectory::new("non-json-server-error");
+        ensure_private_directory(temporary.path()).expect("private root");
+        let lock = InstanceLock::acquire(temporary.path()).expect("acquire lock");
+        let _cand1 = create_linked_device_candidate(&temporary);
+        let cand2 = temporary
+            .path()
+            .join("captures")
+            .join(LINKED_DEVICE_DAY)
+            .join(LINKED_DEVICE_STREAM)
+            .join("120100_300")
+            .join(LINKED_DEVICE_FILE);
+        fs::create_dir_all(cand2.parent().unwrap()).unwrap();
+        fs::write(&cand2, b"second\n").unwrap();
+
+        let credential = peer.credential();
+        let refresh = solstone_tmux::journal_version::VersionRefreshState::new(
+            temporary.path().to_path_buf(),
+            temporary.path().to_path_buf(),
+            credential.instance_id.clone(),
+            &credential.ca_fp_prefix,
+            lock.identity().clone(),
+        );
+        let mut session =
+            JournalSession::start(credential.clone(), temporary.path().to_path_buf(), refresh)
+                .await
+                .expect("linked-device session");
+
+        peer.enqueue_response(500, b"not-json".to_vec());
+
+        let (activity, _rx) = watch::channel(SyncActivity::Idle);
+        let health = HealthWriter::new(temporary.path().to_path_buf(), &lock);
+        let (stop, shutdown) = watch::channel(false);
+        let mut scheduler = linked_device_scheduler(&temporary, -1, &credential)
+            .with_observability(activity, health);
+
+        let task = tokio::spawn(async move {
+            scheduler.run_with_shutdown(&mut session, shutdown).await;
+            session.shutdown().await.expect("shutdown session");
+        });
+
+        let health_json = wait_for_idle_snapshot(temporary.path()).await;
+        assert_eq!(health_json["state"], "offline");
+
+        stop.send_replace(true);
+        task.await.expect("join task");
+        peer.shutdown().await;
     });
 }
 
@@ -561,11 +1053,16 @@ fn create_linked_device_candidate(temporary: &TestDirectory) -> PathBuf {
     path
 }
 
-fn linked_device_scheduler(temporary: &TestDirectory, retention_days: i64) -> SyncScheduler {
+fn linked_device_scheduler(
+    temporary: &TestDirectory,
+    retention_days: i64,
+    credential: &spl_transport::credential::Credential,
+) -> SyncScheduler {
     linked_device_scheduler_with_source(
         temporary,
         retention_days,
         solstone_tmux::config::DEFAULT_SOURCE,
+        credential,
     )
 }
 
@@ -573,14 +1070,23 @@ fn linked_device_scheduler_with_source(
     temporary: &TestDirectory,
     retention_days: i64,
     source: &str,
+    credential: &spl_transport::credential::Credential,
 ) -> SyncScheduler {
+    let identity = solstone_tmux::sync::JournalIdentity {
+        instance_id: credential.instance_id.clone(),
+        ca_fp_prefix_hex: solstone_tmux::journal_version::hex_encode(&credential.ca_fp_prefix),
+        pairing_generation_hex: solstone_tmux::journal_version::hex_encode(
+            &solstone_tmux::post_connect::compute_pairing_generation(&credential.client_cert_pem),
+        ),
+    };
     SyncScheduler::new(
-        temporary.path().join("captures"),
+        temporary.path().to_path_buf(),
         solstone_tmux::name::derive_component(LINKED_DEVICE_STREAM).expect("derived stream"),
         source.to_owned(),
         retention_days,
         Arc::new(test_clock()),
         SyncWake::default(),
+        identity,
     )
 }
 
@@ -604,107 +1110,11 @@ fn linked_device_no_shutdown() -> watch::Receiver<bool> {
     receiver
 }
 
-fn enqueue_v3_success_chain(peer: &PrivateLinkPeer) {
-    let digest = linked_device_digest();
-    let mut upload = v3_projection_example("upload");
-    upload["segment"] = Value::String(LINKED_DEVICE_SEGMENT.to_owned());
-    peer.enqueue_response(200, serde_json::to_vec(&upload).expect("upload response"));
-
-    let mut manifest = v3_projection_example("manifest");
-    manifest["days"] = json!({ LINKED_DEVICE_DAY: { "segments": 1 } });
-    peer.enqueue_response(
-        200,
-        serde_json::to_vec(&manifest).expect("manifest response"),
-    );
-
-    let mut manifest_day = v3_projection_example("manifest_day");
-    manifest_day["day"] = Value::String(LINKED_DEVICE_DAY.to_owned());
-    manifest_day["segments"] = json!({
-        LINKED_DEVICE_SEGMENT: {
-            "files": [linked_device_remote_file(&digest)]
-        }
-    });
-    peer.enqueue_response(
-        200,
-        serde_json::to_vec(&manifest_day).expect("day manifest response"),
-    );
-
-    let mut segments = v3_projection_example("segments");
-    segments["items"] = json!([{
-        "key": LINKED_DEVICE_SEGMENT,
-        "observed": true,
-        "files": [linked_device_remote_file(&digest)]
-    }]);
-    segments["total"] = json!(1);
-    peer.enqueue_response(
-        200,
-        serde_json::to_vec(&segments).expect("segments response"),
-    );
-}
-
 fn enqueue_v3_rejection(peer: &PrivateLinkPeer, operation: &str, status: u16, reason_code: &str) {
     match operation {
         "upload" => peer.enqueue_response(status, rejection_response(reason_code)),
-        "manifest" => {
-            enqueue_v3_upload(peer);
-            peer.enqueue_response(status, rejection_response(reason_code));
-        }
-        "manifest_day" => {
-            enqueue_v3_upload(peer);
-            enqueue_v3_manifest(peer);
-            peer.enqueue_response(status, rejection_response(reason_code));
-        }
-        "segments" => {
-            enqueue_v3_upload(peer);
-            enqueue_v3_manifest(peer);
-            enqueue_v3_manifest_day(peer);
-            peer.enqueue_response(status, rejection_response(reason_code));
-        }
         _ => panic!("unknown v3 operation: {operation}"),
     }
-}
-
-fn enqueue_v3_upload(peer: &PrivateLinkPeer) {
-    let mut upload = v3_projection_example("upload");
-    upload["segment"] = Value::String(LINKED_DEVICE_SEGMENT.to_owned());
-    peer.enqueue_response(200, serde_json::to_vec(&upload).expect("upload response"));
-}
-
-fn enqueue_v3_manifest(peer: &PrivateLinkPeer) {
-    let mut manifest = v3_projection_example("manifest");
-    manifest["days"] = json!({ LINKED_DEVICE_DAY: { "segments": 1 } });
-    peer.enqueue_response(
-        200,
-        serde_json::to_vec(&manifest).expect("manifest response"),
-    );
-}
-
-fn enqueue_v3_manifest_day(peer: &PrivateLinkPeer) {
-    let digest = linked_device_digest();
-    let mut manifest_day = v3_projection_example("manifest_day");
-    manifest_day["day"] = Value::String(LINKED_DEVICE_DAY.to_owned());
-    manifest_day["segments"] = json!({
-        LINKED_DEVICE_SEGMENT: {
-            "files": [linked_device_remote_file(&digest)]
-        }
-    });
-    peer.enqueue_response(
-        200,
-        serde_json::to_vec(&manifest_day).expect("day manifest response"),
-    );
-}
-
-fn linked_device_remote_file(digest: &str) -> Value {
-    json!({
-        "name": LINKED_DEVICE_FILE,
-        "size": LINKED_DEVICE_BYTES.len(),
-        "sha256": digest,
-        "status": "present"
-    })
-}
-
-fn linked_device_digest() -> String {
-    format!("{:x}", Sha256::digest(LINKED_DEVICE_BYTES))
 }
 
 fn rejection_response(reason_code: &str) -> Vec<u8> {
@@ -716,47 +1126,9 @@ fn rejection_response(reason_code: &str) -> Vec<u8> {
     .expect("rejection response")
 }
 
-fn v3_projection_example(name: &str) -> Value {
-    let projection: Value = serde_json::from_slice(
-        &fs::read(
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("vendor/observer-client-contract/projection.openapi.json"),
-        )
-        .expect("read projection"),
-    )
-    .expect("parse projection");
-    match name {
-        "upload" => projection["paths"][INGEST_PATH]["post"]["responses"]["200"]
-            ["content"]["application/json"]["examples"]["normal"]["value"]
-            .clone(),
-        "manifest" => projection["paths"][INGEST_MANIFEST_PATH]["get"]
-            ["responses"]["200"]["content"]["application/json"]["example"]
-            .clone(),
-        "manifest_day" => projection["paths"][INGEST_MANIFEST_DAY_PATH]["get"]
-            ["responses"]["200"]["content"]["application/json"]["example"]
-            .clone(),
-        "segments" => projection["paths"][INGEST_SEGMENTS_PATH]["get"]
-            ["responses"]["200"]["content"]["application/json"]["example"]
-            .clone(),
-        _ => panic!("unknown projection example: {name}"),
-    }
-}
-
 fn v3_paths_through(operation: &str) -> Vec<String> {
     match operation {
         "upload" => vec![INGEST_PATH.to_owned()],
-        "manifest" => vec![INGEST_PATH.to_owned(), INGEST_MANIFEST_PATH.to_owned()],
-        "manifest_day" => vec![
-            INGEST_PATH.to_owned(),
-            INGEST_MANIFEST_PATH.to_owned(),
-            INGEST_MANIFEST_DAY_PATH.replace("{day}", LINKED_DEVICE_DAY),
-        ],
-        "segments" => vec![
-            INGEST_PATH.to_owned(),
-            INGEST_MANIFEST_PATH.to_owned(),
-            INGEST_MANIFEST_DAY_PATH.replace("{day}", LINKED_DEVICE_DAY),
-            INGEST_SEGMENTS_PATH.replace("{day}", LINKED_DEVICE_DAY),
-        ],
         _ => panic!("unknown v3 operation: {operation}"),
     }
 }
@@ -801,6 +1173,22 @@ async fn wait_for_diagnostic(data_root: &Path, diagnostic: DiagnosticCode) -> Va
     })
     .await
     .expect("diagnostic health timeout")
+}
+
+async fn wait_for_idle_snapshot(data_root: &Path) -> Value {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Ok(bytes) = fs::read(data_root.join(HEALTH_FILENAME))
+                && let Ok(snapshot) = serde_json::from_slice::<Value>(&bytes)
+                && snapshot["sync_in_progress"] == false
+            {
+                return snapshot;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("idle health timeout")
 }
 
 async fn wait_until(context: &str, predicate: impl Fn() -> bool) {

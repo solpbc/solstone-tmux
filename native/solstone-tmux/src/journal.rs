@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 sol pbc
 
-use std::collections::BTreeMap;
 use std::fmt;
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
@@ -30,8 +29,6 @@ use crate::storage::open_regular_readonly;
 use crate::sync::SyncInstrumentation;
 
 pub const INGEST_PATH: &str = "/app/devices/ingest";
-pub const INGEST_MANIFEST_PATH: &str = "/app/devices/ingest/manifest";
-pub const INGEST_MANIFEST_DAY_PATH: &str = "/app/devices/ingest/manifest/{day}";
 pub const INGEST_SEGMENTS_PATH: &str = "/app/devices/ingest/segments/{day}";
 pub const SYSTEM_STATUS_PATH: &str = "/api/system/status";
 pub const CLIENTS_SELF_PATH: &str = "/app/network/api/clients/self";
@@ -56,6 +53,7 @@ pub enum JournalStatusClass {
 pub enum JournalReasonCode {
     AuthKeyInvalid,
     AuthRequired,
+    ContentConflict,
     FeatureUnavailable,
     IngestContractInvalid,
     IngestNoFiles,
@@ -69,14 +67,39 @@ pub enum JournalReasonCode {
     PlRevoked,
     ProtocolVersionFuture,
     ProtocolVersionLegacy,
+    SegmentRemoved,
     SettingsOperationFailed,
 }
 
 impl JournalReasonCode {
-    fn parse(value: &str) -> Option<Self> {
+    pub fn wire_str(&self) -> &'static str {
+        match self {
+            Self::AuthKeyInvalid => "auth_key_invalid",
+            Self::AuthRequired => "auth_required",
+            Self::ContentConflict => "content_conflict",
+            Self::FeatureUnavailable => "feature_unavailable",
+            Self::IngestContractInvalid => "ingest_contract_invalid",
+            Self::IngestNoFiles => "ingest_no_files",
+            Self::IngestSidecarConflict => "ingest_sidecar_conflict",
+            Self::IngestStorageFailed => "ingest_storage_failed",
+            Self::InvalidDay => "invalid_day",
+            Self::InvalidSegmentOrStream => "invalid_segment_or_stream",
+            Self::LocalRequestOnly => "local_request_only",
+            Self::MissingRequiredField => "missing_required_field",
+            Self::LinkedDeviceRequired => "linked_device_required",
+            Self::PlRevoked => "pl_revoked",
+            Self::ProtocolVersionFuture => "protocol_version_future",
+            Self::ProtocolVersionLegacy => "protocol_version_legacy",
+            Self::SegmentRemoved => "segment_removed",
+            Self::SettingsOperationFailed => "settings_operation_failed",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
         match value {
             "auth_key_invalid" => Some(Self::AuthKeyInvalid),
             "auth_required" => Some(Self::AuthRequired),
+            "content_conflict" => Some(Self::ContentConflict),
             "feature_unavailable" => Some(Self::FeatureUnavailable),
             "ingest_contract_invalid" => Some(Self::IngestContractInvalid),
             "ingest_no_files" => Some(Self::IngestNoFiles),
@@ -90,6 +113,7 @@ impl JournalReasonCode {
             "pl_revoked" => Some(Self::PlRevoked),
             "protocol_version_future" => Some(Self::ProtocolVersionFuture),
             "protocol_version_legacy" => Some(Self::ProtocolVersionLegacy),
+            "segment_removed" => Some(Self::SegmentRemoved),
             "settings_operation_failed" => Some(Self::SettingsOperationFailed),
             _ => None,
         }
@@ -101,6 +125,7 @@ pub struct JournalError {
     diagnostic: DiagnosticCode,
     status_class: Option<JournalStatusClass>,
     reason_code: Option<JournalReasonCode>,
+    http_status: Option<u16>,
 }
 
 impl JournalError {
@@ -116,11 +141,16 @@ impl JournalError {
         self.reason_code
     }
 
+    pub fn http_status(self) -> Option<u16> {
+        self.http_status
+    }
+
     fn local(diagnostic: DiagnosticCode) -> Self {
         Self {
             diagnostic,
             status_class: None,
             reason_code: None,
+            http_status: None,
         }
     }
 }
@@ -158,19 +188,72 @@ pub enum UploadStatus {
     Failed,
 }
 
-#[derive(Deserialize)]
-struct UploadResponse {
-    status: UploadStatus,
-    #[serde(default)]
-    segment: Option<String>,
-    #[serde(default)]
-    existing_segment: Option<String>,
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ReceiptFault {
+    DescriptorsAbsent,
+    MalformedDescriptor,
+    DuplicateSubmitted,
+    MissingDescriptor,
+    ExtraDescriptor,
+    Sha256Mismatch,
+    Sha256Encoding,
+    SizeMismatch,
+    UnknownDisposition,
+    MissingDisposition,
+    ReceivedNotWritten,
+    UploadNotAcknowledged,
+}
+
+impl ReceiptFault {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::DescriptorsAbsent => "descriptors_absent",
+            Self::MalformedDescriptor => "malformed_descriptor",
+            Self::DuplicateSubmitted => "duplicate_submitted",
+            Self::MissingDescriptor => "missing_descriptor",
+            Self::ExtraDescriptor => "extra_descriptor",
+            Self::Sha256Mismatch => "sha256_mismatch",
+            Self::Sha256Encoding => "sha256_encoding",
+            Self::SizeMismatch => "size_mismatch",
+            Self::UnknownDisposition => "unknown_disposition",
+            Self::MissingDisposition => "missing_disposition",
+            Self::ReceivedNotWritten => "received_not_written",
+            Self::UploadNotAcknowledged => "upload_not_acknowledged",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AcknowledgedFile {
+    pub submitted: String,
+    pub written: String,
+    pub size: u64,
+    pub sha256: String,
+    pub disposition: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Receipt {
+    Absent,
+    Invalid(ReceiptFault),
+    Valid(Vec<AcknowledgedFile>),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ParsedDescriptor {
+    pub submitted: String,
+    pub written: String,
+    pub size: u64,
+    pub sha256: String,
+    pub disposition: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct UploadResult {
     pub status: UploadStatus,
     pub authoritative_key: Option<String>,
+    pub descriptors: Option<Result<Vec<ParsedDescriptor>, ReceiptFault>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -178,28 +261,6 @@ pub struct LocalFile {
     pub name: String,
     pub size: u64,
     pub sha256: String,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
-pub struct IngestManifest {
-    pub days: BTreeMap<String, ManifestDaySummary>,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
-pub struct ManifestDaySummary {
-    pub segments: usize,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
-pub struct IngestDayManifest {
-    pub version: u64,
-    pub day: String,
-    pub segments: BTreeMap<String, ManifestSegment>,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
-pub struct ManifestSegment {
-    pub files: Vec<SegmentFile>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
@@ -223,6 +284,7 @@ pub struct SegmentFile {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 pub struct SegmentItem {
     pub key: String,
+    #[serde(default)]
     pub observed: bool,
     pub files: Vec<SegmentFile>,
     #[serde(default)]
@@ -525,52 +587,6 @@ impl JournalClient {
         decode_upload_response(&body)
     }
 
-    pub async fn ingest_manifest(&self, source: &str) -> Result<IngestManifest, JournalError> {
-        let response = self
-            .ingest_request(Method::GET, INGEST_MANIFEST_PATH, source)?
-            .send()
-            .await
-            .map_err(|error| {
-                JournalError::local(request_diagnostic(
-                    &error,
-                    DiagnosticCode::JournalUnavailable,
-                ))
-            })?;
-        let status = response.status();
-        let body = collect_response_body(response).await?;
-        if status != StatusCode::OK {
-            return Err(classify_error_response(status.as_u16(), &body));
-        }
-        decode_manifest_response(&body)
-    }
-
-    pub async fn ingest_manifest_day(
-        &self,
-        day: &str,
-        source: &str,
-    ) -> Result<IngestDayManifest, JournalError> {
-        if !valid_day(day) {
-            return Err(JournalError::local(DiagnosticCode::LocalSegmentInvalid));
-        }
-        let path = INGEST_MANIFEST_DAY_PATH.replace("{day}", day);
-        let response = self
-            .ingest_request(Method::GET, &path, source)?
-            .send()
-            .await
-            .map_err(|error| {
-                JournalError::local(request_diagnostic(
-                    &error,
-                    DiagnosticCode::JournalUnavailable,
-                ))
-            })?;
-        let status = response.status();
-        let body = collect_response_body(response).await?;
-        if status != StatusCode::OK {
-            return Err(classify_error_response(status.as_u16(), &body));
-        }
-        decode_manifest_day_response(&body, day)
-    }
-
     pub async fn ingest_segments(
         &self,
         day: &str,
@@ -735,6 +751,70 @@ pub(crate) async fn collect_response_body_limited(
     Ok(body)
 }
 
+#[derive(Deserialize)]
+struct UploadResponse {
+    status: UploadStatus,
+    #[serde(default)]
+    segment: Option<String>,
+    #[serde(default)]
+    existing_segment: Option<String>,
+    #[serde(default)]
+    file_descriptors: Option<serde_json::Value>,
+}
+
+fn parse_descriptor_shape(val: &serde_json::Value) -> Result<Vec<ParsedDescriptor>, ReceiptFault> {
+    let items = val.as_array().ok_or(ReceiptFault::MalformedDescriptor)?;
+    let mut descriptors = Vec::with_capacity(items.len());
+    for item in items {
+        let obj = item.as_object().ok_or(ReceiptFault::MalformedDescriptor)?;
+        let submitted = obj
+            .get("submitted")
+            .and_then(|v| v.as_str())
+            .ok_or(ReceiptFault::MalformedDescriptor)?;
+        let written = obj
+            .get("written")
+            .and_then(|v| v.as_str())
+            .ok_or(ReceiptFault::MalformedDescriptor)?;
+        let size = obj
+            .get("size")
+            .and_then(|v| v.as_u64())
+            .ok_or(ReceiptFault::MalformedDescriptor)?;
+        let sha256_val = obj
+            .get("sha256")
+            .and_then(|v| v.as_str())
+            .ok_or(ReceiptFault::MalformedDescriptor)?;
+
+        if sha256_val.len() != 64 || !sha256_val.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Err(ReceiptFault::MalformedDescriptor);
+        }
+        if sha256_val.chars().any(|c| c.is_ascii_uppercase()) {
+            return Err(ReceiptFault::Sha256Encoding);
+        }
+
+        let disposition_val = obj
+            .get("disposition")
+            .ok_or(ReceiptFault::MissingDisposition)?;
+        let disposition = disposition_val
+            .as_str()
+            .ok_or(ReceiptFault::MalformedDescriptor)?;
+        if disposition != "written"
+            && disposition != "already_held"
+            && disposition != "received_not_written"
+        {
+            return Err(ReceiptFault::UnknownDisposition);
+        }
+
+        descriptors.push(ParsedDescriptor {
+            submitted: submitted.to_owned(),
+            written: written.to_owned(),
+            size,
+            sha256: sha256_val.to_owned(),
+            disposition: disposition.to_owned(),
+        });
+    }
+    Ok(descriptors)
+}
+
 pub fn decode_upload_response(body: &[u8]) -> Result<UploadResult, JournalError> {
     let response = serde_json::from_slice::<UploadResponse>(body)
         .map_err(|_| JournalError::local(DiagnosticCode::JournalContractInvalid))?;
@@ -743,19 +823,85 @@ pub fn decode_upload_response(body: &[u8]) -> Result<UploadResult, JournalError>
         UploadStatus::Duplicate => required_key(response.existing_segment)?,
         UploadStatus::Conflict | UploadStatus::Failed => None,
     };
+    let descriptors = response.file_descriptors.and_then(|val| {
+        if val.is_null() {
+            return None;
+        }
+        Some(parse_descriptor_shape(&val))
+    });
     Ok(UploadResult {
         status: response.status,
         authoritative_key,
+        descriptors,
     })
 }
 
-pub fn decode_manifest_response(body: &[u8]) -> Result<IngestManifest, JournalError> {
-    let response = serde_json::from_slice::<IngestManifest>(body)
-        .map_err(|_| JournalError::local(DiagnosticCode::JournalContractInvalid))?;
-    if response.days.keys().any(|day| !valid_day(day)) {
-        return Err(JournalError::local(DiagnosticCode::JournalContractInvalid));
+pub fn assess_receipt(result: &UploadResult, local_files: &[LocalFile]) -> Receipt {
+    if matches!(result.status, UploadStatus::Conflict | UploadStatus::Failed) {
+        return Receipt::Invalid(ReceiptFault::UploadNotAcknowledged);
     }
-    Ok(response)
+    let Some(descriptors_res) = &result.descriptors else {
+        return Receipt::Absent;
+    };
+    let descriptors = match descriptors_res {
+        Ok(descriptors) => descriptors,
+        Err(fault) => return Receipt::Invalid(*fault),
+    };
+
+    let mut seen_submitted = std::collections::HashSet::new();
+    for d in descriptors {
+        if !seen_submitted.insert(d.submitted.as_str()) {
+            return Receipt::Invalid(ReceiptFault::DuplicateSubmitted);
+        }
+    }
+
+    if descriptors
+        .iter()
+        .any(|d| d.disposition == "received_not_written")
+    {
+        return Receipt::Invalid(ReceiptFault::ReceivedNotWritten);
+    }
+
+    let local_by_name: std::collections::HashMap<&str, &LocalFile> =
+        local_files.iter().map(|f| (f.name.as_str(), f)).collect();
+
+    if descriptors.len() > local_files.len() {
+        return Receipt::Invalid(ReceiptFault::ExtraDescriptor);
+    }
+    if descriptors.len() < local_files.len() {
+        return Receipt::Invalid(ReceiptFault::MissingDescriptor);
+    }
+
+    for d in descriptors {
+        if !local_by_name.contains_key(d.submitted.as_str()) {
+            return Receipt::Invalid(ReceiptFault::ExtraDescriptor);
+        }
+    }
+    for local in local_files {
+        if !seen_submitted.contains(local.name.as_str()) {
+            return Receipt::Invalid(ReceiptFault::MissingDescriptor);
+        }
+    }
+
+    let mut acknowledged = Vec::with_capacity(descriptors.len());
+    for d in descriptors {
+        let local = local_by_name[d.submitted.as_str()];
+        if d.size != local.size {
+            return Receipt::Invalid(ReceiptFault::SizeMismatch);
+        }
+        if d.sha256 != local.sha256 {
+            return Receipt::Invalid(ReceiptFault::Sha256Mismatch);
+        }
+        acknowledged.push(AcknowledgedFile {
+            submitted: d.submitted.clone(),
+            written: d.written.clone(),
+            size: d.size,
+            sha256: d.sha256.clone(),
+            disposition: d.disposition.clone(),
+        });
+    }
+
+    Receipt::Valid(acknowledged)
 }
 
 pub fn decode_system_status_response(body: &[u8]) -> Result<String, JournalError> {
@@ -774,29 +920,6 @@ pub fn decode_system_status_response(body: &[u8]) -> Result<String, JournalError
         return Err(JournalError::local(DiagnosticCode::JournalContractInvalid));
     }
     Ok(response.version.current)
-}
-
-pub fn decode_manifest_day_response(
-    body: &[u8],
-    requested_day: &str,
-) -> Result<IngestDayManifest, JournalError> {
-    if !valid_day(requested_day) {
-        return Err(JournalError::local(DiagnosticCode::LocalSegmentInvalid));
-    }
-    let response = serde_json::from_slice::<IngestDayManifest>(body)
-        .map_err(|_| JournalError::local(DiagnosticCode::JournalContractInvalid))?;
-    if response.day != requested_day
-        || response.segments.keys().any(|key| !valid_component(key))
-        || response.segments.values().any(|segment| {
-            segment
-                .files
-                .iter()
-                .any(|file| file.name.is_empty() || !valid_sha256(&file.sha256))
-        })
-    {
-        return Err(JournalError::local(DiagnosticCode::JournalContractInvalid));
-    }
-    Ok(response)
 }
 
 pub fn decode_segments_response(body: &[u8]) -> Result<SegmentsEnvelope, JournalError> {
@@ -834,6 +957,7 @@ pub fn classify_error_response(status: u16, body: &[u8]) -> JournalError {
         diagnostic,
         status_class: Some(status_class),
         reason_code,
+        http_status: Some(status),
     }
 }
 
@@ -1032,11 +1156,4 @@ fn valid_day(day: &str) -> bool {
 
 fn valid_component(value: &str) -> bool {
     derive_component(value).is_ok_and(|derived| derived.as_str() == value)
-}
-
-fn valid_sha256(value: &str) -> bool {
-    value.len() == 64
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
 }

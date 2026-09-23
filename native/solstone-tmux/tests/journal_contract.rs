@@ -10,8 +10,7 @@ use solstone_tmux::config::DEFAULT_SOURCE;
 use solstone_tmux::health::DiagnosticCode;
 use solstone_tmux::instance_lock::InstanceLock;
 use solstone_tmux::journal::{
-    INGEST_MANIFEST_DAY_PATH, INGEST_MANIFEST_PATH, INGEST_PATH, INGEST_SEGMENTS_PATH,
-    MAX_MULTIPART_PART_BYTES, UploadStatus, decode_manifest_day_response, decode_manifest_response,
+    INGEST_PATH, INGEST_SEGMENTS_PATH, MAX_MULTIPART_PART_BYTES, UploadStatus,
     decode_segments_response, decode_upload_response,
 };
 use solstone_tmux::paths::ensure_private_directory;
@@ -21,7 +20,7 @@ use solstone_tmux::private_link::{
 };
 use solstone_tmux::sync::JournalSession;
 use support::TestDirectory;
-use support::private_link_peer::{PeerRequest, PrivateLinkPeer};
+use support::private_link_peer::{PeerRequest, PrivateLinkPeer, parse_multipart_parts};
 
 const DAY: &str = "20260815";
 const SEGMENT: &str = "143000_1";
@@ -55,18 +54,6 @@ fn v3_operations_use_projection_examples_and_exact_multipart_envelope() {
             .ingest_upload(DAY, SEGMENT, vec![first, second], DEFAULT_SOURCE)
             .await
             .expect("upload");
-        peer.enqueue_response(200, projection_example("manifest"));
-        session
-            .journal()
-            .ingest_manifest(DEFAULT_SOURCE)
-            .await
-            .expect("root manifest");
-        peer.enqueue_response(200, projection_example("manifest_day"));
-        session
-            .journal()
-            .ingest_manifest_day(DAY, DEFAULT_SOURCE)
-            .await
-            .expect("day manifest");
         peer.enqueue_response(200, projection_example("segments"));
         session
             .journal()
@@ -79,15 +66,10 @@ fn v3_operations_use_projection_examples_and_exact_multipart_envelope() {
             .into_iter()
             .filter(|r| !r.path_without_query().starts_with("/app/network/api/"))
             .collect::<Vec<_>>();
-        assert_eq!(requests.len(), 4);
+        assert_eq!(requests.len(), 2);
         assert_exact_multipart(&requests[0], &["first.jsonl", "second.jsonl"]);
-        assert_eq!(requests[1].path_without_query(), INGEST_MANIFEST_PATH);
         assert_eq!(
-            requests[2].path_without_query(),
-            INGEST_MANIFEST_DAY_PATH.replace("{day}", DAY)
-        );
-        assert_eq!(
-            requests[3].path_without_query(),
+            requests[1].path_without_query(),
             INGEST_SEGMENTS_PATH.replace("{day}", DAY)
         );
         for request in &requests {
@@ -134,7 +116,7 @@ fn unrecognized_source_reason_code_is_a_generic_journal_rejection() {
         );
         let error = session
             .journal()
-            .ingest_manifest(DEFAULT_SOURCE)
+            .ingest_segments(DAY, DEFAULT_SOURCE)
             .await
             .expect_err("source rejection accepted");
         assert_eq!(error.diagnostic(), DiagnosticCode::JournalRejected);
@@ -145,14 +127,7 @@ fn unrecognized_source_reason_code_is_a_generic_journal_rejection() {
 }
 
 #[test]
-fn malformed_v3_manifest_and_listing_payloads_are_rejected() {
-    assert_contract_error(decode_manifest_response(
-        br#"{"days":{"not-a-day":{"segments":1}}}"#,
-    ));
-    assert_contract_error(decode_manifest_day_response(
-        br#"{"version":1,"day":"20260816","segments":{}}"#,
-        DAY,
-    ));
+fn malformed_v3_listing_payloads_are_rejected() {
     let legacy_version = PROTOCOL_VERSION_NUMBER.saturating_sub(1);
     assert_contract_error(decode_segments_response(
         &serde_json::to_vec(&serde_json::json!({
@@ -350,13 +325,6 @@ fn assert_exact_multipart(request: &PeerRequest, submitted: &[&str]) {
         .unwrap_or_else(|error| panic!("invalid multipart body: {error}"));
 }
 
-struct MultipartPart<'a> {
-    name: String,
-    filename: Option<String>,
-    content_type: String,
-    body: &'a [u8],
-}
-
 fn assert_exact_multipart_body(
     content_type: &str,
     body: &[u8],
@@ -433,81 +401,6 @@ fn assert_exact_multipart_body(
     Ok(())
 }
 
-fn parse_multipart_parts<'a>(
-    content_type: &str,
-    body: &'a [u8],
-) -> Result<Vec<MultipartPart<'a>>, String> {
-    let boundary = content_type
-        .split(';')
-        .map(str::trim)
-        .find_map(|parameter| parameter.strip_prefix("boundary="))
-        .map(|boundary| boundary.trim_matches('"'))
-        .filter(|boundary| !boundary.is_empty())
-        .ok_or_else(|| "multipart boundary is missing".to_owned())?;
-    let opening = format!("--{boundary}\r\n");
-    let separator = format!("\r\n--{boundary}");
-    let mut remainder = body
-        .strip_prefix(opening.as_bytes())
-        .ok_or_else(|| "multipart body has no opening boundary".to_owned())?;
-    let mut parts = Vec::new();
-    loop {
-        let separator_offset = find_bytes(remainder, separator.as_bytes())
-            .ok_or_else(|| "multipart part has no closing boundary".to_owned())?;
-        parts.push(parse_multipart_part(&remainder[..separator_offset])?);
-        remainder = &remainder[separator_offset + separator.len()..];
-        if remainder == b"--\r\n" {
-            return Ok(parts);
-        }
-        remainder = remainder
-            .strip_prefix(b"\r\n")
-            .ok_or_else(|| "multipart boundary is malformed".to_owned())?;
-    }
-}
-
-fn parse_multipart_part(bytes: &[u8]) -> Result<MultipartPart<'_>, String> {
-    let headers_end = find_bytes(bytes, b"\r\n\r\n")
-        .ok_or_else(|| "multipart part has no header separator".to_owned())?;
-    let headers = std::str::from_utf8(&bytes[..headers_end])
-        .map_err(|_| "multipart headers are not UTF-8".to_owned())?;
-    let disposition = headers
-        .split("\r\n")
-        .find_map(|header| header.strip_prefix("Content-Disposition: "))
-        .ok_or_else(|| "multipart part has no content disposition".to_owned())?;
-    let content_type = headers
-        .split("\r\n")
-        .find_map(|header| header.strip_prefix("Content-Type: "))
-        .ok_or_else(|| "multipart part has no content type".to_owned())?
-        .to_owned();
-    if !disposition.starts_with("form-data") {
-        return Err("multipart disposition is not form-data".to_owned());
-    }
-    let name = multipart_disposition_parameter(disposition, "name")
-        .ok_or_else(|| "multipart part has no name".to_owned())?;
-    Ok(MultipartPart {
-        name,
-        filename: multipart_disposition_parameter(disposition, "filename"),
-        content_type,
-        body: &bytes[headers_end + b"\r\n\r\n".len()..],
-    })
-}
-
-fn multipart_disposition_parameter(disposition: &str, parameter: &str) -> Option<String> {
-    disposition.split(';').skip(1).find_map(|attribute| {
-        let (name, value) = attribute.trim().split_once('=')?;
-        (name == parameter).then(|| value.trim_matches('"').to_owned())
-    })
-}
-
-fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    (!needle.is_empty())
-        .then(|| {
-            haystack
-                .windows(needle.len())
-                .position(|window| window == needle)
-        })
-        .flatten()
-}
-
 fn projection_example(name: &str) -> Vec<u8> {
     let projection: Value = serde_json::from_slice(
         &fs::read(
@@ -521,14 +414,6 @@ fn projection_example(name: &str) -> Vec<u8> {
         "upload_normal" => {
             &projection["paths"][INGEST_PATH]["post"]["responses"]["200"]["content"]["application/json"]
                 ["examples"]["normal"]["value"]
-        }
-        "manifest" => {
-            &projection["paths"][INGEST_MANIFEST_PATH]["get"]["responses"]["200"]["content"]["application/json"]
-                ["example"]
-        }
-        "manifest_day" => {
-            &projection["paths"][INGEST_MANIFEST_DAY_PATH]["get"]["responses"]["200"]["content"]["application/json"]
-                ["example"]
         }
         "segments" => {
             &projection["paths"][INGEST_SEGMENTS_PATH]["get"]["responses"]["200"]["content"]["application/json"]

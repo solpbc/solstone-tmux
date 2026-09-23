@@ -7,7 +7,6 @@
 
 mod support;
 
-use solstone_tmux::config::DEFAULT_SOURCE;
 use solstone_tmux::health::{DiagnosticCode, HealthState, SyncFacts};
 use solstone_tmux::instance_lock::InstanceLock;
 use solstone_tmux::journal::classify_error_response;
@@ -59,7 +58,7 @@ fn server_errors_without_an_auth_reason_read_offline() {
             let mut session = start_session(peer.credential(), &temporary).await;
             peer.enqueue_response(status, body);
 
-            let code = manifest_failure(&mut session).await;
+            let code = status_failure(&mut session).await;
             assert_eq!(code, DiagnosticCode::JournalUnavailable, "HTTP {status}");
             assert_eq!(state_after(code), HealthState::Offline, "HTTP {status}");
 
@@ -79,7 +78,7 @@ fn a_journal_that_is_down_reads_offline() {
         let temporary = TestDirectory::new("failure-health-down");
         let mut session = start_session(credential, &temporary).await;
 
-        let code = manifest_failure(&mut session).await;
+        let code = status_failure(&mut session).await;
         assert_eq!(code, DiagnosticCode::JournalUnavailable);
         assert_eq!(state_after(code), HealthState::Offline);
 
@@ -98,9 +97,9 @@ fn a_rejection_for_another_reason_is_not_revoked() {
             let peer = PrivateLinkPeer::start().await;
             let temporary = TestDirectory::new(&format!("failure-health-{reason_code}"));
             let mut session = start_session(peer.credential(), &temporary).await;
-            peer.enqueue_response(status, rejection(reason_code));
+            peer.enqueue_system_status_response(status, rejection(reason_code));
 
-            let code = manifest_failure(&mut session).await;
+            let code = status_failure(&mut session).await;
             assert_eq!(code, DiagnosticCode::JournalRejected, "{reason_code}");
             assert_eq!(state_after(code), HealthState::Offline, "{reason_code}");
 
@@ -121,9 +120,9 @@ fn an_auth_refusal_reads_revoked() {
             let peer = PrivateLinkPeer::start().await;
             let temporary = TestDirectory::new(&format!("failure-health-{reason_code}"));
             let mut session = start_session(peer.credential(), &temporary).await;
-            peer.enqueue_response(status, rejection(reason_code));
+            peer.enqueue_system_status_response(status, rejection(reason_code));
 
-            let code = manifest_failure(&mut session).await;
+            let code = status_failure(&mut session).await;
             assert_eq!(code, DiagnosticCode::JournalRevoked, "{reason_code}");
             assert_eq!(state_after(code), HealthState::Revoked, "{reason_code}");
 
@@ -158,7 +157,7 @@ fn only_an_access_denied_handshake_reads_revoked() {
             let temporary = TestDirectory::new(&format!("failure-health-alert-{alert}"));
             let mut session = start_session(peer.credential(), &temporary).await;
 
-            let code = manifest_failure(&mut session).await;
+            let code = status_failure(&mut session).await;
             assert_eq!(code, expected_code, "alert {alert}");
             assert_eq!(state_after(code), expected_state, "alert {alert}");
 
@@ -228,14 +227,15 @@ async fn start_session(credential: Credential, temporary: &TestDirectory) -> Jou
     session
 }
 
-async fn manifest_failure(session: &mut JournalSession) -> DiagnosticCode {
-    match session.manifest(DEFAULT_SOURCE).await {
+async fn status_failure(session: &mut JournalSession) -> DiagnosticCode {
+    match session.system_status().await {
         Err(
-            SyncOperationError::RetainCandidate(code)
-            | SyncOperationError::EndSweepDiagnostic(_, code),
-        ) => code,
+            SyncOperationError::RetainCandidate { diagnostic, .. }
+            | SyncOperationError::EndSweepDiagnostic(_, diagnostic),
+        ) => diagnostic,
+        Err(SyncOperationError::TerminalKeep) => DiagnosticCode::JournalRejected,
         Err(SyncOperationError::EndSweep(failure)) => panic!("undiagnosed failure {failure:?}"),
-        Ok(_) => panic!("failed manifest was accepted"),
+        Ok(_) => panic!("failed status was accepted"),
     }
 }
 

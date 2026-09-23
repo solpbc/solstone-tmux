@@ -2,7 +2,7 @@
   "audited_consumer_revisions": [
     {
       "consumer_identifier": "solstone-windows",
-      "revision": "19c972c4fea775176cea6421ac8b87f3bb20ab42"
+      "revision": "f276076e3554c75d75cbd3616644f46d831c0d90"
     },
     {
       "consumer_identifier": "solstone-linux",
@@ -14,10 +14,11 @@
     }
   ],
   "bundle_schema_identity": "solstone.client-ingest-contract-bundle.schema.v1",
-  "bundle_semver": "10.0.0",
+  "bundle_semver": "12.2.0",
   "client_protocol_version": 3,
   "component_closure": [
     "Error",
+    "FileDescriptor",
     "SegmentFile",
     "SegmentItem",
     "SegmentsEnvelope"
@@ -30,7 +31,7 @@
   "files": [
     {
       "path": "consumer-audit.json",
-      "sha256": "dde0a1b0abaff079a39eca2748ce05201003436763bc9d531fe893976b6092c5"
+      "sha256": "9d8944fc5f873e858e3dab9f9251ded9e840cec0ef2284f510f70a560026d57b"
     },
     {
       "path": "fixtures/wire-behavior.json",
@@ -38,7 +39,7 @@
     },
     {
       "path": "projection.openapi.json",
-      "sha256": "cc3d33694f3093f706e6844e832912d52c52e0abdd32f72c631429fe6450adb5"
+      "sha256": "2fc55fce7f9f7cb5b5dd2da13299acd371231caad9e4d877c6846ca6269c7198"
     },
     {
       "path": "vectors.json",
@@ -51,7 +52,7 @@
       "id": "openapi.client_ingest_authority",
       "path": "core/crates/solstone-core-repository-contracts/src/contracts/client_ingest_authority.json",
       "role": "openapi_source",
-      "sha256": "c27f58430f00cfbcf49f693a86033b5b5a3ec6a30c6d43778170ed6d24e2e2c5"
+      "sha256": "cc75cc6caa1db1d3b3c36db903f25b188158e0c162745fedb01f1ed3c09c0a1e"
     }
   ],
   "openapi_document_version": "1.0.0",
@@ -103,12 +104,6 @@
         "solstone-linux-legacy-v2-unmigrated"
       ],
       "consumer_identifier": "solstone-linux"
-    },
-    {
-      "adoption_blocker_ids": [
-        "solstone-windows-legacy-v2-unmigrated"
-      ],
-      "consumer_identifier": "solstone-windows"
     }
   ]
 }

@@ -94,7 +94,7 @@ fn sanitize_for_terminal(value: &str) -> String {
     sanitized
 }
 
-fn hex_encode(bytes: &[u8]) -> String {
+pub fn hex_encode(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 

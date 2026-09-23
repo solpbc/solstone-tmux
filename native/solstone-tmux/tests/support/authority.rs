@@ -9,19 +9,19 @@ use serde::Deserialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-pub const JOURNAL_REVISION: &str = "ba16c8ca55b4151430166f0e7f9b0da2d15c6f45";
+pub const JOURNAL_REVISION: &str = "b78ba9eaac8228e65c4b5a3e64d27aefd3ad47cd";
 pub const JOURNAL_REPOSITORY: &str = "https://github.com/solpbc/solstone-journal";
 pub const CLIENT_INGEST_AUTHORITY_PATH: &str =
     "core/crates/solstone-core-repository-contracts/src/contracts/client_ingest_authority.json";
 pub const CLIENT_INGEST_AUTHORITY_SHA256: &str =
-    "c27f58430f00cfbcf49f693a86033b5b5a3ec6a30c6d43778170ed6d24e2e2c5";
+    "cc75cc6caa1db1d3b3c36db903f25b188158e0c162745fedb01f1ed3c09c0a1e";
 pub const PROTOCOL_SCHEMA_PATH: &str =
     "core/crates/solstone-core/src/contract/schemas/protocol.schema.json";
 pub const PROTOCOL_SCHEMA_SHA256: &str =
     "488aed9be35faf359e26bd22ee41f872a1c2647d788e925dd2bb695985fd34d0";
-pub const OBSERVER_BUNDLE_VERSION: &str = "10.0.0";
+pub const OBSERVER_BUNDLE_VERSION: &str = "12.2.0";
 pub const OBSERVER_MANIFEST_SHA256: &str =
-    "d9d2f846029fb5990ab458efaf6ac7c10ca306608088fba236dd3e5a148dc8ef";
+    "6a38b9be1b4e0b9d93edff7120399a5ace0f6aa8edfecaa349e4c98d8100dbe3";
 
 const PROTOCOL_SCHEMA_VENDORED_ROOT: &str = "native/solstone-tmux/vendor/protocol-schema";
 const PROTOCOL_SCHEMA_IMPORT_NAME: &str = "protocol-schema-import.json";

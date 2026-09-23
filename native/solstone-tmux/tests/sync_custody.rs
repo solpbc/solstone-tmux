@@ -167,6 +167,36 @@ fn malformed_hash_or_duplicate_local_name_prevent_custody_proof() {
     ));
 }
 
+#[test]
+fn segments_listing_without_observed_decodes_and_proves_custody() {
+    let payload = serde_json::json!({
+        "protocol_version": PROTOCOL_VERSION_NUMBER,
+        "total": 1,
+        "items": [{
+            "key": "143000_1",
+            "files": [{
+                "name": "capture.jsonl",
+                "size": 1,
+                "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "status": "present"
+            }]
+        }]
+    });
+    let decoded = decode_segments_response(&serde_json::to_vec(&payload).expect("bytes"))
+        .expect("decodes without observed");
+    let local = LocalFile {
+        name: "capture.jsonl".to_owned(),
+        size: 1,
+        sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
+    };
+    assert!(fresh_listing_proves_custody(
+        &decoded,
+        "143000_1",
+        "143000_1",
+        &[local],
+    ));
+}
+
 fn projection_listing() -> SegmentsEnvelope {
     let projection: Value = serde_json::from_slice(
         &fs::read(

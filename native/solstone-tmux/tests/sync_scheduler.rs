@@ -16,9 +16,8 @@ use solstone_tmux::config::DEFAULT_SOURCE;
 use solstone_tmux::health::{DiagnosticCode, HEALTH_FILENAME, HealthWriter};
 use solstone_tmux::instance_lock::InstanceLock;
 use solstone_tmux::journal::{
-    IngestDayManifest, IngestManifest, ListingFileStatus, LocalFile, ManifestDaySummary,
-    ManifestSegment, SegmentFile, SegmentItem, SegmentsEnvelope, UploadResult, UploadStatus,
-    inventory_files,
+    ListingFileStatus, LocalFile, ParsedDescriptor, SegmentFile, SegmentItem, SegmentsEnvelope,
+    UploadResult, UploadStatus, decode_upload_response, inventory_files,
 };
 use solstone_tmux::model::CaptureResult;
 use solstone_tmux::name::{DerivedName, derive_component};
@@ -29,8 +28,12 @@ use solstone_tmux::observer::{
 use solstone_tmux::paths::ensure_private_directory;
 use solstone_tmux::private_link::PROTOCOL_VERSION_NUMBER;
 use solstone_tmux::segment::SegmentClose;
+use solstone_tmux::storage::{
+    AtomicWriteFault, set_atomic_write_fault, set_atomic_write_fault_for_prefix,
+};
 use solstone_tmux::sync::{
-    SegmentCandidate, SyncActivity, SyncJournal, SyncOperationError, SyncScheduler, SyncWake,
+    JournalIdentity, SegmentCandidate, SyncActivity, SyncFailureClass, SyncJournal,
+    SyncOperationError, SyncScheduler, SyncWake,
 };
 use support::TestDirectory;
 use time::{Date, Month, PrimitiveDateTime, Time, UtcOffset};
@@ -115,17 +118,18 @@ fn cached_retained_content_is_not_rehashed_before_required_v3_upload() {
         }
         let mut scheduler = scheduler(&temporary, SyncWake::default());
         let mut journal = FakeJournal::default();
-        scheduler.run_sweep(&mut journal, no_shutdown()).await;
+        let first_summary = scheduler.run_sweep(&mut journal, no_shutdown()).await;
+        assert_eq!(first_summary.custodied, 12);
         journal.clear_calls();
         let before = scheduler.instrumentation();
 
         let summary = scheduler.run_sweep(&mut journal, no_shutdown()).await;
         let after = scheduler.instrumentation();
 
-        assert_eq!(summary.custodied, 12);
+        assert_eq!(summary.custodied, 0);
         assert_eq!(after.hashed_files - before.hashed_files, 0);
-        assert_eq!(journal.uploads().len(), 3);
-        assert_eq!(journal.listings_by_day().len(), 3);
+        assert_eq!(journal.uploads().len(), 0);
+        assert_eq!(journal.calls, vec![Call::SystemStatus]);
     });
 }
 
@@ -149,8 +153,7 @@ fn same_size_content_change_invalidates_only_that_inventory() {
         scheduler.run_sweep(&mut journal, no_shutdown()).await;
         let after = scheduler.instrumentation();
 
-        assert_eq!(journal.uploads().len(), 2);
-        assert!(journal.uploads().contains(&"120000_300".to_owned()));
+        assert_eq!(journal.uploads(), vec!["120000_300".to_owned()]);
         assert_eq!(after.hashed_files - before.hashed_files, 1);
     });
 }
@@ -174,8 +177,7 @@ fn adding_a_segment_file_invalidates_the_complete_inventory_only_for_that_candid
 
         scheduler.run_sweep(&mut journal, no_shutdown()).await;
 
-        assert_eq!(journal.uploads().len(), 2);
-        assert!(journal.uploads().contains(&"120000_300".to_owned()));
+        assert_eq!(journal.uploads(), vec!["120000_300".to_owned()]);
         assert_eq!(
             scheduler.instrumentation().hashed_files - before.hashed_files,
             2
@@ -208,10 +210,7 @@ fn removing_a_segment_file_invalidates_the_complete_inventory_only_for_that_cand
 
         scheduler.run_sweep(&mut journal, no_shutdown()).await;
 
-        assert!(
-            journal.uploads().len() == 1,
-            "v3 uploads before the reconciliation triple"
-        );
+        assert_eq!(journal.uploads(), vec!["120000_300".to_owned()]);
         assert_eq!(
             scheduler.instrumentation().hashed_files - before.hashed_files,
             1
@@ -245,8 +244,7 @@ fn renaming_a_segment_file_invalidates_the_complete_inventory_only_for_that_cand
 
         scheduler.run_sweep(&mut journal, no_shutdown()).await;
 
-        assert_eq!(journal.uploads().len(), 2);
-        assert!(journal.uploads().contains(&"120000_300".to_owned()));
+        assert_eq!(journal.uploads(), vec!["120000_300".to_owned()]);
         assert_eq!(
             scheduler.instrumentation().hashed_files - before.hashed_files,
             2
@@ -257,20 +255,18 @@ fn renaming_a_segment_file_invalidates_the_complete_inventory_only_for_that_cand
 }
 
 #[test]
-fn remote_loss_requires_a_fresh_post_upload_listing_before_custody() {
+fn missing_receipt_descriptors_rejects_custody() {
     run(async {
-        let temporary = TestDirectory::new("sync-remote-loss-post-proof");
+        let temporary = TestDirectory::new("sync-missing-receipt-descriptors");
         create_segment(&temporary, "20260701", "120000_300", b"fixture\n");
         let mut scheduler = scheduler(&temporary, SyncWake::default());
         let mut journal = FakeJournal::default();
-        scheduler.run_sweep(&mut journal, no_shutdown()).await;
-        journal.remote.clear();
-        journal.clear_calls();
         journal.upload_outcome(
             "120000_300",
             Ok(UploadResult {
                 status: UploadStatus::Ok,
                 authoritative_key: Some("120000_300".to_owned()),
+                descriptors: None,
             }),
         );
         let segment = segment_path(&temporary, "20260701", "120000_300");
@@ -280,24 +276,19 @@ fn remote_loss_requires_a_fresh_post_upload_listing_before_custody() {
 
         assert_eq!(journal.uploads(), ["120000_300"]);
         assert_eq!(summary.custodied, 0);
-        assert_eq!(
-            summary.diagnostic,
-            Some(DiagnosticCode::LocalSegmentInvalid)
-        );
+        assert_eq!(summary.diagnostic, None);
         assert_segment_bytes_unchanged(&segment, &before);
     });
 }
 
 #[test]
-fn failed_fresh_listing_cannot_promote_stale_custody_or_delete_the_segment() {
+fn retention_day_read_failure_holds_the_day_without_ending_the_sweep() {
     run(async {
-        let temporary = TestDirectory::new("sync-failed-fresh-listing");
+        let temporary = TestDirectory::new("sync-failed-retention-listing");
         create_segment(&temporary, "20260701", "120000_300", b"fixture\n");
-        let mut scheduler = scheduler(&temporary, SyncWake::default());
+        let mut scheduler =
+            scheduler_with_source(&temporary, SyncWake::default(), DEFAULT_SOURCE, 0);
         let mut journal = FakeJournal::default();
-        scheduler.run_sweep(&mut journal, no_shutdown()).await;
-        journal.remote.clear();
-        journal.clear_calls();
         journal.list_outcome(
             "20260701",
             Err(SyncOperationError::EndSweep(
@@ -309,12 +300,49 @@ fn failed_fresh_listing_cannot_promote_stale_custody_or_delete_the_segment() {
         let summary = scheduler.run_sweep(&mut journal, no_shutdown()).await;
 
         assert_eq!(journal.uploads(), ["120000_300"]);
-        assert_eq!(summary.custodied, 0);
+        assert_eq!(summary.custodied, 1);
+        assert_eq!(summary.failure, None);
+        assert_eq!(summary.diagnostic, None);
+        assert_segment_bytes_unchanged(&segment, &before);
+    });
+}
+
+#[test]
+fn upload_timeout_and_status_timeout_end_the_sweep() {
+    run(async {
+        let temporary = TestDirectory::new("sync-upload-timeout");
+        create_segment(&temporary, "20260701", "120000_300", b"fixture\n");
+        let mut upload_scheduler = scheduler(&temporary, SyncWake::default());
+        let mut journal = FakeJournal::default();
+        journal.upload_outcome(
+            "120000_300",
+            Err(SyncOperationError::EndSweep(
+                solstone_tmux::sync::SyncFailureClass::Timeout,
+            )),
+        );
+        let summary = upload_scheduler
+            .run_sweep(&mut journal, no_shutdown())
+            .await;
         assert_eq!(
             summary.failure,
             Some(solstone_tmux::sync::SyncFailureClass::Timeout)
         );
-        assert_segment_bytes_unchanged(&segment, &before);
+
+        let empty = TestDirectory::new("sync-status-timeout");
+        let mut empty_scheduler = scheduler(&empty, SyncWake::default());
+        let mut status_journal = FakeJournal::default();
+        status_journal
+            .status_outcomes
+            .push_back(Err(SyncOperationError::EndSweep(
+                solstone_tmux::sync::SyncFailureClass::Timeout,
+            )));
+        let status_summary = empty_scheduler
+            .run_sweep(&mut status_journal, no_shutdown())
+            .await;
+        assert_eq!(
+            status_summary.failure,
+            Some(solstone_tmux::sync::SyncFailureClass::Timeout)
+        );
     });
 }
 
@@ -338,30 +366,13 @@ fn cache_prunes_absent_snapshot_candidates_and_missing_entries() {
 }
 
 #[test]
-fn retention_uses_fresh_proof_then_deletes_and_evicts_the_cached_inventory() {
+fn retention_deletes_and_evicts_the_cached_inventory() {
     run(async {
         let temporary = TestDirectory::new("sync-retention-fresh-proof");
         create_segment(&temporary, "20260701", "120000_300", b"fixture\n");
-        let mut scheduler = SyncScheduler::new(
-            temporary.path().join("captures"),
-            stream(),
-            DEFAULT_SOURCE.to_owned(),
-            0,
-            clock(),
-            SyncWake::default(),
-        );
-        let files = inventory_files(
-            vec![segment_path(&temporary, "20260701", "120000_300").join(FILE)],
-            None,
-        )
-        .await
-        .expect("inventory fixture");
+        let mut scheduler =
+            scheduler_with_source(&temporary, SyncWake::default(), DEFAULT_SOURCE, 0);
         let mut journal = FakeJournal::default();
-        journal
-            .remote
-            .entry("20260701".to_owned())
-            .or_default()
-            .insert("120000_300".to_owned(), files);
 
         let summary = scheduler.run_sweep(&mut journal, no_shutdown()).await;
 
@@ -372,45 +383,24 @@ fn retention_uses_fresh_proof_then_deletes_and_evicts_the_cached_inventory() {
 }
 
 #[test]
-fn retention_requires_batch_fresh_proof_and_keeps_a_changed_mismatched_segment() {
+fn retention_keeps_a_failed_upload_segment() {
     run(async {
         let temporary = TestDirectory::new("sync-retention-batch-fresh");
         let mut journal = FakeJournal::default();
         for index in 0..9 {
             let segment = format!("12{index:02}00_300");
             create_segment(&temporary, "20260701", &segment, b"fixture\n");
-            let files = inventory_files(
-                vec![segment_path(&temporary, "20260701", &segment).join(FILE)],
-                None,
-            )
-            .await
-            .expect("inventory fixture");
-            journal
-                .remote
-                .entry("20260701".to_owned())
-                .or_default()
-                .insert(segment, files);
         }
-        std::fs::write(
-            segment_path(&temporary, "20260701", "120800_300").join(FILE),
-            b"changed\n",
-        )
-        .expect("change final batch segment");
         journal.upload_outcome(
             "120800_300",
             Ok(UploadResult {
                 status: UploadStatus::Failed,
                 authoritative_key: None,
+                descriptors: None,
             }),
         );
-        let mut scheduler = SyncScheduler::new(
-            temporary.path().join("captures"),
-            stream(),
-            DEFAULT_SOURCE.to_owned(),
-            0,
-            clock(),
-            SyncWake::default(),
-        );
+        let mut scheduler =
+            scheduler_with_source(&temporary, SyncWake::default(), DEFAULT_SOURCE, 0);
         let segment = segment_path(&temporary, "20260701", "120800_300");
         let before = snapshot_segment_bytes(&segment);
 
@@ -440,13 +430,13 @@ fn finalization_wake_is_latched_for_the_following_sweep() {
 
         let summary = scheduler.run_sweep(&mut journal, no_shutdown()).await;
 
-        assert_eq!(summary.attempted, 2);
+        assert_eq!(summary.attempted, 1);
         assert_eq!(journal.uploads(), ["120100_300"]);
     });
 }
 
 #[test]
-fn retention_disabled_second_sweep_reuses_inventory_but_runs_v3_uploads() {
+fn retention_disabled_second_sweep_reuses_inventory_and_makes_no_uploads() {
     run(async {
         let temporary = TestDirectory::new("sync-quiet-converged");
         for index in 0..10 {
@@ -460,27 +450,20 @@ fn retention_disabled_second_sweep_reuses_inventory_but_runs_v3_uploads() {
         let (activity, mut receiver) = tokio::sync::watch::channel(SyncActivity::Idle);
         let mut scheduler = scheduler(&temporary, SyncWake::default()).with_activity(activity);
         let mut journal = FakeJournal::default();
-        scheduler.run_sweep(&mut journal, no_shutdown()).await;
+        let first_summary = scheduler.run_sweep(&mut journal, no_shutdown()).await;
+        assert_eq!(first_summary.custodied, 10);
         journal.clear_calls();
         receiver.borrow_and_update();
         let before = scheduler.instrumentation();
 
-        scheduler.run_sweep(&mut journal, no_shutdown()).await;
+        let summary = scheduler.run_sweep(&mut journal, no_shutdown()).await;
         let after = scheduler.instrumentation();
 
         assert_eq!(*receiver.borrow(), SyncActivity::Idle);
-        assert_eq!(journal.uploads().len(), 1);
+        assert_eq!(summary.custodied, 0);
+        assert_eq!(journal.uploads().len(), 0);
         assert_eq!(after.hashed_files - before.hashed_files, 0);
-        // sync.rs:1610 deliberately processes candidates newest-first.
-        assert_eq!(
-            journal.calls,
-            vec![
-                Call::Upload("120900_300".to_owned()),
-                Call::Manifest,
-                Call::ManifestDay("20260701".to_owned()),
-                Call::Listing("20260701".to_owned()),
-            ]
-        );
+        assert_eq!(journal.calls, vec![Call::SystemStatus]);
     });
 }
 
@@ -508,7 +491,7 @@ fn bounded_batches_reflect_the_eight_candidate_limit() {
 }
 
 #[test]
-fn second_sweep_reuses_inventory_and_reconciles_through_v3_uploads() {
+fn second_sweep_reuses_inventory_and_checks_status() {
     run(async {
         let temporary = TestDirectory::new("sync-second-custody");
         for day in ["20260701", "20260702"] {
@@ -516,38 +499,26 @@ fn second_sweep_reuses_inventory_and_reconciles_through_v3_uploads() {
         }
         let mut scheduler = scheduler(&temporary, SyncWake::default());
         let mut journal = FakeJournal::default();
-        scheduler.run_sweep(&mut journal, no_shutdown()).await;
+        let first = scheduler.run_sweep(&mut journal, no_shutdown()).await;
+        assert_eq!(first.custodied, 2);
         journal.clear_calls();
         let before = scheduler.instrumentation();
         let summary = scheduler.run_sweep(&mut journal, no_shutdown()).await;
         let after = scheduler.instrumentation();
-        assert_eq!(summary.custodied, 2);
-        assert_eq!(journal.uploads().len(), 2);
-        assert_eq!(journal.listings_by_day().len(), 2);
+        assert_eq!(summary.custodied, 0);
+        assert_eq!(journal.uploads().len(), 0);
         assert_eq!(after.hashed_files - before.hashed_files, 0);
-        // sync.rs:1610 deliberately processes candidates newest-first.
-        assert_eq!(
-            journal.calls,
-            vec![
-                Call::Upload("120000_300".to_owned()),
-                Call::Manifest,
-                Call::ManifestDay("20260702".to_owned()),
-                Call::Listing("20260702".to_owned()),
-                Call::Upload("120000_300".to_owned()),
-                Call::Manifest,
-                Call::ManifestDay("20260701".to_owned()),
-                Call::Listing("20260701".to_owned()),
-            ]
-        );
+        assert_eq!(journal.calls, vec![Call::SystemStatus]);
     });
 }
 
 #[test]
-fn stale_cached_custody_does_not_delete_when_current_listing_disagrees() {
+fn stale_hold_does_not_delete_when_current_listing_disagrees() {
     run(async {
         let temporary = TestDirectory::new("sync-stale-listing");
         create_segment(&temporary, "20260701", "120000_300", b"fixture\n");
-        let mut scheduler = scheduler(&temporary, SyncWake::default());
+        let mut scheduler =
+            scheduler_with_source(&temporary, SyncWake::default(), DEFAULT_SOURCE, -1);
         let mut journal = FakeJournal::default();
         scheduler.run_sweep(&mut journal, no_shutdown()).await;
         journal.remote.clear();
@@ -555,40 +526,46 @@ fn stale_cached_custody_does_not_delete_when_current_listing_disagrees() {
         let segment = segment_path(&temporary, "20260701", "120000_300");
         let before = snapshot_segment_bytes(&segment);
 
-        scheduler.run_sweep(&mut journal, no_shutdown()).await;
+        let mut scheduler_retention =
+            scheduler_with_source(&temporary, SyncWake::default(), DEFAULT_SOURCE, 0);
+        let summary = scheduler_retention
+            .run_sweep(&mut journal, no_shutdown())
+            .await;
 
-        assert_eq!(journal.uploads(), ["120000_300"]);
+        assert_eq!(summary.custodied, 0);
         assert_segment_bytes_unchanged(&segment, &before);
     });
 }
 
 #[test]
-fn sweep_cache_is_keyed_by_day_when_rotation_splits_a_day() {
+fn retention_listings_are_keyed_by_day() {
     run(async {
         let temporary = TestDirectory::new("sync-day-listings");
         create_segment(&temporary, "20260701", "120000_300", b"fixture\n");
         create_segment(&temporary, "20260702", "120000_300", b"fixture\n");
-        let mut scheduler = scheduler(&temporary, SyncWake::default());
+        let mut scheduler =
+            scheduler_with_source(&temporary, SyncWake::default(), DEFAULT_SOURCE, 0);
         let mut journal = FakeJournal::default();
-        scheduler.run_sweep(&mut journal, no_shutdown()).await;
-        journal.clear_calls();
-        scheduler.run_sweep(&mut journal, no_shutdown()).await;
+        let summary = scheduler.run_sweep(&mut journal, no_shutdown()).await;
+        assert_eq!(summary.custodied, 2);
         assert_eq!(journal.listings_by_day().len(), 2);
     });
 }
 
 #[test]
-fn v3_reconciliation_uses_one_complete_triple_per_unproven_upload() {
+fn retention_reconciliation_uses_one_listing_per_day() {
     run(async {
         let temporary = TestDirectory::new("sync-listing-bound");
         for segment in ["120000_300", "120100_300"] {
             create_segment(&temporary, "20260701", segment, b"fixture\n");
         }
-        let mut scheduler = scheduler(&temporary, SyncWake::default());
+        let mut scheduler =
+            scheduler_with_source(&temporary, SyncWake::default(), DEFAULT_SOURCE, 0);
         let mut journal = FakeJournal::default();
-        scheduler.run_sweep(&mut journal, no_shutdown()).await;
+        let summary = scheduler.run_sweep(&mut journal, no_shutdown()).await;
         assert_eq!(journal.uploads().len(), 2);
-        assert_eq!(journal.reconciliation_calls("20260701"), (2, 2, 2));
+        assert_eq!(summary.custodied, 2);
+        assert_eq!(journal.listings_by_day().get("20260701"), Some(&1));
     });
 }
 
@@ -605,27 +582,13 @@ fn pending_segments_reaches_zero_when_custody_is_proven() {
                 b"fixture\n",
             );
         }
-        let mut journal = FakeJournal::default();
-        for index in 0..9 {
-            let segment = format!("12{index:02}00_300");
-            let files = inventory_files(
-                vec![segment_path(&temporary, "20260701", &segment).join(FILE)],
-                None,
-            )
-            .await
-            .expect("inventory fixture");
-            journal
-                .remote
-                .entry("20260701".to_owned())
-                .or_default()
-                .insert(segment, files);
-        }
         let lock = InstanceLock::acquire(temporary.path()).expect("instance lock");
         let health = HealthWriter::new(temporary.path().to_path_buf(), &lock);
         let (activity, _activity_receiver) = watch::channel(SyncActivity::Idle);
         let (stop, shutdown) = watch::channel(false);
         let mut scheduler =
             scheduler(&temporary, SyncWake::default()).with_observability(activity, health);
+        let mut journal = FakeJournal::default();
         let task = tokio::spawn(async move {
             scheduler.run_with_shutdown(&mut journal, shutdown).await;
         });
@@ -644,24 +607,30 @@ fn collision_upload_uses_the_authoritative_renamed_segment_key() {
         let temporary = TestDirectory::new("sync-original-key");
         create_segment(&temporary, "20260701", "120000_300", b"fixture\n");
         let mut journal = FakeJournal::default();
-        journal.upload_outcome(
-            "120000_300",
-            Ok(UploadResult {
-                status: UploadStatus::Collision,
-                authoritative_key: Some("120000_301".to_owned()),
-            }),
-        );
         let files = inventory_files(
             vec![segment_path(&temporary, "20260701", "120000_300").join(FILE)],
             None,
         )
         .await
         .expect("inventory fixture");
-        journal
-            .remote
-            .entry("20260701".to_owned())
-            .or_default()
-            .insert("120000_301".to_owned(), files);
+        let descriptors = files
+            .iter()
+            .map(|f| ParsedDescriptor {
+                submitted: f.name.clone(),
+                written: f.name.clone(),
+                sha256: f.sha256.clone(),
+                size: f.size,
+                disposition: "written".to_owned(),
+            })
+            .collect();
+        journal.upload_outcome(
+            "120000_300",
+            Ok(UploadResult {
+                status: UploadStatus::Collision,
+                authoritative_key: Some("120000_301".to_owned()),
+                descriptors: Some(Ok(descriptors)),
+            }),
+        );
         let mut scheduler = scheduler(&temporary, SyncWake::default());
         let summary = scheduler.run_sweep(&mut journal, no_shutdown()).await;
         assert_eq!(summary.custodied, 1);
@@ -690,7 +659,7 @@ fn changed_local_bytes_force_reupload() {
 }
 
 #[test]
-fn remote_loss_is_reconciled_by_v3_reupload_before_custody() {
+fn ack_invalidation_forces_reupload_before_custody() {
     run(async {
         let temporary = TestDirectory::new("sync-single-remote-loss");
         for segment in ["120000_300", "120100_300", "120200_300"] {
@@ -698,18 +667,17 @@ fn remote_loss_is_reconciled_by_v3_reupload_before_custody() {
         }
         let mut scheduler = scheduler(&temporary, SyncWake::default());
         let mut journal = FakeJournal::default();
-        scheduler.run_sweep(&mut journal, no_shutdown()).await;
-        journal
-            .remote
-            .get_mut("20260701")
-            .expect("remote day")
-            .remove("120100_300");
+        let first = scheduler.run_sweep(&mut journal, no_shutdown()).await;
+        assert_eq!(first.custodied, 3);
         journal.clear_calls();
+        std::fs::write(
+            segment_path(&temporary, "20260701", "120100_300").join(FILE),
+            b"modified\n",
+        )
+        .expect("modify file");
         let summary = scheduler.run_sweep(&mut journal, no_shutdown()).await;
-        assert_eq!(journal.uploads().len(), 2);
-        assert!(journal.uploads().contains(&"120100_300".to_owned()));
-        assert_eq!(summary.custodied, 3);
-        assert_eq!(journal.reconciliation_calls("20260701"), (2, 2, 2));
+        assert_eq!(journal.uploads(), vec!["120100_300".to_owned()]);
+        assert_eq!(summary.custodied, 1);
     });
 }
 
@@ -742,9 +710,10 @@ fn retained_outcomes_keep_their_diagnostic_and_never_claim_custody() {
         let mut journal = FakeJournal::default();
         journal.upload_outcome(
             "120000_300",
-            Err(SyncOperationError::RetainCandidate(
-                DiagnosticCode::LocalSegmentInvalid,
-            )),
+            Err(SyncOperationError::RetainCandidate {
+                diagnostic: DiagnosticCode::LocalSegmentInvalid,
+                answer: "local:local_segment_invalid".to_owned(),
+            }),
         );
         let segment = segment_path(&temporary, "20260701", "120000_300");
         let before = snapshot_segment_bytes(&segment);
@@ -766,32 +735,46 @@ fn conflict_and_failed_contacts_do_not_claim_successful_custody() {
             ("sync-failed", UploadStatus::Failed),
         ] {
             let temporary = TestDirectory::new(name);
+            ensure_private_directory(temporary.path()).expect("prepare data root");
             create_segment(&temporary, "20260701", "120000_300", b"fixture\n");
-            let mut scheduler = scheduler(&temporary, SyncWake::default());
+            let lock = InstanceLock::acquire(temporary.path()).expect("instance lock");
+            let health = HealthWriter::new(temporary.path().to_path_buf(), &lock);
+            let (activity, _activity_receiver) = watch::channel(SyncActivity::Idle);
+            let (stop, shutdown) = watch::channel(false);
+            let mut scheduler =
+                scheduler(&temporary, SyncWake::default()).with_observability(activity, health);
             let mut journal = FakeJournal::default();
             journal.upload_outcome(
                 "120000_300",
                 Ok(UploadResult {
                     status,
                     authoritative_key: None,
+                    descriptors: None,
                 }),
             );
             let segment = segment_path(&temporary, "20260701", "120000_300");
             let before = snapshot_segment_bytes(&segment);
-            let summary = scheduler.run_sweep(&mut journal, no_shutdown()).await;
+            let task = tokio::spawn(async move {
+                let mut journal = journal;
+                scheduler.run_with_shutdown(&mut journal, shutdown).await;
+            });
+            let snapshot = wait_for_idle_snapshot(temporary.path()).await;
+            stop.send_replace(true);
+            task.await.expect("join scheduler");
 
-            assert_eq!(summary.custodied, 0);
+            assert_eq!(snapshot["last_error_code"], serde_json::Value::Null);
             assert_eq!(
-                summary.diagnostic,
-                Some(DiagnosticCode::LocalSegmentInvalid)
+                snapshot["last_successful_sync_unix_seconds"],
+                serde_json::Value::Null
             );
+            assert!(snapshot["pending_segments"].as_u64().unwrap_or(0) >= 1);
             assert_segment_bytes_unchanged(&segment, &before);
         }
     });
 }
 
 #[test]
-fn an_unproven_fresh_listing_records_a_diagnostic_and_keeps_the_segment() {
+fn invalid_upload_receipt_records_no_diagnostic_and_keeps_the_segment() {
     run(async {
         let temporary = TestDirectory::new("sync-unproven-listing");
         create_segment(&temporary, "20260701", "120000_300", b"fixture\n");
@@ -802,15 +785,14 @@ fn an_unproven_fresh_listing_records_a_diagnostic_and_keeps_the_segment() {
             Ok(UploadResult {
                 status: UploadStatus::Ok,
                 authoritative_key: Some("120000_300".to_owned()),
+                descriptors: None,
             }),
         );
         let segment = segment_path(&temporary, "20260701", "120000_300");
         let before = snapshot_segment_bytes(&segment);
         let summary = scheduler.run_sweep(&mut journal, no_shutdown()).await;
-        assert_eq!(
-            summary.diagnostic,
-            Some(DiagnosticCode::LocalSegmentInvalid)
-        );
+        assert_eq!(summary.diagnostic, None);
+        assert_eq!(summary.custodied, 0);
         assert_segment_bytes_unchanged(&segment, &before);
     });
 }
@@ -828,6 +810,7 @@ fn a_retained_candidate_still_lets_later_candidates_be_attempted() {
             Ok(UploadResult {
                 status: UploadStatus::Conflict,
                 authoritative_key: None,
+                descriptors: None,
             }),
         );
         let retained = segment_path(&temporary, "20260701", "120100_300");
@@ -984,20 +967,20 @@ fn delivery_across_batches_has_one_working_interval_and_failures_return_idle() {
 }
 
 #[test]
-fn shutdown_cancels_a_pending_empty_scan_listing() {
+fn shutdown_cancels_a_pending_status_probe() {
     run(async {
-        let temporary = TestDirectory::new("sync-cancel-empty-listing");
+        let temporary = TestDirectory::new("sync-cancel-status-probe");
         let (entered, started) = oneshot::channel();
-        let (mut journal, uploads) = blocking_journal(BlockingStage::EmptyListing, entered);
+        let (mut journal, uploads) = blocking_journal(BlockingStage::Status, entered);
         let (stop, shutdown) = watch::channel(false);
         let mut scheduler = scheduler(&temporary, SyncWake::default());
         let task = tokio::spawn(async move { scheduler.run_sweep(&mut journal, shutdown).await });
-        started.await.expect("empty listing began");
+        started.await.expect("status probe began");
         stop.send_replace(true);
 
         let summary = tokio::time::timeout(HANG_GUARD, task)
             .await
-            .expect("shutdown must interrupt empty listing")
+            .expect("shutdown must interrupt status probe")
             .expect("join sweep");
         assert!(summary.cancelled);
         assert_eq!(summary.attempted, 0);
@@ -1039,9 +1022,9 @@ fn shutdown_cancels_a_pending_upload_and_restores_idle() {
 }
 
 #[test]
-fn shutdown_cancels_a_pending_postupload_listing_without_starting_later_candidates() {
+fn shutdown_cancels_a_pending_retention_listing_without_starting_later_candidates() {
     run(async {
-        let temporary = TestDirectory::new("sync-cancel-postupload-listing");
+        let temporary = TestDirectory::new("sync-cancel-retention-listing");
         for index in 0..10 {
             create_segment(
                 &temporary,
@@ -1052,20 +1035,20 @@ fn shutdown_cancels_a_pending_postupload_listing_without_starting_later_candidat
         }
         let (activity, receiver) = watch::channel(SyncActivity::Idle);
         let (entered, started) = oneshot::channel();
-        let (mut journal, uploads) = blocking_journal(BlockingStage::PostUploadListing, entered);
+        let (mut journal, _uploads) = blocking_journal(BlockingStage::RetentionListing, entered);
         let (stop, shutdown) = watch::channel(false);
-        let mut scheduler = scheduler(&temporary, SyncWake::default()).with_activity(activity);
+        let mut scheduler =
+            scheduler_with_source(&temporary, SyncWake::default(), DEFAULT_SOURCE, 0)
+                .with_activity(activity);
         let task = tokio::spawn(async move { scheduler.run_sweep(&mut journal, shutdown).await });
-        started.await.expect("post-upload listing began");
+        started.await.expect("retention listing began");
         stop.send_replace(true);
 
         let summary = tokio::time::timeout(HANG_GUARD, task)
             .await
-            .expect("shutdown must interrupt post-upload listing")
+            .expect("shutdown must interrupt retention listing")
             .expect("join sweep");
         assert!(summary.cancelled);
-        assert_eq!(summary.attempted, 1);
-        assert_eq!(uploads.lock().expect("uploads lock").len(), 1);
         assert_eq!(*receiver.borrow(), SyncActivity::Idle);
     });
 }
@@ -1082,14 +1065,7 @@ fn startup_finalization_and_periodic_wakes_converge_on_a_rescan() {
             outcomes: VecDeque::new(),
         };
         let (stop, shutdown) = watch::channel(false);
-        let mut scheduler = SyncScheduler::new(
-            temporary.path().join("captures"),
-            stream(),
-            DEFAULT_SOURCE.to_owned(),
-            -1,
-            clock.clone() as Arc<dyn Clock>,
-            wake.clone(),
-        );
+        let mut scheduler = scheduler(&temporary, wake.clone());
         let task = tokio::spawn(async move {
             let mut journal = journal;
             scheduler.run_with_shutdown(&mut journal, shutdown).await;
@@ -1131,22 +1107,15 @@ fn one_backoff_owner_advances_holds_resets_and_never_stops_capture() {
                 Err(SyncOperationError::EndSweep(
                     solstone_tmux::sync::SyncFailureClass::Contract,
                 )),
-                Ok(empty_listing()),
+                Ok(()),
                 Err(SyncOperationError::EndSweep(
                     solstone_tmux::sync::SyncFailureClass::Direct,
                 )),
-                Ok(empty_listing()),
+                Ok(()),
             ]),
         };
         let (stop, shutdown) = watch::channel(false);
-        let mut scheduler = SyncScheduler::new(
-            temporary.path().join("captures"),
-            stream(),
-            DEFAULT_SOURCE.to_owned(),
-            -1,
-            clock.clone() as Arc<dyn Clock>,
-            wake.clone(),
-        );
+        let mut scheduler = scheduler(&temporary, wake.clone());
         let sync = tokio::spawn(async move {
             let mut journal = journal;
             scheduler.run_with_shutdown(&mut journal, shutdown).await;
@@ -1211,31 +1180,19 @@ fn one_backoff_owner_advances_holds_resets_and_never_stops_capture() {
 }
 
 #[test]
-fn reused_custody_counts_as_successful_sync() {
+fn valid_receipt_counts_as_custody() {
     run(async {
         let temporary = TestDirectory::new("sync-reused-custody");
         ensure_private_directory(temporary.path()).expect("prepare data root");
         create_segment(&temporary, "20260701", "120000_300", b"fixture\n");
-        let mut journal = FakeJournal::default();
-        let files = inventory_files(
-            vec![segment_path(&temporary, "20260701", "120000_300").join(FILE)],
-            None,
-        )
-        .await
-        .expect("inventory fixture");
-        journal
-            .remote
-            .entry("20260701".to_owned())
-            .or_default()
-            .insert("120000_300".to_owned(), files);
         let lock = InstanceLock::acquire(temporary.path()).expect("instance lock");
         let health = HealthWriter::new(temporary.path().to_path_buf(), &lock);
         let (activity, _activity_receiver) = watch::channel(SyncActivity::Idle);
         let (stop, shutdown) = watch::channel(false);
         let mut scheduler =
             scheduler(&temporary, SyncWake::default()).with_observability(activity, health);
+        let mut journal = FakeJournal::default();
         let task = tokio::spawn(async move {
-            let mut journal = journal;
             scheduler.run_with_shutdown(&mut journal, shutdown).await;
         });
         let snapshot = wait_for_idle_snapshot(temporary.path()).await;
@@ -1258,21 +1215,15 @@ fn a_retained_candidate_keeps_operator_visible_error_truth() {
         let health = HealthWriter::new(temporary.path().to_path_buf(), &lock);
         let (activity, _activity_receiver) = watch::channel(SyncActivity::Idle);
         let (stop, shutdown) = watch::channel(false);
-        let mut scheduler = SyncScheduler::new(
-            temporary.path().join("captures"),
-            stream(),
-            DEFAULT_SOURCE.to_owned(),
-            0,
-            clock(),
-            SyncWake::default(),
-        )
-        .with_observability(activity, health);
+        let mut scheduler =
+            scheduler_with_source(&temporary, SyncWake::default(), DEFAULT_SOURCE, 0)
+                .with_observability(activity, health);
         let mut journal = FakeJournal::default();
         journal.upload_outcome(
             "120000_300",
-            Ok(UploadResult {
-                status: UploadStatus::Failed,
-                authoritative_key: None,
+            Err(SyncOperationError::RetainCandidate {
+                diagnostic: DiagnosticCode::LocalSegmentInvalid,
+                answer: "local:local_segment_invalid".to_owned(),
             }),
         );
         let task = tokio::spawn(async move {
@@ -1301,15 +1252,8 @@ fn health_distinguishes_contact_from_custody_and_decrements_deleted_work() {
         let health = HealthWriter::new(deleted.path().to_path_buf(), &lock);
         let (activity, _activity_receiver) = watch::channel(SyncActivity::Idle);
         let (stop, shutdown) = watch::channel(false);
-        let mut scheduler = SyncScheduler::new(
-            deleted.path().join("captures"),
-            stream(),
-            DEFAULT_SOURCE.to_owned(),
-            0,
-            clock(),
-            SyncWake::default(),
-        )
-        .with_observability(activity, health);
+        let mut scheduler = scheduler_with_source(&deleted, SyncWake::default(), DEFAULT_SOURCE, 0)
+            .with_observability(activity, health);
         let task = tokio::spawn(async move {
             let mut journal = FakeJournal::default();
             scheduler.run_with_shutdown(&mut journal, shutdown).await;
@@ -1330,15 +1274,9 @@ fn health_distinguishes_contact_from_custody_and_decrements_deleted_work() {
         let health = HealthWriter::new(retained.path().to_path_buf(), &lock);
         let (activity, _activity_receiver) = watch::channel(SyncActivity::Idle);
         let (stop, shutdown) = watch::channel(false);
-        let mut scheduler = SyncScheduler::new(
-            retained.path().join("captures"),
-            stream(),
-            DEFAULT_SOURCE.to_owned(),
-            0,
-            clock(),
-            SyncWake::default(),
-        )
-        .with_observability(activity, health);
+        let mut scheduler =
+            scheduler_with_source(&retained, SyncWake::default(), DEFAULT_SOURCE, 0)
+                .with_observability(activity, health);
         let task = tokio::spawn(async move {
             let mut journal = FakeJournal::default();
             journal.upload_outcome(
@@ -1346,6 +1284,7 @@ fn health_distinguishes_contact_from_custody_and_decrements_deleted_work() {
                 Ok(UploadResult {
                     status: UploadStatus::Conflict,
                     authoritative_key: None,
+                    descriptors: None,
                 }),
             );
             scheduler.run_with_shutdown(&mut journal, shutdown).await;
@@ -1373,6 +1312,7 @@ fn poison_segment_does_not_block_a_later_valid_candidate() {
             Ok(UploadResult {
                 status: UploadStatus::Conflict,
                 authoritative_key: None,
+                descriptors: None,
             }),
         );
         scheduler.run_sweep(&mut journal, no_shutdown()).await;
@@ -1381,7 +1321,7 @@ fn poison_segment_does_not_block_a_later_valid_candidate() {
 }
 
 #[test]
-fn empty_candidate_manifest_contact_uses_the_resolved_source() {
+fn empty_candidate_status_probe_is_liveness_contact() {
     run(async {
         let temporary = TestDirectory::new("sync-empty-source");
         let mut scheduler = scheduler(&temporary, SyncWake::default());
@@ -1389,8 +1329,7 @@ fn empty_candidate_manifest_contact_uses_the_resolved_source() {
         let summary = scheduler.run_sweep(&mut journal, no_shutdown()).await;
         assert_eq!(summary.attempted, 0);
         assert!(summary.contacted);
-        assert_eq!(journal.calls, vec![Call::Manifest]);
-        journal.assert_sources(DEFAULT_SOURCE);
+        assert_eq!(journal.calls, vec![Call::SystemStatus]);
     });
 }
 
@@ -1458,21 +1397,10 @@ fn source_mismatch_does_not_custody_or_unlink() {
         let temporary = TestDirectory::new("sync-source-mismatch");
         ensure_private_directory(temporary.path()).expect("prepare data root");
         create_segment(&temporary, "20260701", "120000_300", b"fixture\n");
-        let files = inventory_files(
-            vec![segment_path(&temporary, "20260701", "120000_300").join(FILE)],
-            None,
-        )
-        .await
-        .expect("inventory fixture");
         let mut journal = FakeJournal {
-            evidence_for: Some(String::new()),
+            evidence_for: Some("other-source".to_owned()),
             ..FakeJournal::default()
         };
-        journal
-            .remote
-            .entry("20260701".to_owned())
-            .or_default()
-            .insert("120000_300".to_owned(), files);
         let lock = InstanceLock::acquire(temporary.path()).expect("instance lock");
         let health = HealthWriter::new(temporary.path().to_path_buf(), &lock);
         let (activity, _activity_receiver) = watch::channel(SyncActivity::Idle);
@@ -1502,18 +1430,7 @@ fn predates_source_configuration_only_deletes_on_matching_configured_source() {
     run(async {
         let temporary = TestDirectory::new("sync-predates-source");
         create_segment(&temporary, "20260701", "120000_300", b"fixture\n");
-        let files = inventory_files(
-            vec![segment_path(&temporary, "20260701", "120000_300").join(FILE)],
-            None,
-        )
-        .await
-        .expect("inventory fixture");
         let mut journal = FakeJournal::default();
-        journal
-            .remote
-            .entry("20260701".to_owned())
-            .or_default()
-            .insert("120000_300".to_owned(), files);
         let mut scheduler = scheduler_with_source(&temporary, SyncWake::default(), "studio", 0);
         let summary = scheduler.run_sweep(&mut journal, no_shutdown()).await;
 
@@ -1609,6 +1526,948 @@ async fn wait_for_idle_snapshot(root: &Path) -> serde_json::Value {
     .expect("scheduler did not publish its idle health snapshot within 10 seconds")
 }
 
+#[test]
+fn receipt_sha256_mismatch_is_not_an_ack() {
+    run_receipt_matrix_test(
+        "receipt-sha256-mismatch",
+        |_sha256, size| {
+            let bad_sha = "0".repeat(64);
+            let json = format!(
+                r#"{{"status":"ok","segment":"120000_300","file_descriptors":[{{"submitted":"{FILE}","written":"{FILE}","size":{size},"sha256":"{bad_sha}","disposition":"written"}}]}}"#
+            );
+            decode_upload_response(json.as_bytes()).map_err(|_| unreachable!())
+        },
+        Duration::from_secs(3600),
+    );
+}
+
+#[test]
+fn receipt_size_mismatch_is_not_an_ack() {
+    run_receipt_matrix_test(
+        "receipt-size-mismatch",
+        |sha256, size| {
+            let json = format!(
+                r#"{{"status":"ok","segment":"120000_300","file_descriptors":[{{"submitted":"{FILE}","written":"{FILE}","size":{},"sha256":"{sha256}","disposition":"written"}}]}}"#,
+                size + 1
+            );
+            decode_upload_response(json.as_bytes()).map_err(|_| unreachable!())
+        },
+        Duration::from_secs(3600),
+    );
+}
+
+#[test]
+fn receipt_missing_descriptor_is_not_an_ack() {
+    run_receipt_matrix_test(
+        "receipt-missing-descriptor",
+        |_sha256, _size| {
+            let json = r#"{"status":"ok","segment":"120000_300","file_descriptors":[]}"#;
+            decode_upload_response(json.as_bytes()).map_err(|_| unreachable!())
+        },
+        Duration::from_secs(3600),
+    );
+}
+
+#[test]
+fn receipt_extra_descriptor_is_not_an_ack() {
+    run_receipt_matrix_test(
+        "receipt-extra-descriptor",
+        |sha256, size| {
+            let json = format!(
+                r#"{{"status":"ok","segment":"120000_300","file_descriptors":[{{"submitted":"{FILE}","written":"{FILE}","size":{size},"sha256":"{sha256}","disposition":"written"}},{{"submitted":"extra.jsonl","written":"extra.jsonl","size":10,"sha256":"{sha256}","disposition":"written"}}]}}"#
+            );
+            decode_upload_response(json.as_bytes()).map_err(|_| unreachable!())
+        },
+        Duration::from_secs(3600),
+    );
+}
+
+#[test]
+fn receipt_duplicate_submitted_is_not_an_ack() {
+    run_receipt_matrix_test(
+        "receipt-duplicate-submitted",
+        |sha256, size| {
+            let json = format!(
+                r#"{{"status":"ok","segment":"120000_300","file_descriptors":[{{"submitted":"{FILE}","written":"{FILE}","size":{size},"sha256":"{sha256}","disposition":"written"}},{{"submitted":"{FILE}","written":"{FILE}","size":{size},"sha256":"{sha256}","disposition":"written"}}]}}"#
+            );
+            decode_upload_response(json.as_bytes()).map_err(|_| unreachable!())
+        },
+        Duration::from_secs(3600),
+    );
+}
+
+#[test]
+fn receipt_without_descriptors_is_not_an_ack() {
+    run_receipt_matrix_test(
+        "receipt-without-descriptors",
+        |_sha256, _size| {
+            let json = r#"{"status":"ok","segment":"120000_300"}"#;
+            decode_upload_response(json.as_bytes()).map_err(|_| unreachable!())
+        },
+        Duration::from_secs(3600),
+    );
+}
+
+#[test]
+fn receipt_unknown_disposition_is_not_an_ack() {
+    run_receipt_matrix_test(
+        "receipt-unknown-disposition",
+        |sha256, size| {
+            let json = format!(
+                r#"{{"status":"ok","segment":"120000_300","file_descriptors":[{{"submitted":"{FILE}","written":"{FILE}","size":{size},"sha256":"{sha256}","disposition":"unknown_value"}}]}}"#
+            );
+            decode_upload_response(json.as_bytes()).map_err(|_| unreachable!())
+        },
+        Duration::from_secs(3600),
+    );
+}
+
+#[test]
+fn receipt_missing_disposition_is_not_an_ack() {
+    run_receipt_matrix_test(
+        "receipt-missing-disposition",
+        |sha256, size| {
+            let json = format!(
+                r#"{{"status":"ok","segment":"120000_300","file_descriptors":[{{"submitted":"{FILE}","written":"{FILE}","size":{size},"sha256":"{sha256}"}}]}}"#
+            );
+            decode_upload_response(json.as_bytes()).map_err(|_| unreachable!())
+        },
+        Duration::from_secs(3600),
+    );
+}
+
+#[test]
+fn receipt_uppercase_sha256_is_not_an_ack() {
+    run_receipt_matrix_test(
+        "receipt-uppercase-sha256",
+        |sha256, size| {
+            let upper_sha = sha256.to_ascii_uppercase();
+            let json = format!(
+                r#"{{"status":"ok","segment":"120000_300","file_descriptors":[{{"submitted":"{FILE}","written":"{FILE}","size":{size},"sha256":"{upper_sha}","disposition":"written"}}]}}"#
+            );
+            decode_upload_response(json.as_bytes()).map_err(|_| unreachable!())
+        },
+        Duration::from_secs(3600),
+    );
+}
+
+#[test]
+fn receipt_sha256_not_a_string_is_not_an_ack() {
+    run_receipt_matrix_test(
+        "receipt-sha256-not-a-string",
+        |_sha256, size| {
+            let json = format!(
+                r#"{{"status":"ok","segment":"120000_300","file_descriptors":[{{"submitted":"{FILE}","written":"{FILE}","size":{size},"sha256":12345,"disposition":"written"}}]}}"#
+            );
+            decode_upload_response(json.as_bytes()).map_err(|_| unreachable!())
+        },
+        Duration::from_secs(3600),
+    );
+}
+
+#[test]
+fn receipt_received_not_written_waits_a_day() {
+    run_receipt_matrix_test(
+        "receipt-received-not-written",
+        |sha256, size| {
+            let json = format!(
+                r#"{{"status":"ok","segment":"120000_300","file_descriptors":[{{"submitted":"{FILE}","written":"{FILE}","size":{size},"sha256":"{sha256}","disposition":"received_not_written"}}]}}"#
+            );
+            decode_upload_response(json.as_bytes()).map_err(|_| unreachable!())
+        },
+        Duration::from_secs(86400),
+    );
+}
+
+#[test]
+fn valid_ok_receipt_acks() {
+    run(async {
+        let temporary = TestDirectory::new("valid-ok-receipt");
+        create_segment(&temporary, "20260701", "120000_300", b"fixture\n");
+        let mut scheduler =
+            scheduler_with_source(&temporary, SyncWake::default(), DEFAULT_SOURCE, 0);
+        let mut journal = FakeJournal::default();
+        let summary = scheduler.run_sweep(&mut journal, no_shutdown()).await;
+        assert_eq!(summary.custodied, 1);
+        assert!(!segment_path(&temporary, "20260701", "120000_300").exists());
+    });
+}
+
+#[test]
+fn valid_duplicate_receipt_stores_existing_segment() {
+    run(async {
+        let temporary = TestDirectory::new("valid-dup-receipt");
+        create_segment(&temporary, "20260701", "120000_300", b"fixture\n");
+        let files = inventory_files(
+            vec![segment_path(&temporary, "20260701", "120000_300").join(FILE)],
+            None,
+        )
+        .await
+        .expect("inventory");
+        let descriptors = files
+            .iter()
+            .map(|f| ParsedDescriptor {
+                submitted: f.name.clone(),
+                written: f.name.clone(),
+                sha256: f.sha256.clone(),
+                size: f.size,
+                disposition: "already_held".to_owned(),
+            })
+            .collect();
+        let mut journal = FakeJournal::default();
+        journal.upload_outcome(
+            "120000_300",
+            Ok(UploadResult {
+                status: UploadStatus::Duplicate,
+                authoritative_key: Some("120000_299".to_owned()),
+                descriptors: Some(Ok(descriptors)),
+            }),
+        );
+        journal
+            .remote
+            .entry("20260701".to_owned())
+            .or_default()
+            .insert("120000_299".to_owned(), files);
+        let mut scheduler =
+            scheduler_with_source(&temporary, SyncWake::default(), DEFAULT_SOURCE, 0);
+        let summary = scheduler.run_sweep(&mut journal, no_shutdown()).await;
+        assert_eq!(summary.custodied, 1);
+        assert!(!segment_path(&temporary, "20260701", "120000_300").exists());
+    });
+}
+
+#[test]
+fn valid_collision_receipt_stores_segment_key() {
+    run(async {
+        let temporary = TestDirectory::new("valid-collision-receipt");
+        create_segment(&temporary, "20260701", "120000_300", b"fixture\n");
+        let files = inventory_files(
+            vec![segment_path(&temporary, "20260701", "120000_300").join(FILE)],
+            None,
+        )
+        .await
+        .expect("inventory");
+        let descriptors = files
+            .iter()
+            .map(|f| ParsedDescriptor {
+                submitted: f.name.clone(),
+                written: f.name.clone(),
+                sha256: f.sha256.clone(),
+                size: f.size,
+                disposition: "written".to_owned(),
+            })
+            .collect();
+        let mut journal = FakeJournal::default();
+        journal.upload_outcome(
+            "120000_300",
+            Ok(UploadResult {
+                status: UploadStatus::Collision,
+                authoritative_key: Some("120000_301".to_owned()),
+                descriptors: Some(Ok(descriptors)),
+            }),
+        );
+        journal
+            .remote
+            .entry("20260701".to_owned())
+            .or_default()
+            .insert("120000_301".to_owned(), files);
+        let mut scheduler =
+            scheduler_with_source(&temporary, SyncWake::default(), DEFAULT_SOURCE, 0);
+        let summary = scheduler.run_sweep(&mut journal, no_shutdown()).await;
+        assert_eq!(summary.custodied, 1);
+        assert!(!segment_path(&temporary, "20260701", "120000_300").exists());
+    });
+}
+
+#[test]
+fn valid_receipt_allows_written_name_to_differ() {
+    run(async {
+        let temporary = TestDirectory::new("valid-written-diff");
+        create_segment(&temporary, "20260701", "120000_300", b"fixture\n");
+        let files = inventory_files(
+            vec![segment_path(&temporary, "20260701", "120000_300").join(FILE)],
+            None,
+        )
+        .await
+        .expect("inventory");
+        let descriptors = files
+            .iter()
+            .map(|f| ParsedDescriptor {
+                submitted: f.name.clone(),
+                written: "remapped_name.jsonl".to_owned(),
+                sha256: f.sha256.clone(),
+                size: f.size,
+                disposition: "written".to_owned(),
+            })
+            .collect();
+        let mut journal = FakeJournal::default();
+        journal.upload_outcome(
+            "120000_300",
+            Ok(UploadResult {
+                status: UploadStatus::Ok,
+                authoritative_key: Some("120000_300".to_owned()),
+                descriptors: Some(Ok(descriptors)),
+            }),
+        );
+        journal.list_outcome(
+            "20260701",
+            Ok(SegmentsEnvelope {
+                items: vec![SegmentItem {
+                    key: "120000_300".to_owned(),
+                    observed: false,
+                    files: vec![SegmentFile {
+                        name: "remapped_name.jsonl".to_owned(),
+                        size: files[0].size,
+                        sha256: files[0].sha256.clone(),
+                        status: ListingFileStatus::Present,
+                        submitted_name: Some(FILE.to_owned()),
+                    }],
+                    original_key: None,
+                }],
+                total: 1,
+                protocol_version: PROTOCOL_VERSION_NUMBER,
+            }),
+        );
+        let mut scheduler =
+            scheduler_with_source(&temporary, SyncWake::default(), DEFAULT_SOURCE, 0);
+        let summary = scheduler.run_sweep(&mut journal, no_shutdown()).await;
+        assert_eq!(summary.custodied, 1);
+        assert!(!segment_path(&temporary, "20260701", "120000_300").exists());
+    });
+}
+
+#[test]
+fn idle_acked_tree_probes_status_once_per_sweep() {
+    run(async {
+        let temporary = TestDirectory::new("idle-acked-status");
+        create_segment(&temporary, "20260701", "120000_300", b"fixture\n");
+        let mut scheduler = scheduler(&temporary, SyncWake::default());
+        let mut journal = FakeJournal::default();
+        let first = scheduler.run_sweep(&mut journal, no_shutdown()).await;
+        assert_eq!(first.custodied, 1);
+        journal.clear_calls();
+
+        let summary = scheduler.run_sweep(&mut journal, no_shutdown()).await;
+        assert_eq!(summary.attempted, 0);
+        assert_eq!(journal.calls, vec![Call::SystemStatus]);
+    });
+}
+
+#[test]
+fn idle_status_revoked_publishes_revoked() {
+    run(async {
+        let temporary = TestDirectory::new("idle-status-revoked");
+        ensure_private_directory(temporary.path()).expect("prepare data root");
+        let lock = InstanceLock::acquire(temporary.path()).expect("instance lock");
+        let health = HealthWriter::new(temporary.path().to_path_buf(), &lock);
+        let (activity, _rx) = watch::channel(SyncActivity::Idle);
+        let (stop, shutdown) = watch::channel(false);
+        let mut scheduler =
+            scheduler(&temporary, SyncWake::default()).with_observability(activity, health);
+        let mut journal = FakeJournal::default();
+        journal
+            .status_outcomes
+            .push_back(Err(SyncOperationError::EndSweep(SyncFailureClass::Auth)));
+        let task = tokio::spawn(async move {
+            let mut journal = journal;
+            scheduler.run_with_shutdown(&mut journal, shutdown).await;
+        });
+        let snapshot = wait_for_idle_snapshot(temporary.path()).await;
+        stop.send_replace(true);
+        task.await.expect("join scheduler");
+        assert_eq!(
+            snapshot["last_error_code"],
+            DiagnosticCode::JournalRevoked.as_str()
+        );
+    });
+}
+
+#[test]
+fn idle_status_failure_does_not_advance_contact() {
+    run(async {
+        let temporary = TestDirectory::new("idle-status-failure");
+        ensure_private_directory(temporary.path()).expect("prepare data root");
+        let lock = InstanceLock::acquire(temporary.path()).expect("instance lock");
+        let health = HealthWriter::new(temporary.path().to_path_buf(), &lock);
+        let (activity, _rx) = watch::channel(SyncActivity::Idle);
+        let (stop, shutdown) = watch::channel(false);
+        let mut scheduler =
+            scheduler(&temporary, SyncWake::default()).with_observability(activity, health);
+        let mut journal = FakeJournal::default();
+        journal
+            .status_outcomes
+            .push_back(Err(SyncOperationError::EndSweep(SyncFailureClass::Timeout)));
+        let task = tokio::spawn(async move {
+            let mut journal = journal;
+            scheduler.run_with_shutdown(&mut journal, shutdown).await;
+        });
+        let snapshot = wait_for_idle_snapshot(temporary.path()).await;
+        stop.send_replace(true);
+        task.await.expect("join scheduler");
+        assert_eq!(
+            snapshot["last_successful_sync_unix_seconds"],
+            serde_json::Value::Null
+        );
+    });
+}
+
+#[test]
+fn unacked_segment_uploads_before_any_segments_read() {
+    run(async {
+        let temporary = TestDirectory::new("unacked-upload-first");
+        create_segment(&temporary, "20260701", "120000_300", b"fixture\n");
+        let mut scheduler =
+            scheduler_with_source(&temporary, SyncWake::default(), DEFAULT_SOURCE, 0);
+        let mut journal = FakeJournal::default();
+        scheduler.run_sweep(&mut journal, no_shutdown()).await;
+        assert_eq!(journal.calls[0], Call::Upload("120000_300".to_owned()));
+        assert_eq!(journal.calls[1], Call::Listing("20260701".to_owned()));
+    });
+}
+
+#[test]
+fn retention_proves_two_of_three_and_rechecks_the_third() {
+    run(async {
+        let temporary = TestDirectory::new("retention-two-of-three");
+        for seg in ["120000_300", "120100_300", "120200_300"] {
+            create_segment(&temporary, "20260701", seg, b"fixture\n");
+        }
+        let mut scheduler1 =
+            scheduler_with_source(&temporary, SyncWake::default(), DEFAULT_SOURCE, -1);
+        let mut journal = FakeJournal::default();
+        scheduler1.run_sweep(&mut journal, no_shutdown()).await;
+        journal
+            .remote
+            .get_mut("20260701")
+            .unwrap()
+            .remove("120200_300");
+        journal.clear_calls();
+
+        let mut scheduler2 =
+            scheduler_with_source(&temporary, SyncWake::default(), DEFAULT_SOURCE, 0);
+        let summary = scheduler2.run_sweep(&mut journal, no_shutdown()).await;
+        assert_eq!(summary.attempted, 0);
+        assert!(!segment_path(&temporary, "20260701", "120000_300").exists());
+        assert!(!segment_path(&temporary, "20260701", "120100_300").exists());
+        assert!(segment_path(&temporary, "20260701", "120200_300").exists());
+    });
+}
+
+#[test]
+fn retention_next_day_read_deletes_the_unproven_segment() {
+    paused(async {
+        let temporary = TestDirectory::new("retention-next-day");
+        create_segment(&temporary, "20260701", "120000_300", b"fixture\n");
+        let test_clock = clock();
+        let mut scheduler1 =
+            scheduler_with_clock(&temporary, SyncWake::default(), Arc::clone(&test_clock), 0);
+        let mut journal = FakeJournal::default();
+        journal.list_outcome("20260701", Ok(empty_listing()));
+        let s1 = scheduler1.run_sweep(&mut journal, no_shutdown()).await;
+        assert_eq!(s1.attempted, 1);
+        assert!(segment_path(&temporary, "20260701", "120000_300").exists());
+
+        journal.clear_calls();
+        let files = inventory_files(
+            vec![segment_path(&temporary, "20260701", "120000_300").join(FILE)],
+            None,
+        )
+        .await
+        .unwrap();
+        journal
+            .remote
+            .entry("20260701".to_owned())
+            .or_default()
+            .insert("120000_300".to_owned(), files);
+
+        advance_both(&test_clock, Duration::from_secs(86401)).await;
+        let mut scheduler2 =
+            scheduler_with_clock(&temporary, SyncWake::default(), Arc::clone(&test_clock), 0);
+        let s2 = scheduler2.run_sweep(&mut journal, no_shutdown()).await;
+        assert_eq!(s2.attempted, 0);
+        assert!(!segment_path(&temporary, "20260701", "120000_300").exists());
+    });
+}
+
+#[test]
+fn changed_bytes_after_ack_upload_instead_of_delete() {
+    run(async {
+        let temporary = TestDirectory::new("retention-changed-bytes");
+        create_segment(&temporary, "20260701", "120000_300", b"first\n");
+        let mut scheduler =
+            scheduler_with_source(&temporary, SyncWake::default(), DEFAULT_SOURCE, -1);
+        let mut journal = FakeJournal::default();
+        scheduler.run_sweep(&mut journal, no_shutdown()).await;
+        assert_eq!(journal.uploads(), vec!["120000_300".to_owned()]);
+
+        std::fs::write(
+            segment_path(&temporary, "20260701", "120000_300").join(FILE),
+            b"modified\n",
+        )
+        .unwrap();
+        journal.clear_calls();
+
+        let mut scheduler_ret =
+            scheduler_with_source(&temporary, SyncWake::default(), DEFAULT_SOURCE, 0);
+        let summary = scheduler_ret.run_sweep(&mut journal, no_shutdown()).await;
+        assert_eq!(summary.attempted, 1);
+        assert_eq!(journal.uploads(), vec!["120000_300".to_owned()]);
+    });
+}
+
+#[test]
+fn retention_listing_failure_still_uploads_a_new_segment() {
+    run(async {
+        let temporary = TestDirectory::new("retention-listing-failure");
+        create_segment(&temporary, "20260701", "120000_300", b"fixture 1\n");
+        create_segment(&temporary, "20260702", "120000_300", b"fixture 2\n");
+        let mut scheduler =
+            scheduler_with_source(&temporary, SyncWake::default(), DEFAULT_SOURCE, 0);
+        let mut journal = FakeJournal::default();
+        journal.list_outcome(
+            "20260701",
+            Err(SyncOperationError::EndSweep(SyncFailureClass::Timeout)),
+        );
+        let summary = scheduler.run_sweep(&mut journal, no_shutdown()).await;
+        assert_eq!(summary.attempted, 2);
+        assert_eq!(journal.uploads().len(), 2);
+    });
+}
+
+#[test]
+fn retention_proves_the_acks_stored_key() {
+    run(async {
+        let temporary = TestDirectory::new("retention-proves-stored-key");
+        create_segment(&temporary, "20260701", "120000_300", b"fixture\n");
+        let files = inventory_files(
+            vec![segment_path(&temporary, "20260701", "120000_300").join(FILE)],
+            None,
+        )
+        .await
+        .expect("inventory");
+        let descriptors = files
+            .iter()
+            .map(|f| ParsedDescriptor {
+                submitted: f.name.clone(),
+                written: f.name.clone(),
+                sha256: f.sha256.clone(),
+                size: f.size,
+                disposition: "written".to_owned(),
+            })
+            .collect();
+        let mut journal = FakeJournal::default();
+        journal.upload_outcome(
+            "120000_300",
+            Ok(UploadResult {
+                status: UploadStatus::Collision,
+                authoritative_key: Some("120000_301".to_owned()),
+                descriptors: Some(Ok(descriptors)),
+            }),
+        );
+        journal
+            .remote
+            .entry("20260701".to_owned())
+            .or_default()
+            .insert("120000_301".to_owned(), files);
+        let mut scheduler =
+            scheduler_with_source(&temporary, SyncWake::default(), DEFAULT_SOURCE, 0);
+        let summary = scheduler.run_sweep(&mut journal, no_shutdown()).await;
+        assert_eq!(summary.custodied, 1);
+        assert!(!segment_path(&temporary, "20260701", "120000_300").exists());
+    });
+}
+
+#[test]
+fn retention_listing_at_the_local_key_does_not_delete() {
+    run(async {
+        let temporary = TestDirectory::new("retention-local-key-no-del");
+        create_segment(&temporary, "20260701", "120000_300", b"fixture\n");
+        let files = inventory_files(
+            vec![segment_path(&temporary, "20260701", "120000_300").join(FILE)],
+            None,
+        )
+        .await
+        .expect("inventory");
+        let descriptors = files
+            .iter()
+            .map(|f| ParsedDescriptor {
+                submitted: f.name.clone(),
+                written: f.name.clone(),
+                sha256: f.sha256.clone(),
+                size: f.size,
+                disposition: "written".to_owned(),
+            })
+            .collect();
+        let mut journal = FakeJournal::default();
+        journal.upload_outcome(
+            "120000_300",
+            Ok(UploadResult {
+                status: UploadStatus::Collision,
+                authoritative_key: Some("120000_301".to_owned()),
+                descriptors: Some(Ok(descriptors)),
+            }),
+        );
+        journal
+            .remote
+            .entry("20260701".to_owned())
+            .or_default()
+            .insert("120000_300".to_owned(), files);
+        let mut scheduler =
+            scheduler_with_source(&temporary, SyncWake::default(), DEFAULT_SOURCE, 0);
+        let _ = scheduler.run_sweep(&mut journal, no_shutdown()).await;
+        assert!(segment_path(&temporary, "20260701", "120000_300").exists());
+    });
+}
+
+#[test]
+fn future_due_times_clamp_to_one_interval() {
+    paused(async {
+        let temporary = TestDirectory::new("bounds-clamp-interval");
+        create_segment(&temporary, "20260701", "120000_300", b"fixture\n");
+        let test_clock = clock();
+        let mut scheduler1 =
+            scheduler_with_clock(&temporary, SyncWake::default(), Arc::clone(&test_clock), -1);
+        let mut journal = FakeJournal::default();
+        journal.upload_outcome(
+            "120000_300",
+            Ok(UploadResult {
+                status: UploadStatus::Failed,
+                authoritative_key: None,
+                descriptors: None,
+            }),
+        );
+        scheduler1.run_sweep(&mut journal, no_shutdown()).await;
+
+        let state_path = temporary
+            .path()
+            .join("sync-ledger")
+            .join("20260701")
+            .join(STREAM)
+            .join("120000_300")
+            .join("state.json");
+        let content = std::fs::read_to_string(&state_path).unwrap();
+        let mut val: serde_json::Value = serde_json::from_str(&content).unwrap();
+        val["next_attempt_unix"] =
+            serde_json::json!(test_clock.wall_now().unix_timestamp() + 100 * 86400);
+        val["next_attempt_interval_seconds"] = serde_json::json!(3600);
+        std::fs::write(&state_path, serde_json::to_string(&val).unwrap()).unwrap();
+
+        let mut scheduler2 =
+            scheduler_with_clock(&temporary, SyncWake::default(), Arc::clone(&test_clock), -1);
+        journal.clear_calls();
+        let summary = scheduler2.run_sweep(&mut journal, no_shutdown()).await;
+        assert_eq!(summary.attempted, 0);
+        assert!(journal.uploads().is_empty());
+    });
+}
+
+#[test]
+fn fresh_scheduler_honors_persisted_bounds() {
+    paused(async {
+        let temporary = TestDirectory::new("bounds-persisted");
+        create_segment(&temporary, "20260701", "120000_300", b"fixture\n");
+        let test_clock = clock();
+        let mut scheduler1 =
+            scheduler_with_clock(&temporary, SyncWake::default(), Arc::clone(&test_clock), -1);
+        let mut journal = FakeJournal::default();
+        journal.upload_outcome(
+            "120000_300",
+            Ok(UploadResult {
+                status: UploadStatus::Failed,
+                authoritative_key: None,
+                descriptors: None,
+            }),
+        );
+        scheduler1.run_sweep(&mut journal, no_shutdown()).await;
+
+        let mut scheduler2 =
+            scheduler_with_clock(&temporary, SyncWake::default(), Arc::clone(&test_clock), -1);
+        journal.clear_calls();
+        let summary = scheduler2.run_sweep(&mut journal, no_shutdown()).await;
+        assert_eq!(summary.attempted, 0);
+        assert!(journal.uploads().is_empty());
+    });
+}
+
+#[test]
+fn deferred_and_terminal_keep_publish_one_status_probe() {
+    paused(async {
+        let temporary = TestDirectory::new("bounds-status-probe");
+        create_segment(&temporary, "20260701", "120000_300", b"fixture\n");
+        let test_clock = clock();
+        let mut scheduler =
+            scheduler_with_clock(&temporary, SyncWake::default(), Arc::clone(&test_clock), -1);
+        let mut journal = FakeJournal::default();
+        journal.upload_outcome(
+            "120000_300",
+            Ok(UploadResult {
+                status: UploadStatus::Failed,
+                authoritative_key: None,
+                descriptors: None,
+            }),
+        );
+        scheduler.run_sweep(&mut journal, no_shutdown()).await;
+        journal.clear_calls();
+
+        let summary = scheduler.run_sweep(&mut journal, no_shutdown()).await;
+        assert_eq!(summary.attempted, 0);
+        assert_eq!(journal.calls, vec![Call::SystemStatus]);
+    });
+}
+
+#[test]
+fn three_identical_receipts_wait_a_day_and_a_new_answer_restores_the_hour() {
+    paused(async {
+        let temporary = TestDirectory::new("bounds-three-identical");
+        let bytes = b"fixture\n";
+        create_segment(&temporary, "20260701", "120000_300", bytes);
+        let test_clock = clock();
+        let mut scheduler =
+            scheduler_with_clock(&temporary, SyncWake::default(), Arc::clone(&test_clock), -1);
+        let mut journal = FakeJournal::default();
+
+        let bad_json = r#"{"status":"ok","segment":"120000_300","file_descriptors":[]}"#;
+        let bad_res = decode_upload_response(bad_json.as_bytes()).unwrap();
+
+        journal.upload_outcome("120000_300", Ok(bad_res.clone()));
+        scheduler.run_sweep(&mut journal, no_shutdown()).await;
+        journal.clear_calls();
+
+        advance_both(&test_clock, Duration::from_secs(3601)).await;
+        journal.upload_outcome("120000_300", Ok(bad_res.clone()));
+        scheduler.run_sweep(&mut journal, no_shutdown()).await;
+        journal.clear_calls();
+
+        advance_both(&test_clock, Duration::from_secs(3601)).await;
+        journal.upload_outcome("120000_300", Ok(bad_res.clone()));
+        scheduler.run_sweep(&mut journal, no_shutdown()).await;
+        journal.clear_calls();
+
+        advance_both(&test_clock, Duration::from_secs(3601)).await;
+        let s_early = scheduler.run_sweep(&mut journal, no_shutdown()).await;
+        assert_eq!(s_early.attempted, 0);
+
+        advance_both(&test_clock, Duration::from_secs(86400)).await;
+        journal.upload_outcome(
+            "120000_300",
+            Ok(UploadResult {
+                status: UploadStatus::Conflict,
+                authoritative_key: None,
+                descriptors: None,
+            }),
+        );
+        let s_diff = scheduler.run_sweep(&mut journal, no_shutdown()).await;
+        assert_eq!(s_diff.attempted, 1);
+        journal.clear_calls();
+
+        advance_both(&test_clock, Duration::from_secs(3601)).await;
+        journal.upload_outcome("120000_300", Ok(bad_res));
+        let s_restored = scheduler.run_sweep(&mut journal, no_shutdown()).await;
+        assert_eq!(s_restored.attempted, 1);
+    });
+}
+
+#[test]
+fn repaired_credential_reacks_under_the_new_generation() {
+    run(async {
+        let temporary = TestDirectory::new("repaired-credential");
+        create_segment(&temporary, "20260701", "120000_300", b"fixture\n");
+        let id1 = test_journal_identity();
+        let test_clock = clock();
+        let mut scheduler1 = scheduler_with_clock_and_identity(
+            &temporary,
+            SyncWake::default(),
+            Arc::clone(&test_clock),
+            id1,
+            -1,
+        );
+        let mut journal = FakeJournal::default();
+        let s1 = scheduler1.run_sweep(&mut journal, no_shutdown()).await;
+        assert_eq!(s1.custodied, 1);
+        journal.clear_calls();
+
+        let mut id2 = test_journal_identity();
+        id2.pairing_generation_hex = "pairgen2".to_owned();
+        let mut scheduler2 = scheduler_with_clock_and_identity(
+            &temporary,
+            SyncWake::default(),
+            Arc::clone(&test_clock),
+            id2,
+            -1,
+        );
+        let s2 = scheduler2.run_sweep(&mut journal, no_shutdown()).await;
+        assert_eq!(s2.attempted, 1);
+        assert_eq!(journal.uploads(), vec!["120000_300".to_owned()]);
+    });
+}
+
+#[test]
+fn ack_write_failure_before_rename_reuploads_on_the_next_scheduler() {
+    run(async {
+        let temporary = TestDirectory::new("ack-write-fail-reupload");
+        create_segment(&temporary, "20260701", "120000_300", b"fixture\n");
+        let mut scheduler1 = scheduler(&temporary, SyncWake::default());
+        let mut journal = FakeJournal::default();
+
+        set_atomic_write_fault_for_prefix(
+            &temporary.path().join("sync-ledger"),
+            AtomicWriteFault::FailBeforeRename,
+            1,
+        );
+        let summary = scheduler1.run_sweep(&mut journal, no_shutdown()).await;
+        set_atomic_write_fault(None);
+        assert_eq!(summary.custodied, 0);
+
+        let mut scheduler2 = scheduler(&temporary, SyncWake::default());
+        journal.clear_calls();
+        let summary2 = scheduler2.run_sweep(&mut journal, no_shutdown()).await;
+        assert_eq!(summary2.attempted, 1);
+        assert_eq!(journal.uploads(), vec!["120000_300".to_owned()]);
+    });
+}
+
+#[test]
+fn three_ack_write_failures_record_private_state_io() {
+    run(async {
+        let temporary = TestDirectory::new("ack-three-failures");
+        create_segment(&temporary, "20260701", "120000_300", b"fixture 1\n");
+        create_segment(&temporary, "20260701", "120100_300", b"fixture 2\n");
+        create_segment(&temporary, "20260701", "120200_300", b"fixture 3\n");
+        let mut scheduler = scheduler(&temporary, SyncWake::default());
+        let mut journal = FakeJournal::default();
+
+        set_atomic_write_fault_for_prefix(
+            &temporary.path().join("sync-ledger"),
+            AtomicWriteFault::FailBeforeRename,
+            3,
+        );
+        let summary = scheduler.run_sweep(&mut journal, no_shutdown()).await;
+        set_atomic_write_fault(None);
+        assert_eq!(summary.diagnostic, Some(DiagnosticCode::PrivateStateIo));
+    });
+}
+
+#[test]
+fn truncated_ack_is_not_an_ack() {
+    run(async {
+        let temporary = TestDirectory::new("ack-truncated");
+        create_segment(&temporary, "20260701", "120000_300", b"fixture\n");
+        let mut scheduler1 = scheduler(&temporary, SyncWake::default());
+        let mut journal = FakeJournal::default();
+        scheduler1.run_sweep(&mut journal, no_shutdown()).await;
+
+        let ack_path = temporary
+            .path()
+            .join("sync-ledger")
+            .join("20260701")
+            .join(STREAM)
+            .join("120000_300")
+            .join("ack.json");
+        std::fs::write(&ack_path, b"{\"day\":\"20260701").unwrap();
+
+        let mut scheduler2 = scheduler(&temporary, SyncWake::default());
+        journal.clear_calls();
+        let summary = scheduler2.run_sweep(&mut journal, no_shutdown()).await;
+        assert_eq!(summary.attempted, 1);
+        assert_eq!(journal.uploads(), vec!["120000_300".to_owned()]);
+    });
+}
+
+#[test]
+fn ack_location_mismatch_is_not_an_ack() {
+    run(async {
+        let temporary = TestDirectory::new("ack-loc-mismatch");
+        create_segment(&temporary, "20260701", "120000_300", b"fixture\n");
+        let mut scheduler1 = scheduler(&temporary, SyncWake::default());
+        let mut journal = FakeJournal::default();
+        scheduler1.run_sweep(&mut journal, no_shutdown()).await;
+
+        let ack_path = temporary
+            .path()
+            .join("sync-ledger")
+            .join("20260701")
+            .join(STREAM)
+            .join("120000_300")
+            .join("ack.json");
+        let content = std::fs::read_to_string(&ack_path).unwrap();
+        let mut val: serde_json::Value = serde_json::from_str(&content).unwrap();
+        val["location"] = serde_json::json!("/wrong/location/ack.json");
+        std::fs::write(&ack_path, serde_json::to_string(&val).unwrap()).unwrap();
+
+        let mut scheduler2 = scheduler(&temporary, SyncWake::default());
+        journal.clear_calls();
+        let summary = scheduler2.run_sweep(&mut journal, no_shutdown()).await;
+        assert_eq!(summary.attempted, 1);
+        assert_eq!(journal.uploads(), vec!["120000_300".to_owned()]);
+    });
+}
+
+#[test]
+fn ack_for_another_journal_is_not_an_ack() {
+    run(async {
+        let temporary = TestDirectory::new("ack-diff-journal");
+        create_segment(&temporary, "20260701", "120000_300", b"fixture\n");
+        let mut scheduler1 = scheduler(&temporary, SyncWake::default());
+        let mut journal = FakeJournal::default();
+        scheduler1.run_sweep(&mut journal, no_shutdown()).await;
+
+        let ack_path = temporary
+            .path()
+            .join("sync-ledger")
+            .join("20260701")
+            .join(STREAM)
+            .join("120000_300")
+            .join("ack.json");
+        let content = std::fs::read_to_string(&ack_path).unwrap();
+        let mut val: serde_json::Value = serde_json::from_str(&content).unwrap();
+        val["instance_id"] = serde_json::json!("other-instance");
+        std::fs::write(&ack_path, serde_json::to_string(&val).unwrap()).unwrap();
+
+        let mut scheduler2 = scheduler(&temporary, SyncWake::default());
+        journal.clear_calls();
+        let summary = scheduler2.run_sweep(&mut journal, no_shutdown()).await;
+        assert_eq!(summary.attempted, 1);
+        assert_eq!(journal.uploads(), vec!["120000_300".to_owned()]);
+    });
+}
+
+#[test]
+fn ack_file_set_mismatch_is_not_an_ack() {
+    run(async {
+        let temporary = TestDirectory::new("ack-fileset-mismatch");
+        create_segment(&temporary, "20260701", "120000_300", b"fixture\n");
+        let mut scheduler1 = scheduler(&temporary, SyncWake::default());
+        let mut journal = FakeJournal::default();
+        scheduler1.run_sweep(&mut journal, no_shutdown()).await;
+
+        let ack_path = temporary
+            .path()
+            .join("sync-ledger")
+            .join("20260701")
+            .join(STREAM)
+            .join("120000_300")
+            .join("ack.json");
+        let content = std::fs::read_to_string(&ack_path).unwrap();
+        let mut val: serde_json::Value = serde_json::from_str(&content).unwrap();
+        val["files"] = serde_json::json!([]);
+        std::fs::write(&ack_path, serde_json::to_string(&val).unwrap()).unwrap();
+
+        let mut scheduler2 = scheduler(&temporary, SyncWake::default());
+        journal.clear_calls();
+        let summary = scheduler2.run_sweep(&mut journal, no_shutdown()).await;
+        assert_eq!(summary.attempted, 1);
+        assert_eq!(journal.uploads(), vec!["120000_300".to_owned()]);
+    });
+}
+
+fn test_journal_identity() -> JournalIdentity {
+    JournalIdentity {
+        instance_id: "inst-1".to_owned(),
+        ca_fp_prefix_hex: "cafp1".to_owned(),
+        pairing_generation_hex: "pairgen1".to_owned(),
+    }
+}
+
 fn scheduler(temporary: &TestDirectory, wake: SyncWake) -> SyncScheduler {
     scheduler_with_source(temporary, wake, DEFAULT_SOURCE, -1)
 }
@@ -1620,13 +2479,103 @@ fn scheduler_with_source(
     retention_days: i64,
 ) -> SyncScheduler {
     SyncScheduler::new(
-        temporary.path().join("captures"),
+        temporary.path().to_path_buf(),
         stream(),
         source.to_owned(),
         retention_days,
         clock(),
         wake,
+        test_journal_identity(),
     )
+}
+
+fn scheduler_with_clock(
+    temporary: &TestDirectory,
+    wake: SyncWake,
+    clock: Arc<TestClock>,
+    retention_days: i64,
+) -> SyncScheduler {
+    scheduler_with_clock_and_identity(
+        temporary,
+        wake,
+        clock,
+        test_journal_identity(),
+        retention_days,
+    )
+}
+
+fn scheduler_with_clock_and_identity(
+    temporary: &TestDirectory,
+    wake: SyncWake,
+    clock: Arc<TestClock>,
+    identity: JournalIdentity,
+    retention_days: i64,
+) -> SyncScheduler {
+    SyncScheduler::new(
+        temporary.path().to_path_buf(),
+        stream(),
+        DEFAULT_SOURCE.to_owned(),
+        retention_days,
+        clock,
+        wake,
+        identity,
+    )
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    let hash = hasher.finalize();
+    let mut hex = String::with_capacity(64);
+    for byte in hash {
+        use std::fmt::Write;
+        let _ = write!(hex, "{:02x}", byte);
+    }
+    hex
+}
+
+fn run_receipt_matrix_test(
+    test_name: &str,
+    make_response: impl Fn(&str, u64) -> Result<UploadResult, SyncOperationError>,
+    expected_wait: Duration,
+) {
+    paused(async move {
+        let temporary = TestDirectory::new(test_name);
+        let bytes = b"test payload\n";
+        create_segment(&temporary, "20260701", "120000_300", bytes);
+        let sha256 = sha256_hex(bytes);
+        let size = bytes.len() as u64;
+
+        let test_clock = clock();
+        let mut scheduler =
+            scheduler_with_clock(&temporary, SyncWake::default(), Arc::clone(&test_clock), -1);
+        let mut journal = FakeJournal::default();
+        let outcome = make_response(&sha256, size);
+        journal.upload_outcome("120000_300", outcome);
+
+        let summary = scheduler.run_sweep(&mut journal, no_shutdown()).await;
+        assert_eq!(summary.attempted, 1);
+        assert_eq!(journal.uploads(), vec!["120000_300".to_owned()]);
+        journal.clear_calls();
+
+        let before_wait = expected_wait - Duration::from_secs(60);
+        advance_both(&test_clock, before_wait).await;
+        let summary2 = scheduler.run_sweep(&mut journal, no_shutdown()).await;
+        assert_eq!(
+            summary2.attempted, 0,
+            "segment should be deferred before boundary"
+        );
+        assert!(journal.uploads().is_empty());
+
+        advance_both(&test_clock, Duration::from_secs(120)).await;
+        let summary3 = scheduler.run_sweep(&mut journal, no_shutdown()).await;
+        assert_eq!(
+            summary3.attempted, 1,
+            "segment should be retried after boundary"
+        );
+        assert_eq!(journal.uploads(), vec!["120000_300".to_owned()]);
+    });
 }
 
 fn stream() -> DerivedName {
@@ -1708,14 +2657,14 @@ struct FakeJournal {
     remote: HashMap<String, HashMap<String, Vec<LocalFile>>>,
     list_outcomes: HashMap<String, VecDeque<Result<SegmentsEnvelope, SyncOperationError>>>,
     upload_outcomes: HashMap<String, VecDeque<Result<UploadResult, SyncOperationError>>>,
+    status_outcomes: VecDeque<Result<(), SyncOperationError>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum Call {
     Upload(String),
-    Manifest,
-    ManifestDay(String),
     Listing(String),
+    SystemStatus,
 }
 
 impl FakeJournal {
@@ -1732,6 +2681,7 @@ impl FakeJournal {
             .or_default()
             .push_back(outcome);
     }
+
     fn clear_calls(&mut self) {
         self.calls.clear();
         self.sources.clear();
@@ -1764,7 +2714,7 @@ impl FakeJournal {
             .iter()
             .filter_map(|call| match call {
                 Call::Upload(segment) => Some(segment.clone()),
-                Call::Manifest | Call::ManifestDay(_) | Call::Listing(_) => None,
+                Call::Listing(_) | Call::SystemStatus => None,
             })
             .collect()
     }
@@ -1777,25 +2727,6 @@ impl FakeJournal {
             }
         }
         counts
-    }
-
-    fn reconciliation_calls(&self, day: &str) -> (usize, usize, usize) {
-        let manifests = self
-            .calls
-            .iter()
-            .filter(|call| matches!(call, Call::Manifest))
-            .count();
-        let manifest_days = self
-            .calls
-            .iter()
-            .filter(|call| matches!(call, Call::ManifestDay(call_day) if call_day == day))
-            .count();
-        let segments = self
-            .calls
-            .iter()
-            .filter(|call| matches!(call, Call::Listing(call_day) if call_day == day))
-            .count();
-        (manifests, manifest_days, segments)
     }
 }
 
@@ -1817,9 +2748,29 @@ impl SyncJournal for FakeJournal {
             {
                 return outcome;
             }
+            if !self.evidence_visible(source) {
+                return Ok(UploadResult {
+                    status: UploadStatus::Failed,
+                    authoritative_key: None,
+                    descriptors: None,
+                });
+            }
             let inventory = inventory_files(files, None).await.map_err(|_| {
-                SyncOperationError::RetainCandidate(DiagnosticCode::LocalSegmentInvalid)
+                SyncOperationError::RetainCandidate {
+                    diagnostic: DiagnosticCode::LocalSegmentInvalid,
+                    answer: "local:local_segment_invalid".to_owned(),
+                }
             })?;
+            let descriptors = inventory
+                .iter()
+                .map(|f| ParsedDescriptor {
+                    submitted: f.name.clone(),
+                    written: f.name.clone(),
+                    sha256: f.sha256.clone(),
+                    size: f.size,
+                    disposition: "written".to_owned(),
+                })
+                .collect();
             if self.evidence_visible(source) {
                 self.remote
                     .entry(candidate.day().to_owned())
@@ -1829,6 +2780,7 @@ impl SyncJournal for FakeJournal {
             Ok(UploadResult {
                 status: UploadStatus::Ok,
                 authoritative_key: Some(candidate.segment().to_owned()),
+                descriptors: Some(Ok(descriptors)),
             })
         })
     }
@@ -1881,85 +2833,23 @@ impl SyncJournal for FakeJournal {
         })
     }
 
-    fn manifest<'a>(
+    fn system_status<'a>(
         &'a mut self,
-        source: &'a str,
-    ) -> Pin<Box<dyn Future<Output = Result<IngestManifest, SyncOperationError>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = Result<(), SyncOperationError>> + Send + 'a>> {
         Box::pin(async move {
-            self.record_source(source);
-            self.calls.push(Call::Manifest);
-            if !self.evidence_visible(source) {
-                return Ok(IngestManifest {
-                    days: HashMap::new().into_iter().collect(),
-                });
+            self.calls.push(Call::SystemStatus);
+            if let Some(outcome) = self.status_outcomes.pop_front() {
+                outcome
+            } else {
+                Ok(())
             }
-            Ok(IngestManifest {
-                days: self
-                    .remote
-                    .iter()
-                    .map(|(day, segments)| {
-                        (
-                            day.clone(),
-                            ManifestDaySummary {
-                                segments: segments.len(),
-                            },
-                        )
-                    })
-                    .collect(),
-            })
-        })
-    }
-
-    fn manifest_day<'a>(
-        &'a mut self,
-        day: &'a str,
-        source: &'a str,
-    ) -> Pin<Box<dyn Future<Output = Result<IngestDayManifest, SyncOperationError>> + Send + 'a>>
-    {
-        Box::pin(async move {
-            self.record_source(source);
-            self.calls.push(Call::ManifestDay(day.to_owned()));
-            if !self.evidence_visible(source) {
-                return Ok(IngestDayManifest {
-                    version: 1,
-                    day: day.to_owned(),
-                    segments: HashMap::new().into_iter().collect(),
-                });
-            }
-            Ok(IngestDayManifest {
-                version: 1,
-                day: day.to_owned(),
-                segments: self
-                    .remote
-                    .get(day)
-                    .into_iter()
-                    .flat_map(|segments| segments.iter())
-                    .map(|(key, files)| {
-                        (
-                            key.clone(),
-                            ManifestSegment {
-                                files: files
-                                    .iter()
-                                    .map(|file| SegmentFile {
-                                        name: file.name.clone(),
-                                        size: file.size,
-                                        sha256: file.sha256.clone(),
-                                        status: ListingFileStatus::Present,
-                                        submitted_name: None,
-                                    })
-                                    .collect(),
-                            },
-                        )
-                    })
-                    .collect(),
-            })
         })
     }
 }
 
 struct BackoffJournal {
     listings: mpsc::UnboundedSender<()>,
-    outcomes: VecDeque<Result<SegmentsEnvelope, SyncOperationError>>,
+    outcomes: VecDeque<Result<(), SyncOperationError>>,
 }
 
 impl SyncJournal for BackoffJournal {
@@ -1978,45 +2868,15 @@ impl SyncJournal for BackoffJournal {
         _source: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<SegmentsEnvelope, SyncOperationError>> + Send + 'a>>
     {
-        Box::pin(async move {
-            let _ = self.listings.send(());
-            self.outcomes
-                .pop_front()
-                .unwrap_or_else(|| Ok(empty_listing()))
-        })
+        Box::pin(async { unreachable!("backoff fixture makes no segment listings") })
     }
 
-    fn manifest<'a>(
+    fn system_status<'a>(
         &'a mut self,
-        _source: &'a str,
-    ) -> Pin<Box<dyn Future<Output = Result<IngestManifest, SyncOperationError>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = Result<(), SyncOperationError>> + Send + 'a>> {
         Box::pin(async move {
             let _ = self.listings.send(());
-            match self
-                .outcomes
-                .pop_front()
-                .unwrap_or_else(|| Ok(empty_listing()))
-            {
-                Ok(_) => Ok(IngestManifest {
-                    days: HashMap::new().into_iter().collect(),
-                }),
-                Err(error) => Err(error),
-            }
-        })
-    }
-
-    fn manifest_day<'a>(
-        &'a mut self,
-        day: &'a str,
-        _source: &'a str,
-    ) -> Pin<Box<dyn Future<Output = Result<IngestDayManifest, SyncOperationError>> + Send + 'a>>
-    {
-        Box::pin(async move {
-            Ok(IngestDayManifest {
-                version: 1,
-                day: day.to_owned(),
-                segments: HashMap::new().into_iter().collect(),
-            })
+            self.outcomes.pop_front().unwrap_or(Ok(()))
         })
     }
 }
@@ -2092,28 +2952,18 @@ impl SyncJournal for GatedJournal {
         self.inner.segments(day, source)
     }
 
-    fn manifest<'a>(
+    fn system_status<'a>(
         &'a mut self,
-        source: &'a str,
-    ) -> Pin<Box<dyn Future<Output = Result<IngestManifest, SyncOperationError>> + Send + 'a>> {
-        self.inner.manifest(source)
-    }
-
-    fn manifest_day<'a>(
-        &'a mut self,
-        day: &'a str,
-        source: &'a str,
-    ) -> Pin<Box<dyn Future<Output = Result<IngestDayManifest, SyncOperationError>> + Send + 'a>>
-    {
-        self.inner.manifest_day(day, source)
+    ) -> Pin<Box<dyn Future<Output = Result<(), SyncOperationError>> + Send + 'a>> {
+        self.inner.system_status()
     }
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum BlockingStage {
-    EmptyListing,
+    Status,
     Upload,
-    PostUploadListing,
+    RetentionListing,
 }
 
 struct BlockingJournal {
@@ -2146,20 +2996,13 @@ impl BlockingJournal {
         }
         std::future::pending().await
     }
-
-    fn blocks_listing(&self) -> bool {
-        match self.stage {
-            BlockingStage::PostUploadListing => self.segment_calls == 1,
-            _ => false,
-        }
-    }
 }
 
 impl SyncJournal for BlockingJournal {
     fn upload<'a>(
         &'a mut self,
         candidate: &'a SegmentCandidate,
-        _files: Vec<PathBuf>,
+        files: Vec<PathBuf>,
         _source: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<UploadResult, SyncOperationError>> + Send + 'a>> {
         Box::pin(async move {
@@ -2170,9 +3013,30 @@ impl SyncJournal for BlockingJournal {
             if self.stage == BlockingStage::Upload {
                 self.wait_forever().await;
             }
+            let descriptors = if self.stage == BlockingStage::RetentionListing {
+                let inventory = inventory_files(files, None).await.map_err(|_| {
+                    SyncOperationError::RetainCandidate {
+                        diagnostic: DiagnosticCode::LocalSegmentInvalid,
+                        answer: "local:local_segment_invalid".to_owned(),
+                    }
+                })?;
+                Some(Ok(inventory
+                    .into_iter()
+                    .map(|f| ParsedDescriptor {
+                        submitted: f.name.clone(),
+                        written: f.name,
+                        sha256: f.sha256,
+                        size: f.size,
+                        disposition: "written".to_owned(),
+                    })
+                    .collect()))
+            } else {
+                None
+            };
             Ok(UploadResult {
                 status: UploadStatus::Ok,
                 authoritative_key: Some(candidate.segment().to_owned()),
+                descriptors,
             })
         })
     }
@@ -2185,7 +3049,7 @@ impl SyncJournal for BlockingJournal {
     {
         Box::pin(async move {
             self.segment_calls += 1;
-            if self.blocks_listing() {
+            if self.stage == BlockingStage::RetentionListing {
                 self.wait_forever().await;
             }
             Ok(SegmentsEnvelope {
@@ -2196,49 +3060,14 @@ impl SyncJournal for BlockingJournal {
         })
     }
 
-    fn manifest<'a>(
+    fn system_status<'a>(
         &'a mut self,
-        _source: &'a str,
-    ) -> Pin<Box<dyn Future<Output = Result<IngestManifest, SyncOperationError>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = Result<(), SyncOperationError>> + Send + 'a>> {
         Box::pin(async move {
-            if self.stage == BlockingStage::EmptyListing {
+            if self.stage == BlockingStage::Status {
                 self.wait_forever().await;
             }
-            let days = if self.stage == BlockingStage::PostUploadListing {
-                [("20260701".to_owned(), ManifestDaySummary { segments: 1 })]
-                    .into_iter()
-                    .collect()
-            } else {
-                HashMap::new().into_iter().collect()
-            };
-            Ok(IngestManifest { days })
-        })
-    }
-
-    fn manifest_day<'a>(
-        &'a mut self,
-        day: &'a str,
-        _source: &'a str,
-    ) -> Pin<Box<dyn Future<Output = Result<IngestDayManifest, SyncOperationError>> + Send + 'a>>
-    {
-        Box::pin(async move {
-            let segments = if self.stage == BlockingStage::PostUploadListing {
-                (0..10)
-                    .map(|index| {
-                        (
-                            format!("12{index:02}00_300"),
-                            ManifestSegment { files: Vec::new() },
-                        )
-                    })
-                    .collect()
-            } else {
-                HashMap::new().into_iter().collect()
-            };
-            Ok(IngestDayManifest {
-                version: 1,
-                day: day.to_owned(),
-                segments,
-            })
+            Ok(())
         })
     }
 }

@@ -8,17 +8,15 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use solstone_tmux::journal::{
-    INGEST_MANIFEST_DAY_PATH, INGEST_MANIFEST_PATH, INGEST_PATH, INGEST_SEGMENTS_PATH,
-};
+use solstone_tmux::journal::{INGEST_PATH, INGEST_SEGMENTS_PATH};
 
 const AUTHORITY_REPOSITORY: &str = "https://github.com/solpbc/solstone-journal";
-const AUTHORITY_COMMIT: &str = "ba16c8ca55b4151430166f0e7f9b0da2d15c6f45";
+const AUTHORITY_COMMIT: &str = "b78ba9eaac8228e65c4b5a3e64d27aefd3ad47cd";
 const AUTHORITY_INPUT_PATH: &str =
     "core/crates/solstone-core-repository-contracts/src/contracts/client_ingest_authority.json";
 const AUTHORITY_INPUT_SHA256: &str =
-    "c27f58430f00cfbcf49f693a86033b5b5a3ec6a30c6d43778170ed6d24e2e2c5";
-const BUNDLE_VERSION: &str = "10.0.0";
+    "cc75cc6caa1db1d3b3c36db903f25b188158e0c162745fedb01f1ed3c09c0a1e";
+const BUNDLE_VERSION: &str = "12.2.0";
 const MANIFEST_PATH: &str = "manifest.json";
 const VENDORED_ROOT: &str = "native/solstone-tmux/vendor/observer-client-contract";
 const IMPORT_PATH: &str = "contracts/observer-client-import.json";
@@ -166,8 +164,16 @@ fn projection_has_only_v3_ingest_operations_and_no_v2_write_route() {
     }
     let expected = BTreeSet::from([
         ("post", INGEST_PATH, "client.ingestUpload"),
-        ("get", INGEST_MANIFEST_PATH, "client.ingestManifest"),
-        ("get", INGEST_MANIFEST_DAY_PATH, "client.ingestManifestDay"),
+        (
+            "get",
+            "/app/devices/ingest/manifest",
+            "client.ingestManifest",
+        ),
+        (
+            "get",
+            "/app/devices/ingest/manifest/{day}",
+            "client.ingestManifestDay",
+        ),
         ("get", INGEST_SEGMENTS_PATH, "client.ingestSegments"),
     ]);
     assert_eq!(actual, expected, "projection operation set differs from v3");

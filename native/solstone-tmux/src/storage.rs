@@ -547,9 +547,37 @@ pub fn atomic_write_bytes(path: &Path, parent: &Path, bytes: &[u8]) -> Result<()
     let result = (|| {
         let fault = {
             let mut state = ATOMIC_WRITE_FAULT.lock().unwrap_or_else(|e| e.into_inner());
-            if state.target.as_ref().is_none_or(|target| target == path) {
-                state.target = None;
-                state.fault.take()
+            if let Some(target) = &state.target {
+                if target == path {
+                    let fault = state.fault;
+                    state.remaining = state.remaining.saturating_sub(1);
+                    if state.remaining == 0 {
+                        state.fault = None;
+                        state.target = None;
+                    }
+                    fault
+                } else {
+                    None
+                }
+            } else if let Some(prefix) = &state.prefix {
+                if path.starts_with(prefix) {
+                    let fault = state.fault;
+                    state.remaining = state.remaining.saturating_sub(1);
+                    if state.remaining == 0 {
+                        state.fault = None;
+                        state.prefix = None;
+                    }
+                    fault
+                } else {
+                    None
+                }
+            } else if state.fault.is_some() {
+                let fault = state.fault;
+                state.remaining = state.remaining.saturating_sub(1);
+                if state.remaining == 0 {
+                    state.fault = None;
+                }
+                fault
             } else {
                 None
             }
@@ -626,18 +654,24 @@ pub enum AtomicWriteFault {
 struct AtomicWriteFaultState {
     fault: Option<AtomicWriteFault>,
     target: Option<PathBuf>,
+    prefix: Option<PathBuf>,
+    remaining: u32,
 }
 
 static ATOMIC_WRITE_FAULT: std::sync::Mutex<AtomicWriteFaultState> =
     std::sync::Mutex::new(AtomicWriteFaultState {
         fault: None,
         target: None,
+        prefix: None,
+        remaining: 0,
     });
 
 pub fn set_atomic_write_fault(fault: Option<AtomicWriteFault>) {
     let mut state = ATOMIC_WRITE_FAULT.lock().unwrap_or_else(|e| e.into_inner());
     state.fault = fault;
     state.target = None;
+    state.prefix = None;
+    state.remaining = if fault.is_some() { 1 } else { 0 };
 }
 
 /// Limit an injected atomic-write fault to one file. Integration tests run in
@@ -647,6 +681,16 @@ pub fn set_atomic_write_fault_for_path(path: &Path, fault: Option<AtomicWriteFau
     let mut state = ATOMIC_WRITE_FAULT.lock().unwrap_or_else(|e| e.into_inner());
     state.fault = fault;
     state.target = fault.map(|_| path.to_path_buf());
+    state.prefix = None;
+    state.remaining = if fault.is_some() { 1 } else { 0 };
+}
+
+pub fn set_atomic_write_fault_for_prefix(prefix: &Path, fault: AtomicWriteFault, times: u32) {
+    let mut state = ATOMIC_WRITE_FAULT.lock().unwrap_or_else(|e| e.into_inner());
+    state.fault = Some(fault);
+    state.target = None;
+    state.prefix = Some(prefix.to_path_buf());
+    state.remaining = times;
 }
 
 pub fn sync_directory(path: &Path) -> Result<(), StorageError> {
