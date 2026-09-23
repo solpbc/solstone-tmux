@@ -37,7 +37,7 @@ use time::UtcOffset;
 use tokio::sync::{Notify, oneshot};
 
 #[test]
-fn linked_device_bridge_rejects_caller_auth_and_mints_only_v3_protocol_header() {
+fn linked_device_bridge_strips_caller_auth_and_mints_only_v3_protocol_header() {
     runtime().block_on(async {
         let peer = PrivateLinkPeer::start().await;
         assert!(peer.credential().endpoints.iter().all(|endpoint| {
@@ -61,7 +61,10 @@ fn linked_device_bridge_rejects_caller_auth_and_mints_only_v3_protocol_header() 
             .await
             .expect("session");
 
-        let rejected = session
+        // Caller-supplied reserved headers are the caller's own code talking;
+        // the bridge strips them and forwards the request, never refuses it.
+        peer.enqueue_response(200, br#"{}"#.to_vec());
+        let stripped = session
             .journal()
             .request(Method::GET, "/caller-auth")
             .expect("request")
@@ -71,8 +74,22 @@ fn linked_device_bridge_rejects_caller_auth_and_mints_only_v3_protocol_header() 
             .send()
             .await
             .expect("bridge response");
-        assert_eq!(rejected.status(), StatusCode::FORBIDDEN);
-        assert!(peer.requests().is_empty());
+        assert_eq!(stripped.status(), StatusCode::OK);
+        let forwarded = peer
+            .requests()
+            .into_iter()
+            .filter(|r| r.path_without_query() == "/caller-auth")
+            .collect::<Vec<_>>();
+        assert_eq!(forwarded.len(), 1);
+        assert_ne!(forwarded[0].header("authorization"), Some("Bearer caller"));
+        assert_ne!(
+            forwarded[0].header(OBSERVER_HEADER_NAME),
+            Some("caller-observer")
+        );
+        assert_eq!(
+            forwarded[0].header(PROTOCOL_VERSION_HEADER_NAME),
+            Some(PROTOCOL_VERSION)
+        );
 
         peer.enqueue_response(200, br#"{}"#.to_vec());
         let response = session
@@ -129,7 +146,7 @@ fn relay_only_credential_starts_the_private_link_bridge() {
 }
 
 #[test]
-fn loopback_capability_gate_allows_only_authenticated_clients_self_mutations() {
+fn loopback_capability_is_the_whole_admission_check() {
     runtime().block_on(async {
         let peer = PrivateLinkPeer::start().await;
         let temporary = TestDirectory::new("bridge-capability-put");
@@ -204,34 +221,38 @@ fn loopback_capability_gate_allows_only_authenticated_clients_self_mutations() {
             .expect("forwarded link self delete");
         assert_eq!(deleted_link_self.status(), StatusCode::OK);
 
-        let blocked = authenticated
-            .delete(format!("{origin}/app/network/api/other"))
-            .send()
-            .await
-            .expect("local rejection");
-        assert_eq!(blocked.status(), StatusCode::METHOD_NOT_ALLOWED);
-        let close_path = authenticated
-            .delete(format!("{origin}/app/network/api/clients/self/"))
-            .send()
-            .await
-            .expect("local rejection");
-        assert_eq!(close_path.status(), StatusCode::METHOD_NOT_ALLOWED);
-        let reserved = authenticated
-            .delete(format!("{origin}/app/network/api/clients/self"))
-            .header("authorization", "Bearer caller")
-            .send()
-            .await
-            .expect("local rejection");
-        assert_eq!(reserved.status(), StatusCode::FORBIDDEN);
-        let reserved_observer = authenticated
-            .delete(format!("{origin}/app/network/api/clients/self"))
-            .header("x-solstone-observer", "caller")
-            .send()
-            .await
-            .expect("local rejection");
-        assert_eq!(reserved_observer.status(), StatusCode::FORBIDDEN);
+        // Holding the capability is the whole admission check: any path takes
+        // any method, and reserved caller headers are stripped, not refused.
+        for (path, header) in [
+            ("/app/network/api/other", None),
+            ("/app/network/api/clients/self/", None),
+            (
+                "/app/network/api/clients/self",
+                Some(("authorization", "Bearer caller")),
+            ),
+            (
+                "/app/network/api/clients/self",
+                Some(("x-solstone-observer", "caller")),
+            ),
+        ] {
+            if path == "/app/network/api/clients/self" {
+                peer.enqueue_clients_self_response(200, br#"{}"#.to_vec());
+            } else {
+                peer.enqueue_response(200, br#"{}"#.to_vec());
+            }
+            let mut request = authenticated.delete(format!("{origin}{path}"));
+            if let Some((name, value)) = header {
+                request = request.header(name, value);
+            }
+            let response = request.send().await.expect("forwarded delete");
+            assert_eq!(response.status(), StatusCode::OK, "{path} {header:?}");
+        }
         let requests = peer.requests();
-        assert_eq!(requests.len(), 3, "rejected requests reach peer");
+        assert_eq!(
+            requests.len(),
+            7,
+            "every capability-holding request reaches the peer"
+        );
         assert_eq!(requests[0].method(), "PUT");
         assert_eq!(
             requests[0].path_without_query(),
@@ -247,6 +268,13 @@ fn loopback_capability_gate_allows_only_authenticated_clients_self_mutations() {
             requests[2].path_without_query(),
             "/app/link/api/clients/self"
         );
+        assert_eq!(requests[3].path_without_query(), "/app/network/api/other");
+        assert_eq!(
+            requests[4].path_without_query(),
+            "/app/network/api/clients/self/"
+        );
+        assert_ne!(requests[5].header("authorization"), Some("Bearer caller"));
+        assert_ne!(requests[6].header("x-solstone-observer"), Some("caller"));
 
         bridge.shutdown().await;
         peer.shutdown().await;

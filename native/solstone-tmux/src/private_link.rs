@@ -232,22 +232,10 @@ impl PrivateLinkBridge {
             observer_header_name: OBSERVER_HEADER_NAME.to_owned(),
             protocol_version_header_name: PROTOCOL_VERSION_HEADER_NAME.to_owned(),
         };
-        let bridge_names_for_hook = bridge_names.clone();
         let policy = BridgePolicy {
             port: 0,
             capability_gate: CapabilityGate::Enabled,
             max_request_body_bytes: MAX_REQUEST_BODY_BYTES,
-            local_response: Arc::new(move |head, _| {
-                if spl_core::bridge::check_caller_auth(head, &bridge_names_for_hook).is_err() {
-                    Some(spl_transport::journal_bridge::LocalResponse {
-                        status: 403,
-                        content_type: "text/plain".to_owned(),
-                        body: b"forbidden".to_vec(),
-                    })
-                } else {
-                    None
-                }
-            }),
             ..BridgePolicy::default()
         };
         let handle = spl_transport::journal_bridge::start(JournalBridgeConfig {
