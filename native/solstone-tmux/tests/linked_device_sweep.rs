@@ -110,7 +110,7 @@ fn linked_device_sweep_uses_exactly_the_v3_upload_operation_without_legacy_heade
             JournalSession::start(credential.clone(), temporary.path().to_path_buf(), refresh)
                 .await
                 .expect("linked-device session");
-        let mut scheduler = linked_device_scheduler(&temporary, -1, &credential);
+        let mut scheduler = linked_device_scheduler(&temporary, &credential);
 
         let summary = scheduler
             .run_sweep(&mut session, linked_device_no_shutdown())
@@ -146,9 +146,9 @@ fn linked_device_sweep_uses_exactly_the_v3_upload_operation_without_legacy_heade
             assert_legacy_header_is_absent(request, "authorization");
             assert_legacy_header_is_absent(request, OBSERVER_HEADER_NAME);
         }
-        assert_eq!(
-            fs::read(candidate).expect("candidate bytes"),
-            LINKED_DEVICE_BYTES
+        assert!(
+            !candidate.exists(),
+            "confirmed candidate segment was removed"
         );
         session
             .shutdown()
@@ -179,8 +179,7 @@ fn linked_device_sweep_sends_the_configured_source_on_every_v3_operation() {
             JournalSession::start(credential.clone(), temporary.path().to_path_buf(), refresh)
                 .await
                 .expect("linked-device session");
-        let mut scheduler =
-            linked_device_scheduler_with_source(&temporary, -1, "studio", &credential);
+        let mut scheduler = linked_device_scheduler_with_source(&temporary, "studio", &credential);
 
         let summary = scheduler
             .run_sweep(&mut session, linked_device_no_shutdown())
@@ -208,9 +207,9 @@ fn linked_device_sweep_sends_the_configured_source_on_every_v3_operation() {
             assert_eq!(request.query_param("source"), Some("studio"));
         }
         assert_eq!(captured_upload_envelope(&requests[0])["source"], "studio");
-        assert_eq!(
-            fs::read(candidate).expect("candidate bytes"),
-            LINKED_DEVICE_BYTES
+        assert!(
+            !candidate.exists(),
+            "confirmed candidate segment was removed"
         );
         session
             .shutdown()
@@ -252,7 +251,7 @@ fn linked_device_403_and_426_retain_every_candidate_for_each_operation_class() {
                 .await
                 .expect("linked-device session");
                 enqueue_v3_rejection(&peer, operation, status, reason_code);
-                let mut scheduler = linked_device_scheduler(&temporary, 0, &credential);
+                let mut scheduler = linked_device_scheduler(&temporary, &credential);
 
                 let summary = scheduler
                     .run_sweep(&mut session, linked_device_no_shutdown())
@@ -319,7 +318,7 @@ fn peer_hashes_uploaded_parts_and_acks() {
             JournalSession::start(credential.clone(), temporary.path().to_path_buf(), refresh)
                 .await
                 .expect("linked-device session");
-        let mut scheduler = linked_device_scheduler(&temporary, -1, &credential);
+        let mut scheduler = linked_device_scheduler(&temporary, &credential);
 
         let summary = scheduler
             .run_sweep(&mut session, linked_device_no_shutdown())
@@ -327,20 +326,7 @@ fn peer_hashes_uploaded_parts_and_acks() {
 
         assert_eq!(summary.attempted, 1);
         assert_eq!(summary.custodied, 1);
-
-        let ack_path = temporary
-            .path()
-            .join("sync-ledger")
-            .join(LINKED_DEVICE_DAY)
-            .join(LINKED_DEVICE_STREAM)
-            .join(LINKED_DEVICE_SEGMENT)
-            .join("ack.json");
-        let ack_bytes = fs::read(&ack_path).expect("read ack.json");
-        let ack_json: serde_json::Value =
-            serde_json::from_slice(&ack_bytes).expect("parse ack.json");
-        let digest = spl_core::ca::sha256(LINKED_DEVICE_BYTES);
-        let expected_sha256 = solstone_tmux::journal_version::hex_encode(&digest);
-        assert_eq!(ack_json["files"][0]["sha256"], expected_sha256);
+        assert!(!candidate.exists(), "confirmed candidate is removed");
 
         let requests = peer.requests();
         for req in requests {
@@ -356,7 +342,7 @@ fn peer_hashes_uploaded_parts_and_acks() {
 }
 
 #[test]
-fn segment_removed_keeps_the_segment_and_continues() {
+fn segment_removed_deletes_segment_and_continues() {
     linked_device_runtime().block_on(async {
         let peer = PrivateLinkPeer::start().await;
         peer.answer_uploads_with_received_descriptors();
@@ -404,7 +390,6 @@ fn segment_removed_keeps_the_segment_and_continues() {
             temporary.path().to_path_buf(),
             solstone_tmux::name::derive_component(LINKED_DEVICE_STREAM).expect("derived stream"),
             solstone_tmux::config::DEFAULT_SOURCE.to_owned(),
-            -1,
             Arc::clone(&clock) as Arc<dyn Clock>,
             SyncWake::default(),
             solstone_tmux::sync::JournalIdentity {
@@ -434,10 +419,12 @@ fn segment_removed_keeps_the_segment_and_continues() {
         assert_eq!(health_json["state"], "connected");
         assert!(health_json["last_error_code"].is_null());
         assert_eq!(health_json["recent_error_count"], 0);
-        assert_eq!(health_json["pending_segments"], 1);
+        assert_eq!(health_json["pending_segments"], 0);
 
-        assert!(cand1.exists(), "removed segment still on disk");
-        assert!(cand2.exists());
+        assert!(!cand1.exists(), "removed segment unlinked from disk");
+        assert!(!cand2.exists(), "second segment unlinked from disk");
+        assert!(!cand1.parent().unwrap().exists());
+        assert!(!cand2.parent().unwrap().exists());
 
         stop.send_replace(true);
         let (_scheduler, mut session) = task.await.expect("join task");
@@ -451,7 +438,6 @@ fn segment_removed_keeps_the_segment_and_continues() {
             temporary.path().to_path_buf(),
             solstone_tmux::name::derive_component(LINKED_DEVICE_STREAM).expect("derived stream"),
             solstone_tmux::config::DEFAULT_SOURCE.to_owned(),
-            -1,
             Arc::clone(&clock) as Arc<dyn Clock>,
             SyncWake::default(),
             solstone_tmux::sync::JournalIdentity {
@@ -488,17 +474,6 @@ fn segment_removed_keeps_the_segment_and_continues() {
                 );
             }
         }
-
-        assert!(
-            cand1.parent().unwrap().is_dir(),
-            "local directory for removed segment is still present on disk"
-        );
-        assert!(cand1.exists(), "removed segment file still on disk");
-        assert!(
-            cand2.parent().unwrap().is_dir(),
-            "local directory for acked segment is still present on disk"
-        );
-        assert!(cand2.exists(), "acked segment file still on disk");
 
         session.shutdown().await.expect("shutdown session");
         peer.shutdown().await;
@@ -550,8 +525,8 @@ fn journal_write_failed_ends_the_sweep() {
         let (activity, _rx) = watch::channel(SyncActivity::Idle);
         let health = HealthWriter::new(temporary.path().to_path_buf(), &lock);
         let (stop, shutdown) = watch::channel(false);
-        let mut scheduler = linked_device_scheduler(&temporary, -1, &credential)
-            .with_observability(activity, health);
+        let mut scheduler =
+            linked_device_scheduler(&temporary, &credential).with_observability(activity, health);
 
         let task = tokio::spawn(async move {
             scheduler.run_with_shutdown(&mut session, shutdown).await;
@@ -615,7 +590,6 @@ fn content_conflict_follows_the_hourly_bound() {
             temporary.path().to_path_buf(),
             solstone_tmux::name::derive_component(LINKED_DEVICE_STREAM).expect("derived stream"),
             solstone_tmux::config::DEFAULT_SOURCE.to_owned(),
-            -1,
             Arc::clone(&clock) as Arc<dyn Clock>,
             SyncWake::default(),
             solstone_tmux::sync::JournalIdentity {
@@ -713,7 +687,7 @@ fn linked_device_required_ends_the_sweep_without_a_per_segment_bound() {
                 .unwrap(),
             );
 
-            let mut scheduler = linked_device_scheduler(&temporary, 0, &credential);
+            let mut scheduler = linked_device_scheduler(&temporary, &credential);
             let summary = scheduler
                 .run_sweep(&mut session, linked_device_no_shutdown())
                 .await;
@@ -796,8 +770,8 @@ fn non_json_server_error_ends_the_sweep() {
         let (activity, _rx) = watch::channel(SyncActivity::Idle);
         let health = HealthWriter::new(temporary.path().to_path_buf(), &lock);
         let (stop, shutdown) = watch::channel(false);
-        let mut scheduler = linked_device_scheduler(&temporary, -1, &credential)
-            .with_observability(activity, health);
+        let mut scheduler =
+            linked_device_scheduler(&temporary, &credential).with_observability(activity, health);
 
         let task = tokio::spawn(async move {
             scheduler.run_with_shutdown(&mut session, shutdown).await;
@@ -1055,12 +1029,10 @@ fn create_linked_device_candidate(temporary: &TestDirectory) -> PathBuf {
 
 fn linked_device_scheduler(
     temporary: &TestDirectory,
-    retention_days: i64,
     credential: &spl_transport::credential::Credential,
 ) -> SyncScheduler {
     linked_device_scheduler_with_source(
         temporary,
-        retention_days,
         solstone_tmux::config::DEFAULT_SOURCE,
         credential,
     )
@@ -1068,7 +1040,6 @@ fn linked_device_scheduler(
 
 fn linked_device_scheduler_with_source(
     temporary: &TestDirectory,
-    retention_days: i64,
     source: &str,
     credential: &spl_transport::credential::Credential,
 ) -> SyncScheduler {
@@ -1083,7 +1054,6 @@ fn linked_device_scheduler_with_source(
         temporary.path().to_path_buf(),
         solstone_tmux::name::derive_component(LINKED_DEVICE_STREAM).expect("derived stream"),
         source.to_owned(),
-        retention_days,
         Arc::new(test_clock()),
         SyncWake::default(),
         identity,

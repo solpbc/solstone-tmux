@@ -60,7 +60,7 @@ native/solstone-tmux/
         serialize.rs               JSONL serialization
         service.rs, service/       systemd-user and launchd lifecycle
         storage.rs                 Durable append and atomic writes
-        sync.rs                    Bounded sync, custody, and retention
+        sync.rs                    Bounded sync and custody
         tmux.rs                    Tmux grammar and transactions
     tests/
         data/                      Golden, tmux, launchd, signature data
@@ -131,7 +131,6 @@ network access.
 - Add no compatibility shim or optional mechanism unless the contract requires
   it.
 - Preserve local observation when pairing or sync fails.
-- Retain segments until fresh Journal custody proves every submitted file.
 - Route blocking filesystem and hashing work through Tokio's blocking pool.
 - Use owner-only directories and regular-file, symlink-refusing state access.
 - Use `storage::atomic_write_bytes` and directory sync for durable state.
@@ -176,7 +175,7 @@ macOS uses:
 
 - data and config: `$HOME/Library/Application Support/solstone-tmux`
 
-The data root owns `captures/`, the process lock, and `sync-health.json`. The
+The data root owns `captures/`, `sync-ledger/`, the process lock, and `sync-health.json`. The
 config root owns `config.json`, `credentials.json`, the private-state lock, and
 resolved local service state. Config and private state are separate.
 
@@ -225,19 +224,19 @@ and periodic wakeups, then processes that snapshot in sequential batches of at
 most eight candidates, yielding between batches. It owns one bounded backoff
 sequence. Local file inventories are reused while the sorted member names and
 file identities match; a content rewrite, member addition, removal, or rename
-invalidates that reuse. An uncached candidate uploads first, then reconciliation
-fetches the root manifest, its day manifest, and that day's segment listing.
-The complete three-response proof may be reused only within its sweep. Deletion
-requires all three responses fetched in the current batch and a new local
-inventory proving submitted filename, SHA-256 digest, byte size, and held status
-for every local file. Immediately before each irreversible unlink, the deletion
-path re-reads bytes through its open descriptor and matches the custodied
-SHA-256. Journal responses are limited to 4 MiB.
+invalidates that reuse.
+
+Before attempting journal uploads, each sweep finishes local removals for
+candidates confirmed by a durable acknowledgment or left empty. An unconfirmed
+candidate uploads next, and a valid receipt or segment-removed response removes
+that segment during the same sweep. Immediately before each irreversible unlink,
+the deletion path re-reads bytes through its open descriptor and matches the
+acknowledged SHA-256. Journal responses are limited to 4 MiB.
 
 Supervision gives sync fifteen seconds to stop during an authorized shutdown.
-If an irreversible retention deletion is already running, the instance lock is
-held until it reaches a terminal outcome, then the indicator is restored and
-the lock is released.
+If an irreversible deletion is already running, the instance lock is held
+until it reaches a terminal outcome, then the indicator is restored and the
+lock is released.
 
 ### Service lifecycle
 
@@ -258,7 +257,6 @@ Native `config.json` accepts:
   "stream": "machine.tmux",
   "capture_interval": 5,
   "segment_interval": 300,
-  "cache_retention_days": 7,
   "status_indicator": true,
   "source": "tmux"
 }
@@ -267,7 +265,9 @@ Native `config.json` accepts:
 Unknown fields are rejected. Missing fields use defaults. Capture and segment
 intervals must be greater than zero. A missing stream derives from the system
 hostname. An omitted `source` defaults to `"tmux"`; an explicit value must be a
-nonempty string matching `[a-z0-9][a-z0-9_-]*` and at most 64 bytes.
+nonempty string matching `[a-z0-9][a-z0-9_-]*` and at most 64 bytes. A present
+`cache_retention_days` integer is still accepted and ignored, because unknown
+fields are otherwise rejected.
 
 
 ## Vendored contracts

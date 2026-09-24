@@ -16,7 +16,7 @@ use solstone_tmux::clock::{Clock, SystemClock};
 use solstone_tmux::config::DEFAULT_SOURCE;
 use solstone_tmux::health::DiagnosticCode;
 use solstone_tmux::instance_lock::InstanceLock;
-use solstone_tmux::journal::INGEST_SEGMENTS_PATH;
+use solstone_tmux::journal::INGEST_PATH;
 use solstone_tmux::model::CaptureResult;
 use solstone_tmux::observer::{
     CaptureProvider, ObserverConfig, ObserverOperationError, SegmentLifecycle, ShutdownEvent,
@@ -298,17 +298,17 @@ fn journal_response_body_limit_applies_to_success_and_error_responses() {
             .await
             .expect("session");
         let oversized = vec![b'x'; 4 * 1024 * 1024 + 1];
-        peer.enqueue_response(200, oversized.clone());
+        peer.enqueue_system_status_response(200, oversized.clone());
         let error = session
             .journal()
-            .ingest_segments("20260815", DEFAULT_SOURCE)
+            .system_status()
             .await
-            .expect_err("oversized successful day manifest accepted");
+            .expect_err("oversized successful system status accepted");
         assert_eq!(error.diagnostic(), DiagnosticCode::JournalResponseTooLarge);
-        peer.enqueue_response(403, oversized);
+        peer.enqueue_system_status_response(403, oversized);
         let error = session
             .journal()
-            .ingest_segments("20260815", DEFAULT_SOURCE)
+            .system_status()
             .await
             .expect_err("oversized error manifest accepted");
         assert_eq!(error.diagnostic(), DiagnosticCode::JournalResponseTooLarge);
@@ -321,6 +321,7 @@ fn journal_response_body_limit_applies_to_success_and_error_responses() {
 fn linked_device_session_composes_on_the_production_runtime_shape() {
     runtime().block_on(async {
         let peer = PrivateLinkPeer::start().await;
+        peer.answer_uploads_with_received_descriptors();
         let temporary = TestDirectory::new("bridge-session-composition-v3");
         ensure_private_directory(temporary.path()).expect("private root");
         let lock = InstanceLock::acquire(temporary.path()).expect("acquire lock");
@@ -335,24 +336,19 @@ fn linked_device_session_composes_on_the_production_runtime_shape() {
         let session = JournalSession::start(credential, temporary.path().to_path_buf(), refresh)
             .await
             .expect("linked-device session");
-        peer.enqueue_response(
-            200,
-            br#"{"total":0,"items":[],"protocol_version":3}"#.to_vec(),
-        );
+        let capture = temporary.path().join("file.jsonl");
+        fs::write(&capture, b"test").expect("write test file");
         session
             .journal()
-            .ingest_segments("20260815", DEFAULT_SOURCE)
+            .ingest_upload("20260815", "143000_1", vec![capture], DEFAULT_SOURCE)
             .await
-            .expect("segments");
+            .expect("upload");
         let requests = peer
             .requests()
             .into_iter()
             .filter(|r| !r.path_without_query().starts_with("/app/network/api/"))
             .collect::<Vec<_>>();
-        assert_eq!(
-            requests[0].path_without_query(),
-            INGEST_SEGMENTS_PATH.replace("{day}", "20260815")
-        );
+        assert_eq!(requests[0].path_without_query(), "/app/devices/ingest");
         assert_eq!(requests[0].query_param("source"), Some(DEFAULT_SOURCE));
         session.shutdown().await.expect("shutdown");
         peer.shutdown().await;
@@ -380,11 +376,15 @@ fn v3_routes_refuse_unconfined_day_values() {
         for path in [
             &format!(
                 "{}?foreign",
-                INGEST_SEGMENTS_PATH.replace("{day}", "20260815")
+                INGEST_PATH
+                    .replace("{day}", "20260815")
+                    .replace("{segment}", "120000_300")
             ),
             &format!(
                 "{}#foreign",
-                INGEST_SEGMENTS_PATH.replace("{day}", "20260815")
+                INGEST_PATH
+                    .replace("{day}", "20260815")
+                    .replace("{segment}", "120000_300")
             ),
         ] {
             assert!(session.journal().request(Method::GET, path).is_err());
@@ -392,7 +392,7 @@ fn v3_routes_refuse_unconfined_day_values() {
         assert!(
             session
                 .journal()
-                .ingest_segments("20260815?foreign", DEFAULT_SOURCE)
+                .ingest_upload("20260815?foreign", "120000_300", vec![], DEFAULT_SOURCE)
                 .await
                 .is_err()
         );

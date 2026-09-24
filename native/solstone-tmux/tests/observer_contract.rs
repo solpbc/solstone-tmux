@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use solstone_tmux::journal::{INGEST_PATH, INGEST_SEGMENTS_PATH};
+use solstone_tmux::journal::INGEST_PATH;
 
 const AUTHORITY_REPOSITORY: &str = "https://github.com/solpbc/solstone-journal";
 const AUTHORITY_COMMIT: &str = "b78ba9eaac8228e65c4b5a3e64d27aefd3ad47cd";
@@ -174,7 +174,11 @@ fn projection_has_only_v3_ingest_operations_and_no_v2_write_route() {
             "/app/devices/ingest/manifest/{day}",
             "client.ingestManifestDay",
         ),
-        ("get", INGEST_SEGMENTS_PATH, "client.ingestSegments"),
+        (
+            "get",
+            "/app/devices/ingest/segments/{day}",
+            "client.ingestSegments",
+        ),
     ]);
     assert_eq!(actual, expected, "projection operation set differs from v3");
 

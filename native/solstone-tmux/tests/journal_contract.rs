@@ -10,13 +10,11 @@ use solstone_tmux::config::DEFAULT_SOURCE;
 use solstone_tmux::health::DiagnosticCode;
 use solstone_tmux::instance_lock::InstanceLock;
 use solstone_tmux::journal::{
-    INGEST_PATH, INGEST_SEGMENTS_PATH, MAX_MULTIPART_PART_BYTES, UploadStatus,
-    decode_segments_response, decode_upload_response,
+    INGEST_PATH, MAX_MULTIPART_PART_BYTES, UploadStatus, decode_upload_response,
 };
 use solstone_tmux::paths::ensure_private_directory;
 use solstone_tmux::private_link::{
     MAX_REQUEST_BODY_BYTES, OBSERVER_HEADER_NAME, PROTOCOL_VERSION, PROTOCOL_VERSION_HEADER_NAME,
-    PROTOCOL_VERSION_NUMBER,
 };
 use solstone_tmux::sync::JournalSession;
 use support::TestDirectory;
@@ -54,24 +52,14 @@ fn v3_operations_use_projection_examples_and_exact_multipart_envelope() {
             .ingest_upload(DAY, SEGMENT, vec![first, second], DEFAULT_SOURCE)
             .await
             .expect("upload");
-        peer.enqueue_response(200, projection_example("segments"));
-        session
-            .journal()
-            .ingest_segments(DAY, DEFAULT_SOURCE)
-            .await
-            .expect("segments");
 
         let requests = peer
             .requests()
             .into_iter()
             .filter(|r| !r.path_without_query().starts_with("/app/network/api/"))
             .collect::<Vec<_>>();
-        assert_eq!(requests.len(), 2);
+        assert_eq!(requests.len(), 1);
         assert_exact_multipart(&requests[0], &["first.jsonl", "second.jsonl"]);
-        assert_eq!(
-            requests[1].path_without_query(),
-            INGEST_SEGMENTS_PATH.replace("{day}", DAY)
-        );
         for request in &requests {
             assert_eq!(request.query_param("source"), Some(DEFAULT_SOURCE));
         }
@@ -110,13 +98,15 @@ fn unrecognized_source_reason_code_is_a_generic_journal_rejection() {
         )
         .await
         .expect("start journal session");
+        let file = temporary.path().join("file.jsonl");
+        fs::write(&file, b"content\n").expect("write file");
         peer.enqueue_response(
             400,
             br#"{"error":"invalid source","reason_code":"source_too_long","detail":"invalid source"}"#,
         );
         let error = session
             .journal()
-            .ingest_segments(DAY, DEFAULT_SOURCE)
+            .ingest_upload(DAY, SEGMENT, vec![file], DEFAULT_SOURCE)
             .await
             .expect_err("source rejection accepted");
         assert_eq!(error.diagnostic(), DiagnosticCode::JournalRejected);
@@ -124,27 +114,6 @@ fn unrecognized_source_reason_code_is_a_generic_journal_rejection() {
         session.shutdown().await.expect("shutdown session");
         peer.shutdown().await;
     });
-}
-
-#[test]
-fn malformed_v3_listing_payloads_are_rejected() {
-    let legacy_version = PROTOCOL_VERSION_NUMBER.saturating_sub(1);
-    assert_contract_error(decode_segments_response(
-        &serde_json::to_vec(&serde_json::json!({
-            "protocol_version": legacy_version,
-            "total": 0,
-            "items": [],
-        }))
-        .expect("legacy payload"),
-    ));
-    assert_contract_error(decode_segments_response(
-        &serde_json::to_vec(&serde_json::json!({
-            "protocol_version": PROTOCOL_VERSION_NUMBER,
-            "total": 1,
-            "items": [],
-        }))
-        .expect("mismatched total payload"),
-    ));
 }
 
 #[test]
@@ -414,10 +383,6 @@ fn projection_example(name: &str) -> Vec<u8> {
         "upload_normal" => {
             &projection["paths"][INGEST_PATH]["post"]["responses"]["200"]["content"]["application/json"]
                 ["examples"]["normal"]["value"]
-        }
-        "segments" => {
-            &projection["paths"][INGEST_SEGMENTS_PATH]["get"]["responses"]["200"]["content"]["application/json"]
-                ["example"]
         }
         _ => panic!("unknown projection example"),
     };

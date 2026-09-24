@@ -27,9 +27,9 @@ use crate::config::{RuntimeConfig, default_stream};
 use crate::health::{DiagnosticCode, HealthWriter, SyncFacts};
 use crate::instance_lock::RunIdentity;
 use crate::journal::{
-    AcknowledgedFile, JournalClient, JournalError, JournalReasonCode, ListingFileStatus, LocalFile,
-    OPTIONAL_JOB_TIMEOUT, Receipt, ReceiptFault, SegmentsEnvelope, UploadResult, assess_receipt,
-    inventory_files, stream_sha256_hex,
+    AcknowledgedFile, JournalClient, JournalError, JournalReasonCode, LocalFile,
+    OPTIONAL_JOB_TIMEOUT, Receipt, ReceiptFault, UploadResult, assess_receipt, inventory_files,
+    stream_sha256_hex,
 };
 use crate::journal_version::{VersionRefreshState, hex_encode};
 use crate::name::{DerivedName, derive_component};
@@ -708,60 +708,32 @@ impl JournalSession {
     }
 }
 
-pub fn fresh_listing_proves_custody(
-    listing: &SegmentsEnvelope,
-    submitted_key: &str,
-    authoritative_key: &str,
-    local_files: &[LocalFile],
-) -> bool {
-    if submitted_key.is_empty() || authoritative_key.is_empty() || local_files.is_empty() {
-        return false;
-    }
-    let mut entries = listing.items.iter().filter(|entry| {
-        entry.key == authoritative_key || entry.original_key.as_deref() == Some(submitted_key)
-    });
-    let Some(entry) = entries.next() else {
-        return false;
-    };
-    if entries.next().is_some() {
-        return false;
-    }
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SegmentRemovalStage {
+    FilesUnlinked,
+    DirectoryUnlinked,
+}
 
-    let mut remote_by_submitted_name = HashMap::new();
-    for remote in &entry.files {
-        let submitted_name = remote
-            .submitted_name
-            .as_deref()
-            .filter(|name| !name.is_empty())
-            .unwrap_or(&remote.name);
-        if submitted_name.is_empty()
-            || remote_by_submitted_name
-                .insert(submitted_name, remote)
-                .is_some()
-        {
-            return false;
-        }
-    }
+pub type SegmentRemovalObserver = Arc<dyn Fn(&SegmentCandidate, SegmentRemovalStage) + Send + Sync>;
 
-    let mut local_names = HashSet::new();
-    local_files.iter().all(|local| {
-        if local.name.is_empty()
-            || !local_names.insert(local.name.as_str())
-            || !valid_sha256(&local.sha256)
-        {
-            return false;
-        }
-        let Some(remote) = remote_by_submitted_name.get(local.name.as_str()) else {
-            return false;
-        };
-        valid_sha256(&remote.sha256)
-            && remote.sha256 == local.sha256
-            && remote.size == local.size
-            && matches!(
-                remote.status,
-                ListingFileStatus::Present | ListingFileStatus::Processed
-            )
-    })
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RemovalResult {
+    Removed,
+    Absent,
+    Refused,
+    Failed,
+}
+
+#[derive(Clone, Eq, PartialEq)]
+pub struct FileIdentity {
+    pub name: String,
+    pub device: u64,
+    pub inode: u64,
+    pub size: u64,
+    pub mtime: i64,
+    pub mtime_nsec: i64,
+    pub ctime: i64,
+    pub ctime_nsec: i64,
 }
 
 #[derive(Clone, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -795,14 +767,6 @@ impl SegmentCandidate {
     pub fn segment(&self) -> &str {
         &self.segment
     }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum RetentionOutcome {
-    Disabled,
-    Ineligible,
-    Retained,
-    Deleted,
 }
 
 pub struct RetentionFence {
@@ -839,168 +803,169 @@ impl Default for RetentionFence {
     }
 }
 
-#[derive(Clone, Eq, PartialEq)]
-struct FileIdentity {
-    name: String,
-    device: u64,
-    inode: u64,
-    size: u64,
-    mtime: i64,
-    mtime_nsec: i64,
-    ctime: i64,
-    ctime_nsec: i64,
-}
-
-#[allow(clippy::too_many_arguments)]
 pub async fn delete_custodied_segment(
     captures_root: &Path,
-    configured_stream: &DerivedName,
-    today: Date,
-    retention_days: i64,
     candidate: &SegmentCandidate,
-    authoritative_key: &str,
-    listing: &SegmentsEnvelope,
-    instrumentation: SyncInstrumentation,
+    expected_digests: &[(&str, &str)],
+    expected_identities: &[FileIdentity],
     fence: Arc<RetentionFence>,
-) -> RetentionOutcome {
-    delete_custodied_segment_with_hook_inner(
+) -> bool {
+    delete_custodied_segment_with_hook(
         captures_root,
-        configured_stream,
-        today,
-        retention_days,
         candidate,
-        (authoritative_key, listing),
+        expected_digests,
+        expected_identities,
         None,
-        instrumentation,
         fence,
     )
     .await
 }
 
-#[doc(hidden)]
-#[allow(clippy::too_many_arguments)]
 pub async fn delete_custodied_segment_with_hook(
     captures_root: &Path,
-    configured_stream: &DerivedName,
-    today: Date,
-    retention_days: i64,
     candidate: &SegmentCandidate,
-    custody: (&str, &SegmentsEnvelope),
-    delete_hook: Arc<dyn Fn(usize) + Send + Sync>,
-    instrumentation: SyncInstrumentation,
-    fence: Arc<RetentionFence>,
-) -> RetentionOutcome {
-    delete_custodied_segment_with_hook_inner(
-        captures_root,
-        configured_stream,
-        today,
-        retention_days,
-        candidate,
-        custody,
-        Some(delete_hook),
-        instrumentation,
-        fence,
-    )
-    .await
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn delete_custodied_segment_with_hook_inner(
-    captures_root: &Path,
-    configured_stream: &DerivedName,
-    today: Date,
-    retention_days: i64,
-    candidate: &SegmentCandidate,
-    custody: (&str, &SegmentsEnvelope),
+    expected_digests: &[(&str, &str)],
+    expected_identities: &[FileIdentity],
     delete_hook: Option<Arc<dyn Fn(usize) + Send + Sync>>,
-    instrumentation: SyncInstrumentation,
     fence: Arc<RetentionFence>,
-) -> RetentionOutcome {
-    let (authoritative_key, listing) = custody;
-    if retention_days < 0 {
-        return RetentionOutcome::Disabled;
-    }
-    if !retention_eligible(candidate.day(), today, retention_days)
-        || candidate.stream() != configured_stream.as_str()
-    {
-        return RetentionOutcome::Ineligible;
-    }
-
+) -> bool {
+    let digests_map: HashMap<String, String> = expected_digests
+        .iter()
+        .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+        .collect();
     let root = captures_root.to_owned();
     let target = candidate.clone();
-    let paths =
-        match tokio::task::spawn_blocking(move || resolve_segment_files(&root, &target)).await {
-            Ok(ResolvedSegmentFiles::Found(paths)) => paths,
-            _ => return RetentionOutcome::Retained,
-        };
-    let first_inventory = match inventory_files(paths.clone(), Some(instrumentation.clone())).await
-    {
-        Ok(inventory) => inventory,
-        Err(_) => return RetentionOutcome::Retained,
+    let expected_paths: Vec<PathBuf> = match resolve_segment_files(&root, &target) {
+        ResolvedSegmentFiles::Found(paths) => paths,
+        _ => return false,
     };
-    if !fresh_listing_proves_custody(
-        listing,
-        candidate.segment(),
-        authoritative_key,
-        &first_inventory,
-    ) {
-        return RetentionOutcome::Retained;
-    }
-    let first_paths = paths.clone();
-    let expected_paths = paths;
-    let first_identities =
-        match tokio::task::spawn_blocking(move || file_identities(&first_paths)).await {
-            Ok(Some(identities)) => identities,
-            _ => return RetentionOutcome::Retained,
-        };
-
-    let root = captures_root.to_owned();
-    let target = candidate.clone();
-    let second_paths =
-        match tokio::task::spawn_blocking(move || resolve_segment_files(&root, &target)).await {
-            Ok(ResolvedSegmentFiles::Found(paths)) if paths == expected_paths => paths,
-            _ => return RetentionOutcome::Retained,
-        };
-    let second_inventory = match inventory_files(second_paths.clone(), Some(instrumentation)).await
-    {
-        Ok(inventory) if inventory == first_inventory => inventory,
-        _ => return RetentionOutcome::Retained,
-    };
-    let identities_path = second_paths.clone();
-    let second_identities =
-        match tokio::task::spawn_blocking(move || file_identities(&identities_path)).await {
-            Ok(Some(identities)) if identities == first_identities => identities,
-            _ => return RetentionOutcome::Retained,
-        };
-    if !fresh_listing_proves_custody(
-        listing,
-        candidate.segment(),
-        authoritative_key,
-        &second_inventory,
-    ) {
-        return RetentionOutcome::Retained;
-    }
-
-    let root = captures_root.to_owned();
-    let target = candidate.clone();
+    let expected_identities_vec = expected_identities.to_vec();
     let Some(permit) = fence.begin_irreversible().await else {
-        return RetentionOutcome::Retained;
+        return false;
     };
     match tokio::task::spawn_blocking(move || {
         let _permit = permit;
         delete_revalidated_segment(
             &root,
             &target,
-            &second_paths,
-            &second_identities,
-            &second_inventory,
+            &expected_paths,
+            &expected_identities_vec,
+            &digests_map,
             delete_hook.as_deref(),
+            None,
         )
     })
     .await
     {
-        Ok(true) => RetentionOutcome::Deleted,
-        _ => RetentionOutcome::Retained,
+        Ok(RemovalResult::Removed) => true,
+        Ok(RemovalResult::Failed) => {
+            let cap_dir = captures_root
+                .join(candidate.day())
+                .join(candidate.stream())
+                .join(candidate.segment());
+            if cap_dir.exists() {
+                eprintln!("solstone-tmux: confirmed segment was not removed");
+            }
+            false
+        }
+        _ => false,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn delete_confirmed_segment(
+    captures_root: &Path,
+    ledger_root: &Path,
+    candidate: &SegmentCandidate,
+    expected_digests: &[(&str, &str)],
+    expected_identities: &[FileIdentity],
+    delete_hook: Option<Arc<dyn Fn(usize) + Send + Sync>>,
+    observer: Option<SegmentRemovalObserver>,
+    fence: Arc<RetentionFence>,
+) -> bool {
+    let digests_map: HashMap<String, String> = expected_digests
+        .iter()
+        .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+        .collect();
+    let root = captures_root.to_owned();
+    let ledger = ledger_root.to_owned();
+    let target = candidate.clone();
+    let expected_paths: Vec<PathBuf> = match resolve_segment_files(&root, &target) {
+        ResolvedSegmentFiles::Found(paths) => paths,
+        _ => return false,
+    };
+    let expected_identities_vec = expected_identities.to_vec();
+    let Some(permit) = fence.begin_irreversible().await else {
+        return false;
+    };
+    match tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        let obs_ref = observer.as_ref().map(|o| (&target, o));
+        let res = delete_revalidated_segment(
+            &root,
+            &target,
+            &expected_paths,
+            &expected_identities_vec,
+            &digests_map,
+            delete_hook.as_deref(),
+            obs_ref,
+        );
+        if res == RemovalResult::Removed || res == RemovalResult::Absent {
+            remove_segment_ledger_dir(&ledger, &target);
+        }
+        res
+    })
+    .await
+    {
+        Ok(RemovalResult::Removed) | Ok(RemovalResult::Absent) => true,
+        Ok(RemovalResult::Failed) => {
+            let cap_dir = captures_root
+                .join(candidate.day())
+                .join(candidate.stream())
+                .join(candidate.segment());
+            if cap_dir.exists() {
+                eprintln!("solstone-tmux: confirmed segment was not removed");
+            }
+            false
+        }
+        _ => false,
+    }
+}
+
+pub async fn delete_empty_segment(
+    captures_root: &Path,
+    ledger_root: &Path,
+    candidate: &SegmentCandidate,
+    fence: Arc<RetentionFence>,
+) -> bool {
+    let root = captures_root.to_owned();
+    let ledger = ledger_root.to_owned();
+    let target = candidate.clone();
+    let Some(permit) = fence.begin_irreversible().await else {
+        return false;
+    };
+    match tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        let res = remove_empty_segment_directory(&root, &target);
+        if res == RemovalResult::Removed || res == RemovalResult::Absent {
+            remove_segment_ledger_dir(&ledger, &target);
+        }
+        res
+    })
+    .await
+    {
+        Ok(RemovalResult::Removed) | Ok(RemovalResult::Absent) => true,
+        Ok(RemovalResult::Failed) => {
+            let cap_dir = captures_root
+                .join(candidate.day())
+                .join(candidate.stream())
+                .join(candidate.segment());
+            if cap_dir.exists() {
+                eprintln!("solstone-tmux: confirmed segment was not removed");
+            }
+            false
+        }
+        _ => false,
     }
 }
 
@@ -1019,7 +984,7 @@ pub enum SyncOperationError {
         diagnostic: DiagnosticCode,
         answer: String,
     },
-    TerminalKeep,
+    SegmentRemoved,
     EndSweep(SyncFailureClass),
     EndSweepDiagnostic(SyncFailureClass, DiagnosticCode),
 }
@@ -1030,8 +995,8 @@ impl fmt::Display for SyncOperationError {
             Self::RetainCandidate { diagnostic, .. } | Self::EndSweepDiagnostic(_, diagnostic) => {
                 formatter.write_str(diagnostic.message())
             }
-            Self::TerminalKeep => {
-                formatter.write_str("segment removed on journal; retained locally")
+            Self::SegmentRemoved => {
+                formatter.write_str("segment removed on journal; unlinked locally")
             }
             Self::EndSweep(failure) => {
                 formatter.write_str(diagnostic_for_failure(*failure).message())
@@ -1049,12 +1014,6 @@ pub trait SyncJournal: Send {
         files: Vec<PathBuf>,
         source: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<UploadResult, SyncOperationError>> + Send + 'a>>;
-
-    fn segments<'a>(
-        &'a mut self,
-        day: &'a str,
-        source: &'a str,
-    ) -> Pin<Box<dyn Future<Output = Result<SegmentsEnvelope, SyncOperationError>> + Send + 'a>>;
 
     fn system_status<'a>(
         &'a mut self,
@@ -1116,27 +1075,17 @@ struct StateRecord {
     answer: Option<String>,
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     answer_count: u32,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing)]
     terminal_keep: Option<JournalIdentityRecord>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing)]
     retention_recheck_unix: Option<i64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing)]
     retention_recheck_interval_seconds: Option<u64>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
-#[serde(deny_unknown_fields)]
-struct HoldRecord {
-    next_read_unix: i64,
-    interval_seconds: u64,
 }
 
 #[derive(Default)]
 struct SyncMemoryFloors {
     next_attempt: HashMap<SegmentCandidate, i64>,
-    retention_recheck: HashMap<SegmentCandidate, i64>,
-    day_hold: HashMap<String, i64>,
-    terminal_keep: HashSet<SegmentCandidate>,
 }
 
 fn candidate_ledger_dir(ledger_root: &Path, candidate: &SegmentCandidate) -> PathBuf {
@@ -1144,10 +1093,6 @@ fn candidate_ledger_dir(ledger_root: &Path, candidate: &SegmentCandidate) -> Pat
         .join(candidate.day())
         .join(candidate.stream())
         .join(candidate.segment())
-}
-
-fn day_ledger_dir(ledger_root: &Path, day: &str) -> PathBuf {
-    ledger_root.join(day)
 }
 
 fn read_ack_record(
@@ -1177,23 +1122,32 @@ fn read_ack_record(
     {
         return None;
     }
-    let files_differ = if ack.files.len() != local_files.len() {
-        true
-    } else {
-        let local_by_name: HashMap<&str, &LocalFile> =
-            local_files.iter().map(|f| (f.name.as_str(), f)).collect();
-        ack.files.iter().any(|f| {
-            if f.disposition != "written" && f.disposition != "already_held" {
-                return true;
-            }
-            let Some(local) = local_by_name.get(f.submitted.as_str()) else {
-                return true;
-            };
-            f.size != local.size || f.sha256 != local.sha256
-        })
-    };
 
-    if files_differ {
+    let mut seen_ack_submitted = HashSet::new();
+    for f in &ack.files {
+        if !seen_ack_submitted.insert(f.submitted.as_str()) {
+            let _ = fs::remove_file(&ack_path);
+            return None;
+        }
+    }
+
+    let ack_by_submitted: HashMap<&str, &AcknowledgedFile> = ack
+        .files
+        .iter()
+        .map(|f| (f.submitted.as_str(), f))
+        .collect();
+
+    let files_valid = local_files.iter().all(|local| {
+        if let Some(ack_file) = ack_by_submitted.get(local.name.as_str()) {
+            (ack_file.disposition == "written" || ack_file.disposition == "already_held")
+                && ack_file.size == local.size
+                && ack_file.sha256 == local.sha256
+        } else {
+            false
+        }
+    });
+
+    if !files_valid {
         let _ = fs::remove_file(&ack_path);
         return None;
     }
@@ -1239,7 +1193,30 @@ fn read_state_record(ledger_root: &Path, candidate: &SegmentCandidate) -> StateR
     if reader.read_to_end(&mut bytes).is_err() {
         return StateRecord::default();
     }
-    serde_json::from_slice(&bytes).unwrap_or_default()
+    let Ok(record) = serde_json::from_slice::<StateRecord>(&bytes) else {
+        return StateRecord::default();
+    };
+    if record.terminal_keep.is_some()
+        || record.retention_recheck_unix.is_some()
+        || record.retention_recheck_interval_seconds.is_some()
+    {
+        let cleaned = StateRecord {
+            next_attempt_unix: record.next_attempt_unix,
+            next_attempt_interval_seconds: record.next_attempt_interval_seconds,
+            answer: record.answer.clone(),
+            answer_count: record.answer_count,
+            terminal_keep: None,
+            retention_recheck_unix: None,
+            retention_recheck_interval_seconds: None,
+        };
+        if cleaned == StateRecord::default() {
+            let _ = fs::remove_file(&state_path);
+        } else {
+            let _ = write_state_record(ledger_root, candidate, &cleaned);
+        }
+        return cleaned;
+    }
+    record
 }
 
 fn write_state_record(
@@ -1255,22 +1232,23 @@ fn write_state_record(
     Ok(())
 }
 
-fn read_hold_record(ledger_root: &Path, day: &str) -> Option<HoldRecord> {
-    let hold_path = day_ledger_dir(ledger_root, day).join("hold.json");
-    let file = open_regular_readonly(&hold_path).ok()?;
-    let mut reader = std::io::BufReader::new(file);
-    let mut bytes = Vec::new();
-    reader.read_to_end(&mut bytes).ok()?;
-    serde_json::from_slice(&bytes).ok()
-}
-
-fn write_hold_record(ledger_root: &Path, day: &str, record: &HoldRecord) -> Result<(), ()> {
-    let day_dir = day_ledger_dir(ledger_root, day);
-    paths::ensure_private_directory(&day_dir).map_err(|_| ())?;
-    let hold_path = day_dir.join("hold.json");
-    let bytes = serde_json::to_vec_pretty(record).map_err(|_| ())?;
-    atomic_write_bytes(&hold_path, &day_dir, &bytes).map_err(|_| ())?;
-    Ok(())
+fn cleanup_hold_files(ledger_root: &Path) {
+    let Ok(entries) = fs::read_dir(ledger_root) else {
+        return;
+    };
+    for day_entry in entries.flatten() {
+        let Ok(file_type) = day_entry.file_type() else {
+            continue;
+        };
+        if !file_type.is_dir() {
+            continue;
+        }
+        let day_path = day_entry.path();
+        let hold_path = day_path.join("hold.json");
+        if open_regular_readonly(&hold_path).is_ok() {
+            let _ = fs::remove_file(&hold_path);
+        }
+    }
 }
 
 fn remove_segment_ledger_dir(ledger_root: &Path, candidate: &SegmentCandidate) {
@@ -1438,7 +1416,6 @@ pub struct SyncScheduler {
     ledger_root: PathBuf,
     stream: DerivedName,
     source: String,
-    retention_days: i64,
     clock: Arc<dyn Clock>,
     wake: SyncWake,
     identity: JournalIdentity,
@@ -1450,6 +1427,8 @@ pub struct SyncScheduler {
     health: Option<HealthWriter>,
     facts: SyncFacts,
     retention_fence: Arc<RetentionFence>,
+    delete_hook: Option<Arc<dyn Fn(usize) + Send + Sync>>,
+    removal_observer: Option<SegmentRemovalObserver>,
 }
 
 impl SyncScheduler {
@@ -1457,7 +1436,6 @@ impl SyncScheduler {
         data_root: PathBuf,
         stream: DerivedName,
         source: String,
-        retention_days: i64,
         clock: Arc<dyn Clock>,
         wake: SyncWake,
         journal: JournalIdentity,
@@ -1469,7 +1447,6 @@ impl SyncScheduler {
             ledger_root,
             stream,
             source,
-            retention_days,
             clock,
             wake,
             identity: journal,
@@ -1484,6 +1461,8 @@ impl SyncScheduler {
                 ..Default::default()
             },
             retention_fence: Arc::new(RetentionFence::new()),
+            delete_hook: None,
+            removal_observer: None,
         }
     }
 
@@ -1504,6 +1483,16 @@ impl SyncScheduler {
 
     pub fn with_retention_fence(mut self, fence: Arc<RetentionFence>) -> Self {
         self.retention_fence = fence;
+        self
+    }
+
+    pub fn with_delete_hook(mut self, hook: Arc<dyn Fn(usize) + Send + Sync>) -> Self {
+        self.delete_hook = Some(hook);
+        self
+    }
+
+    pub fn with_removal_observer(mut self, observer: SegmentRemovalObserver) -> Self {
+        self.removal_observer = Some(observer);
         self
     }
 
@@ -1546,6 +1535,7 @@ impl SyncScheduler {
         loop {
             if requested {
                 if let Some(deadline) = self.backoff.deadline() {
+                    self.local_finish().await;
                     if Instant::now() >= deadline {
                         self.backoff.deadline_reached();
                     } else {
@@ -1589,51 +1579,135 @@ impl SyncScheduler {
         }
     }
 
-    pub async fn run_sweep(
-        &mut self,
-        journal: &mut dyn SyncJournal,
-        mut shutdown: watch::Receiver<bool>,
-    ) -> SyncSweepSummary {
-        let mut summary = SyncSweepSummary::empty();
+    pub async fn local_finish(&mut self) {
         let captures_root = self.captures_root.clone();
         let stream = self.stream.clone();
-        let instrumentation = self.instrumentation.clone();
-        let candidates = match tokio::task::spawn_blocking(move || {
-            instrumentation.candidate_scan();
-            scan_candidates(&captures_root, &stream)
-        })
-        .await
-        {
-            Ok(Ok(candidates)) => candidates,
-            _ => {
-                self.facts.pending_segments = 0;
-                return self.end_sweep(
-                    summary,
-                    SyncOperationError::EndSweepDiagnostic(
-                        SyncFailureClass::Contract,
-                        DiagnosticCode::LocalSegmentInvalid,
-                    ),
-                );
-            }
-        };
+        let candidates =
+            match tokio::task::spawn_blocking(move || scan_candidates(&captures_root, &stream))
+                .await
+            {
+                Ok(Ok(c)) => c,
+                _ => return,
+            };
+
         let snapshot = candidates.iter().cloned().collect::<HashSet<_>>();
         self.inventories
             .retain(|candidate, _| snapshot.contains(candidate));
         let ledger_root_clone = self.ledger_root.clone();
         let snapshot_clone = snapshot.clone();
         let _ = tokio::task::spawn_blocking(move || {
+            cleanup_hold_files(&ledger_root_clone);
             prune_ledger_dirs(&ledger_root_clone, &snapshot_clone);
         })
         .await;
 
+        for candidate in candidates {
+            let root = self.captures_root.clone();
+            let target = candidate.clone();
+            let resolved =
+                tokio::task::spawn_blocking(move || resolve_segment_files(&root, &target)).await;
+
+            match resolved {
+                Ok(ResolvedSegmentFiles::Empty) => {
+                    self.inventories.remove(&candidate);
+                    let _ = delete_empty_segment(
+                        &self.captures_root,
+                        &self.ledger_root,
+                        &candidate,
+                        Arc::clone(&self.retention_fence),
+                    )
+                    .await;
+                }
+                Ok(ResolvedSegmentFiles::Found(files)) => {
+                    let local_files = match self.inventory_for(&candidate, &files).await {
+                        Ok(f) => f,
+                        Err(()) => continue,
+                    };
+                    let ledger_root = self.ledger_root.clone();
+                    let target = candidate.clone();
+                    let id = self.identity.clone();
+                    let local_files_clone = local_files.clone();
+                    let ack_opt = tokio::task::spawn_blocking(move || {
+                        read_ack_record(&ledger_root, &target, &id, &local_files_clone)
+                    })
+                    .await
+                    .ok()
+                    .flatten();
+
+                    if let Some(ack) = ack_opt {
+                        let expected_digests: Vec<(&str, &str)> = ack
+                            .files
+                            .iter()
+                            .map(|f| (f.submitted.as_str(), f.sha256.as_str()))
+                            .collect();
+                        let identities = self
+                            .inventories
+                            .get(&candidate)
+                            .map(|cached| cached.identities.clone())
+                            .unwrap_or_default();
+                        let removed = delete_confirmed_segment(
+                            &self.captures_root,
+                            &self.ledger_root,
+                            &candidate,
+                            &expected_digests,
+                            &identities,
+                            self.delete_hook.clone(),
+                            self.removal_observer.clone(),
+                            Arc::clone(&self.retention_fence),
+                        )
+                        .await;
+                        if removed {
+                            self.inventories.remove(&candidate);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    pub async fn run_sweep(
+        &mut self,
+        journal: &mut dyn SyncJournal,
+        mut shutdown: watch::Receiver<bool>,
+    ) -> SyncSweepSummary {
+        let mut summary = SyncSweepSummary::empty();
+        let instrumentation = self.instrumentation.clone();
+        tokio::task::spawn_blocking(move || {
+            instrumentation.candidate_scan();
+        })
+        .await
+        .ok();
+
+        self.local_finish().await;
+
         let now = self.clock.wall_now().unix_timestamp();
-        let today = local_today(self.clock.as_ref());
+        let captures_root = self.captures_root.clone();
+        let stream = self.stream.clone();
+        let remaining_candidates =
+            match tokio::task::spawn_blocking(move || scan_candidates(&captures_root, &stream))
+                .await
+            {
+                Ok(Ok(candidates)) => candidates,
+                _ => {
+                    self.facts.pending_segments = 0;
+                    return self.end_sweep(
+                        summary,
+                        SyncOperationError::EndSweepDiagnostic(
+                            SyncFailureClass::Contract,
+                            DiagnosticCode::LocalSegmentInvalid,
+                        ),
+                    );
+                }
+            };
+        let remaining_snapshot = remaining_candidates.iter().cloned().collect::<HashSet<_>>();
+        self.inventories
+            .retain(|candidate, _| remaining_snapshot.contains(candidate));
 
         let mut upload_due = Vec::new();
-        let mut acked_candidates = Vec::new();
         let mut non_acked_count = 0usize;
 
-        for candidate in &candidates {
+        for candidate in &remaining_candidates {
             if shutdown_requested(&mut shutdown) {
                 return self.cancelled_sweep(summary).await;
             }
@@ -1644,6 +1718,10 @@ impl SyncScheduler {
                     .await
                 {
                     Ok(ResolvedSegmentFiles::Found(files)) => files,
+                    Ok(ResolvedSegmentFiles::Empty) => {
+                        self.inventories.remove(candidate);
+                        continue;
+                    }
                     Ok(ResolvedSegmentFiles::Missing) => {
                         self.inventories.remove(candidate);
                         continue;
@@ -1674,9 +1752,7 @@ impl SyncScheduler {
             .ok()
             .flatten();
 
-            if let Some(ack) = ack_opt {
-                acked_candidates.push((candidate.clone(), local_files, ack));
-            } else {
+            if ack_opt.is_none() {
                 non_acked_count += 1;
                 let ledger_root = self.ledger_root.clone();
                 let target = candidate.clone();
@@ -1684,16 +1760,6 @@ impl SyncScheduler {
                     tokio::task::spawn_blocking(move || read_state_record(&ledger_root, &target))
                         .await
                         .unwrap_or_default();
-
-                let is_terminal_keep = state.terminal_keep.as_ref().is_some_and(|tk| {
-                    tk.instance_id == self.identity.instance_id
-                        && tk.ca_fp_prefix_hex == self.identity.ca_fp_prefix_hex
-                        && tk.pairing_generation_hex == self.identity.pairing_generation_hex
-                }) || self.floors.terminal_keep.contains(candidate);
-
-                if is_terminal_keep {
-                    continue;
-                }
 
                 let disk_next_attempt = state.next_attempt_unix.map(|stored| {
                     let interval = state.next_attempt_interval_seconds.unwrap_or(3600) as i64;
@@ -1776,22 +1842,80 @@ impl SyncScheduler {
                             }
                             continue;
                         }
-                        Ok(Err(SyncOperationError::TerminalKeep)) => {
+                        Ok(Err(SyncOperationError::SegmentRemoved)) => {
                             summary.contacted = true;
                             self.backoff.successful_operation();
-                            state.terminal_keep = Some(JournalIdentityRecord::from(&self.identity));
-                            state.next_attempt_unix = None;
-                            state.next_attempt_interval_seconds = None;
+                            let ack_files: Vec<AcknowledgedFile> = local_files
+                                .iter()
+                                .map(|f| AcknowledgedFile {
+                                    submitted: f.name.clone(),
+                                    written: f.name.clone(),
+                                    disposition: "written".to_owned(),
+                                    size: f.size,
+                                    sha256: f.sha256.clone(),
+                                })
+                                .collect();
+                            let stored_key = candidate.segment().to_owned();
                             let ledger_root = self.ledger_root.clone();
                             let target = candidate.clone();
-                            let state_clone = state.clone();
-                            let write_ok = tokio::task::spawn_blocking(move || {
-                                write_state_record(&ledger_root, &target, &state_clone)
+                            let id = self.identity.clone();
+                            let ack_files_clone = ack_files.clone();
+                            let ack_write_ok = tokio::task::spawn_blocking(move || {
+                                write_ack_record(
+                                    &ledger_root,
+                                    &target,
+                                    &id,
+                                    &stored_key,
+                                    ack_files_clone,
+                                )
                             })
                             .await
                             .is_ok_and(|r| r.is_ok());
-                            if !write_ok {
-                                self.floors.terminal_keep.insert(candidate.clone());
+
+                            if ack_write_ok {
+                                consecutive_ack_write_errors = 0;
+                                let ledger_root = self.ledger_root.clone();
+                                let target = candidate.clone();
+                                let _ = tokio::task::spawn_blocking(move || {
+                                    write_state_record(
+                                        &ledger_root,
+                                        &target,
+                                        &StateRecord::default(),
+                                    )
+                                })
+                                .await;
+                                self.floors.next_attempt.remove(&candidate);
+                                self.facts.pending_segments =
+                                    self.facts.pending_segments.saturating_sub(1);
+
+                                let expected_digests: Vec<(&str, &str)> = ack_files
+                                    .iter()
+                                    .map(|f| (f.submitted.as_str(), f.sha256.as_str()))
+                                    .collect();
+                                let identities = self
+                                    .inventories
+                                    .get(&candidate)
+                                    .map(|cached| cached.identities.clone())
+                                    .unwrap_or_default();
+                                let removed = delete_confirmed_segment(
+                                    &self.captures_root,
+                                    &self.ledger_root,
+                                    &candidate,
+                                    &expected_digests,
+                                    &identities,
+                                    self.delete_hook.clone(),
+                                    self.removal_observer.clone(),
+                                    Arc::clone(&self.retention_fence),
+                                )
+                                .await;
+                                if removed {
+                                    self.inventories.remove(&candidate);
+                                }
+                            } else {
+                                consecutive_ack_write_errors += 1;
+                                if consecutive_ack_write_errors >= 3 {
+                                    summary.diagnostic = Some(DiagnosticCode::PrivateStateIo);
+                                }
                             }
                             continue;
                         }
@@ -1840,25 +1964,30 @@ impl SyncScheduler {
                                 summary.custodied += 1;
                                 self.facts.pending_segments =
                                     self.facts.pending_segments.saturating_sub(1);
-                                acked_candidates.push((
-                                    candidate.clone(),
-                                    local_files.clone(),
-                                    AckRecord {
-                                        location: String::new(),
-                                        day: candidate.day().to_owned(),
-                                        stream: candidate.stream().to_owned(),
-                                        segment: candidate.segment().to_owned(),
-                                        stored_key,
-                                        instance_id: self.identity.instance_id.clone(),
-                                        ca_fp_prefix_hex: self.identity.ca_fp_prefix_hex.clone(),
-                                        pairing_generation_hex: self
-                                            .identity
-                                            .pairing_generation_hex
-                                            .clone(),
-                                        proof: "upload".to_owned(),
-                                        files: ack_files,
-                                    },
-                                ));
+
+                                let expected_digests: Vec<(&str, &str)> = ack_files
+                                    .iter()
+                                    .map(|f| (f.submitted.as_str(), f.sha256.as_str()))
+                                    .collect();
+                                let identities = self
+                                    .inventories
+                                    .get(&candidate)
+                                    .map(|cached| cached.identities.clone())
+                                    .unwrap_or_default();
+                                let removed = delete_confirmed_segment(
+                                    &self.captures_root,
+                                    &self.ledger_root,
+                                    &candidate,
+                                    &expected_digests,
+                                    &identities,
+                                    self.delete_hook.clone(),
+                                    self.removal_observer.clone(),
+                                    Arc::clone(&self.retention_fence),
+                                )
+                                .await;
+                                if removed {
+                                    self.inventories.remove(&candidate);
+                                }
                             } else {
                                 consecutive_ack_write_errors += 1;
                                 if consecutive_ack_write_errors >= 3 {
@@ -1945,353 +2074,6 @@ impl SyncScheduler {
             }
         }
 
-        if self.retention_days >= 0 {
-            let mut by_day: HashMap<String, Vec<(SegmentCandidate, Vec<LocalFile>, AckRecord)>> =
-                HashMap::new();
-            for (candidate, local_files, ack) in acked_candidates {
-                if !retention_eligible(candidate.day(), today, self.retention_days) {
-                    continue;
-                }
-                if candidate.stream() != self.stream.as_str() {
-                    continue;
-                }
-                let ledger_root = self.ledger_root.clone();
-                let target = candidate.clone();
-                let state =
-                    tokio::task::spawn_blocking(move || read_state_record(&ledger_root, &target))
-                        .await
-                        .unwrap_or_default();
-
-                let disk_recheck = state.retention_recheck_unix.map(|stored| {
-                    let interval = state.retention_recheck_interval_seconds.unwrap_or(86400) as i64;
-                    stored.min(now + interval)
-                });
-                let floor_recheck = self.floors.retention_recheck.get(&candidate).copied();
-                let recheck_due = match (disk_recheck, floor_recheck) {
-                    (Some(d), Some(f)) => d.max(f),
-                    (Some(d), None) => d,
-                    (None, Some(f)) => f,
-                    (None, None) => 0,
-                };
-
-                if recheck_due > now {
-                    continue;
-                }
-
-                let day = candidate.day().to_owned();
-                let ledger_root = self.ledger_root.clone();
-                let day_clone = day.clone();
-                let hold_opt =
-                    tokio::task::spawn_blocking(move || read_hold_record(&ledger_root, &day_clone))
-                        .await
-                        .ok()
-                        .flatten();
-
-                let disk_hold = hold_opt.map(|hold| {
-                    let interval = hold.interval_seconds as i64;
-                    hold.next_read_unix.min(now + interval)
-                });
-                let floor_hold = self.floors.day_hold.get(&day).copied();
-                let hold_due = match (disk_hold, floor_hold) {
-                    (Some(d), Some(f)) => d.max(f),
-                    (Some(d), None) => d,
-                    (None, Some(f)) => f,
-                    (None, None) => 0,
-                };
-
-                if hold_due > now {
-                    continue;
-                }
-
-                by_day
-                    .entry(day)
-                    .or_default()
-                    .push((candidate, local_files, ack));
-            }
-
-            for (day, day_candidates) in by_day {
-                if shutdown_requested(&mut shutdown) {
-                    return self.cancelled_sweep_with_activity(summary, activity).await;
-                }
-                made_requests = true;
-                let listing_result =
-                    cancellable(&mut shutdown, journal.segments(&day, &self.source)).await;
-                let listing = match listing_result {
-                    Err(()) => {
-                        return self.cancelled_sweep_with_activity(summary, activity).await;
-                    }
-                    Ok(Ok(listing)) => {
-                        summary.contacted = true;
-                        self.backoff.successful_operation();
-                        listing
-                    }
-                    Ok(Err(_error)) => {
-                        let hold = HoldRecord {
-                            next_read_unix: now + 86400,
-                            interval_seconds: 86400,
-                        };
-                        let ledger_root = self.ledger_root.clone();
-                        let day_clone = day.clone();
-                        let write_ok = tokio::task::spawn_blocking(move || {
-                            write_hold_record(&ledger_root, &day_clone, &hold)
-                        })
-                        .await
-                        .is_ok_and(|r| r.is_ok());
-                        if !write_ok {
-                            self.floors.day_hold.insert(day, now + 86400);
-                        }
-                        continue;
-                    }
-                };
-
-                for (candidate, local_files, ack) in day_candidates {
-                    if fresh_listing_proves_custody(
-                        &listing,
-                        candidate.segment(),
-                        &ack.stored_key,
-                        &local_files,
-                    ) {
-                        // an ack is not a deletion license
-                        match delete_custodied_segment(
-                            &self.captures_root,
-                            &self.stream,
-                            today,
-                            self.retention_days,
-                            &candidate,
-                            &ack.stored_key,
-                            &listing,
-                            self.instrumentation.clone(),
-                            Arc::clone(&self.retention_fence),
-                        )
-                        .await
-                        {
-                            RetentionOutcome::Deleted => {
-                                self.inventories.remove(&candidate);
-                                let ledger_root = self.ledger_root.clone();
-                                let target = candidate.clone();
-                                let _ = tokio::task::spawn_blocking(move || {
-                                    remove_segment_ledger_dir(&ledger_root, &target);
-                                })
-                                .await;
-                            }
-                            RetentionOutcome::Retained => {
-                                let ledger_root = self.ledger_root.clone();
-                                let target = candidate.clone();
-                                let mut state = tokio::task::spawn_blocking(move || {
-                                    read_state_record(&ledger_root, &target)
-                                })
-                                .await
-                                .unwrap_or_default();
-                                state.retention_recheck_unix = Some(now + 86400);
-                                state.retention_recheck_interval_seconds = Some(86400);
-                                let ledger_root = self.ledger_root.clone();
-                                let target = candidate.clone();
-                                let state_clone = state.clone();
-                                let write_ok = tokio::task::spawn_blocking(move || {
-                                    write_state_record(&ledger_root, &target, &state_clone)
-                                })
-                                .await
-                                .is_ok_and(|r| r.is_ok());
-                                if !write_ok {
-                                    self.floors
-                                        .retention_recheck
-                                        .insert(candidate.clone(), now + 86400);
-                                }
-                                self.facts.pending_segments =
-                                    self.facts.pending_segments.saturating_add(1);
-                            }
-                            RetentionOutcome::Disabled | RetentionOutcome::Ineligible => {}
-                        }
-                    } else {
-                        let root = self.captures_root.clone();
-                        let target = candidate.clone();
-                        let files = match tokio::task::spawn_blocking(move || {
-                            resolve_segment_files(&root, &target)
-                        })
-                        .await
-                        {
-                            Ok(ResolvedSegmentFiles::Found(f)) => f,
-                            _ => {
-                                self.facts.pending_segments =
-                                    self.facts.pending_segments.saturating_add(1);
-                                continue;
-                            }
-                        };
-                        let second_inventory = match self.inventory_for(&candidate, &files).await {
-                            Ok(inv) => inv,
-                            Err(()) => {
-                                self.facts.pending_segments =
-                                    self.facts.pending_segments.saturating_add(1);
-                                continue;
-                            }
-                        };
-
-                        let matches_ack = if ack.files.len() != second_inventory.len() {
-                            false
-                        } else {
-                            let inv_by_name: HashMap<&str, &LocalFile> = second_inventory
-                                .iter()
-                                .map(|f| (f.name.as_str(), f))
-                                .collect();
-                            ack.files.iter().all(|af| {
-                                if let Some(lf) = inv_by_name.get(af.submitted.as_str()) {
-                                    lf.size == af.size && lf.sha256 == af.sha256
-                                } else {
-                                    false
-                                }
-                            })
-                        };
-
-                        if !matches_ack {
-                            let ledger_root = self.ledger_root.clone();
-                            let target = candidate.clone();
-                            let _ = tokio::task::spawn_blocking(move || {
-                                let seg_dir = candidate_ledger_dir(&ledger_root, &target);
-                                let _ = fs::remove_file(seg_dir.join("ack.json"));
-                                let _ = write_state_record(
-                                    &ledger_root,
-                                    &target,
-                                    &StateRecord::default(),
-                                );
-                            })
-                            .await;
-                            self.floors.next_attempt.remove(&candidate);
-
-                            if activity.is_none() {
-                                activity = Some(ActivityGuard::new(self.activity.as_ref()));
-                            }
-                            made_requests = true;
-                            summary.attempted += 1;
-                            let upload_res = match cancellable(
-                                &mut shutdown,
-                                journal.upload(&candidate, files.clone(), &self.source),
-                            )
-                            .await
-                            {
-                                Err(()) => {
-                                    return self
-                                        .cancelled_sweep_with_activity(summary, activity)
-                                        .await;
-                                }
-                                Ok(Ok(u)) => {
-                                    summary.contacted = true;
-                                    self.backoff.successful_operation();
-                                    u
-                                }
-                                Ok(Err(SyncOperationError::RetainCandidate {
-                                    diagnostic,
-                                    answer,
-                                })) => {
-                                    summary.diagnostic = Some(diagnostic);
-                                    let state = StateRecord {
-                                        answer: Some(answer),
-                                        answer_count: 1,
-                                        next_attempt_unix: Some(now + 3600),
-                                        next_attempt_interval_seconds: Some(3600),
-                                        ..Default::default()
-                                    };
-                                    let ledger_root = self.ledger_root.clone();
-                                    let target = candidate.clone();
-                                    let write_ok = tokio::task::spawn_blocking(move || {
-                                        write_state_record(&ledger_root, &target, &state)
-                                    })
-                                    .await
-                                    .is_ok_and(|r| r.is_ok());
-                                    if !write_ok {
-                                        self.floors
-                                            .next_attempt
-                                            .insert(candidate.clone(), now + 3600);
-                                    }
-                                    self.facts.pending_segments =
-                                        self.facts.pending_segments.saturating_add(1);
-                                    continue;
-                                }
-                                Ok(Err(SyncOperationError::TerminalKeep)) => {
-                                    let state = StateRecord {
-                                        terminal_keep: Some(JournalIdentityRecord::from(
-                                            &self.identity,
-                                        )),
-                                        ..Default::default()
-                                    };
-                                    let ledger_root = self.ledger_root.clone();
-                                    let target = candidate.clone();
-                                    let write_ok = tokio::task::spawn_blocking(move || {
-                                        write_state_record(&ledger_root, &target, &state)
-                                    })
-                                    .await
-                                    .is_ok_and(|r| r.is_ok());
-                                    if !write_ok {
-                                        self.floors.terminal_keep.insert(candidate.clone());
-                                    }
-                                    self.facts.pending_segments =
-                                        self.facts.pending_segments.saturating_add(1);
-                                    continue;
-                                }
-                                Ok(Err(error)) => {
-                                    drop(activity);
-                                    return self.end_sweep(summary, error);
-                                }
-                            };
-                            let receipt = assess_receipt(&upload_res, &second_inventory);
-                            if let Receipt::Valid(new_ack_files) = receipt {
-                                let stored_key = upload_res
-                                    .authoritative_key
-                                    .unwrap_or_else(|| candidate.segment().to_owned());
-                                let ledger_root = self.ledger_root.clone();
-                                let target = candidate.clone();
-                                let id = self.identity.clone();
-                                let write_ok = tokio::task::spawn_blocking(move || {
-                                    write_ack_record(
-                                        &ledger_root,
-                                        &target,
-                                        &id,
-                                        &stored_key,
-                                        new_ack_files,
-                                    )
-                                })
-                                .await
-                                .is_ok_and(|r| r.is_ok());
-                                if write_ok {
-                                    summary.custodied += 1;
-                                } else {
-                                    self.facts.pending_segments =
-                                        self.facts.pending_segments.saturating_add(1);
-                                }
-                            } else {
-                                self.facts.pending_segments =
-                                    self.facts.pending_segments.saturating_add(1);
-                            }
-                        } else {
-                            let ledger_root = self.ledger_root.clone();
-                            let target = candidate.clone();
-                            let mut state = tokio::task::spawn_blocking(move || {
-                                read_state_record(&ledger_root, &target)
-                            })
-                            .await
-                            .unwrap_or_default();
-                            state.retention_recheck_unix = Some(now + 86400);
-                            state.retention_recheck_interval_seconds = Some(86400);
-                            let ledger_root = self.ledger_root.clone();
-                            let target = candidate.clone();
-                            let state_clone = state.clone();
-                            let write_ok = tokio::task::spawn_blocking(move || {
-                                write_state_record(&ledger_root, &target, &state_clone)
-                            })
-                            .await
-                            .is_ok_and(|r| r.is_ok());
-                            if !write_ok {
-                                self.floors
-                                    .retention_recheck
-                                    .insert(candidate.clone(), now + 86400);
-                            }
-                            self.facts.pending_segments =
-                                self.facts.pending_segments.saturating_add(1);
-                        }
-                    }
-                }
-            }
-        }
-
         if !made_requests {
             match cancellable(&mut shutdown, journal.system_status()).await {
                 Err(()) => return self.cancelled_sweep_with_activity(summary, activity).await,
@@ -2345,8 +2127,6 @@ impl SyncScheduler {
         let inventory = inventory_files(paths, Some(self.instrumentation.clone()))
             .await
             .map_err(|_| ())?;
-        // Timestamps are an invalidation heuristic, not byte proof. A missed invalidation can
-        // only skip an upload: retention always re-inventories from disk before deletion.
         self.inventories.insert(
             candidate.clone(),
             CachedInventory {
@@ -2408,7 +2188,7 @@ impl SyncScheduler {
                 summary.diagnostic = Some(diagnostic);
                 SyncFailureClass::Contract
             }
-            SyncOperationError::TerminalKeep => SyncFailureClass::Contract,
+            SyncOperationError::SegmentRemoved => SyncFailureClass::Contract,
             SyncOperationError::EndSweep(failure) => failure,
             SyncOperationError::EndSweepDiagnostic(failure, code) => {
                 summary.diagnostic = Some(code);
@@ -2474,20 +2254,6 @@ impl SyncJournal for JournalSession {
         Box::pin(async move {
             self.journal
                 .ingest_upload(candidate.day(), candidate.segment(), files, source)
-                .await
-                .map_err(|error| self.map_error(error))
-        })
-    }
-
-    fn segments<'a>(
-        &'a mut self,
-        day: &'a str,
-        source: &'a str,
-    ) -> Pin<Box<dyn Future<Output = Result<SegmentsEnvelope, SyncOperationError>> + Send + 'a>>
-    {
-        Box::pin(async move {
-            self.journal
-                .ingest_segments(day, source)
                 .await
                 .map_err(|error| self.map_error(error))
         })
@@ -2612,7 +2378,6 @@ impl SyncTask {
                 data_root.clone(),
                 config.stream,
                 config.source,
-                config.cache_retention_days,
                 clock,
                 wake,
                 journal_identity.clone(),
@@ -2710,7 +2475,7 @@ fn map_journal_error(error: JournalError) -> SyncOperationError {
             DiagnosticCode::JournalTimeout,
         ),
         DiagnosticCode::JournalRejected => match error.reason_code() {
-            Some(JournalReasonCode::SegmentRemoved) => SyncOperationError::TerminalKeep,
+            Some(JournalReasonCode::SegmentRemoved) => SyncOperationError::SegmentRemoved,
             Some(JournalReasonCode::ContentConflict) => {
                 let answer = if let Some(status) = error.http_status() {
                     format!("{status}:content_conflict")
@@ -2854,6 +2619,7 @@ fn scan_candidates(
 
 enum ResolvedSegmentFiles {
     Found(Vec<PathBuf>),
+    Empty,
     Missing,
     Invalid,
 }
@@ -2932,10 +2698,81 @@ fn resolve_segment_files(
         files.push(path);
     }
     if files.is_empty() {
-        return ResolvedSegmentFiles::Invalid;
+        return ResolvedSegmentFiles::Empty;
     }
     files.sort();
     ResolvedSegmentFiles::Found(files)
+}
+
+fn remove_empty_segment_directory(
+    captures_root: &Path,
+    candidate: &SegmentCandidate,
+) -> RemovalResult {
+    let Ok(root_metadata) = fs::symlink_metadata(captures_root) else {
+        return RemovalResult::Absent;
+    };
+    if !is_plain_directory(&root_metadata) || parse_day(candidate.day()).is_none() {
+        return RemovalResult::Refused;
+    }
+    let Some(day) = exact_component(candidate.day()) else {
+        return RemovalResult::Refused;
+    };
+    let Some(stream) = exact_component(candidate.stream()) else {
+        return RemovalResult::Refused;
+    };
+    let Some(segment) = exact_component(candidate.segment()) else {
+        return RemovalResult::Refused;
+    };
+    if !valid_segment_name(candidate.segment()) {
+        return RemovalResult::Refused;
+    }
+    let Ok(day_path) = day.join_checked(captures_root) else {
+        return RemovalResult::Refused;
+    };
+    let Ok(stream_path) = stream.join_checked(&day_path) else {
+        return RemovalResult::Refused;
+    };
+    let Ok(segment_path) = segment.join_checked(&stream_path) else {
+        return RemovalResult::Refused;
+    };
+    for directory in [&day_path, &stream_path, &segment_path] {
+        let metadata = match fs::symlink_metadata(directory) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return RemovalResult::Absent;
+            }
+            Err(_) => return RemovalResult::Refused,
+        };
+        if !is_plain_directory(&metadata) {
+            return RemovalResult::Refused;
+        }
+    }
+
+    let entries = match fs::read_dir(&segment_path) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return RemovalResult::Absent;
+        }
+        Err(_) => return RemovalResult::Refused,
+    };
+    if entries.into_iter().next().is_some() {
+        return RemovalResult::Refused;
+    }
+
+    let Ok(stream_directory) = open_directory_readonly(&stream_path) else {
+        return RemovalResult::Refused;
+    };
+    if rustix::fs::unlinkat(
+        &stream_directory,
+        candidate.segment(),
+        rustix::fs::AtFlags::REMOVEDIR,
+    )
+    .is_err()
+    {
+        return RemovalResult::Failed;
+    }
+    let _ = sync_directory(&stream_path);
+    RemovalResult::Removed
 }
 
 fn file_identities(paths: &[PathBuf]) -> Option<Vec<FileIdentity>> {
@@ -2958,52 +2795,45 @@ fn file_identities(paths: &[PathBuf]) -> Option<Vec<FileIdentity>> {
         .collect()
 }
 
-fn custodied_digest<'a>(inventory: &'a [LocalFile], name: &str) -> Option<&'a str> {
-    let mut matches = inventory.iter().filter(|file| file.name == name);
-    let file = matches.next()?;
-    if matches.next().is_some() {
-        None
-    } else {
-        Some(file.sha256.as_str())
-    }
-}
-
 fn delete_revalidated_segment(
     captures_root: &Path,
     candidate: &SegmentCandidate,
     expected_paths: &[PathBuf],
     expected_identities: &[FileIdentity],
-    expected_inventory: &[LocalFile],
+    expected_digests: &HashMap<String, String>,
     delete_hook: Option<&(dyn Fn(usize) + Send + Sync)>,
-) -> bool {
-    let ResolvedSegmentFiles::Found(paths) = resolve_segment_files(captures_root, candidate) else {
-        return false;
+    observer: Option<(&SegmentCandidate, &SegmentRemovalObserver)>,
+) -> RemovalResult {
+    let paths = match resolve_segment_files(captures_root, candidate) {
+        ResolvedSegmentFiles::Found(paths) => paths,
+        ResolvedSegmentFiles::Missing => return RemovalResult::Absent,
+        _ => return RemovalResult::Refused,
     };
     if paths != expected_paths || file_identities(&paths).as_deref() != Some(expected_identities) {
-        return false;
+        return RemovalResult::Refused;
     }
     let Some(segment_path) = expected_paths.first().and_then(|path| path.parent()) else {
-        return false;
+        return RemovalResult::Refused;
     };
     let Some(stream_path) = segment_path.parent() else {
-        return false;
+        return RemovalResult::Refused;
     };
     let Ok(segment_directory) = open_directory_readonly(segment_path) else {
-        return false;
+        return RemovalResult::Refused;
     };
     let Ok(stream_directory) = open_directory_readonly(stream_path) else {
-        return false;
+        return RemovalResult::Refused;
     };
     let mut retained_files = Vec::with_capacity(paths.len());
     for (path, expected) in paths.iter().zip(expected_identities) {
         let Ok(file) = open_regular_readonly_at(&segment_directory, &expected.name, path) else {
-            return false;
+            return RemovalResult::Refused;
         };
         let Ok(metadata) = file.metadata() else {
-            return false;
+            return RemovalResult::Refused;
         };
         if !metadata_matches(&metadata, expected) {
-            return false;
+            return RemovalResult::Refused;
         }
         retained_files.push(file);
     }
@@ -3018,13 +2848,13 @@ fn delete_revalidated_segment(
             .and_then(|file| file.metadata().ok())
             .is_some_and(|metadata| metadata_matches(&metadata, expected));
         let current_proves_custody = current_matches
-            && custodied_digest(expected_inventory, &expected.name).is_some_and(
-                |expected_digest| {
+            && expected_digests
+                .get(expected.name.as_str())
+                .is_some_and(|expected_digest| {
                     current.as_mut().ok().is_some_and(|file| {
-                        stream_sha256_hex(file).is_ok_and(|digest| digest == expected_digest)
+                        stream_sha256_hex(file).is_ok_and(|digest| digest == *expected_digest)
                     })
-                },
-            );
+                });
         if !current_proves_custody
             || rustix::fs::unlinkat(
                 &segment_directory,
@@ -3040,8 +2870,11 @@ fn delete_revalidated_segment(
                 &segment_directory,
                 &mut retained_files,
             );
-            return false;
+            return RemovalResult::Failed;
         }
+    }
+    if let Some((cand, obs)) = observer {
+        obs(cand, SegmentRemovalStage::FilesUnlinked);
     }
     if rustix::fs::unlinkat(
         &stream_directory,
@@ -3057,10 +2890,13 @@ fn delete_revalidated_segment(
             &segment_directory,
             &mut retained_files,
         );
-        return false;
+        return RemovalResult::Failed;
+    }
+    if let Some((cand, obs)) = observer {
+        obs(cand, SegmentRemovalStage::DirectoryUnlinked);
     }
     let _ = sync_directory(stream_path);
-    true
+    RemovalResult::Removed
 }
 
 fn restore_expected_files(
@@ -3135,27 +2971,6 @@ fn metadata_matches(metadata: &fs::Metadata, expected: &FileIdentity) -> bool {
         && metadata.len() == expected.size
 }
 
-fn retention_eligible(day: &str, today: Date, retention_days: i64) -> bool {
-    let Some(day) = parse_day(day) else {
-        return false;
-    };
-    if day == today {
-        return false;
-    }
-    let cutoff = if retention_days == 0 {
-        today
-    } else {
-        let Some(seconds) = retention_days.checked_mul(86_400) else {
-            return false;
-        };
-        let Some(cutoff) = today.checked_sub(time::Duration::seconds(seconds)) else {
-            return false;
-        };
-        cutoff
-    };
-    day < cutoff
-}
-
 fn exact_component(value: &str) -> Option<DerivedName> {
     derive_component(value)
         .ok()
@@ -3170,10 +2985,6 @@ fn parse_day(value: &str) -> Option<Date> {
     let month = Month::try_from(value[4..6].parse::<u8>().ok()?).ok()?;
     let day = value[6..8].parse().ok()?;
     Date::from_calendar_date(year, month, day).ok()
-}
-
-fn local_today(clock: &dyn Clock) -> Date {
-    clock.wall_now().to_offset(clock.local_offset()).date()
 }
 
 fn valid_segment_name(value: &str) -> bool {
@@ -3235,13 +3046,6 @@ fn plain_regular_entry(entry: &fs::DirEntry) -> bool {
 
 fn is_plain_directory(metadata: &fs::Metadata) -> bool {
     !metadata.file_type().is_symlink() && metadata.is_dir()
-}
-
-fn valid_sha256(value: &str) -> bool {
-    value.len() == 64
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
 }
 
 #[cfg(test)]

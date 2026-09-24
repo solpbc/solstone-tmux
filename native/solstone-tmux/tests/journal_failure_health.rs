@@ -233,7 +233,7 @@ async fn status_failure(session: &mut JournalSession) -> DiagnosticCode {
             SyncOperationError::RetainCandidate { diagnostic, .. }
             | SyncOperationError::EndSweepDiagnostic(_, diagnostic),
         ) => diagnostic,
-        Err(SyncOperationError::TerminalKeep) => DiagnosticCode::JournalRejected,
+        Err(SyncOperationError::SegmentRemoved) => DiagnosticCode::JournalRejected,
         Err(SyncOperationError::EndSweep(failure)) => panic!("undiagnosed failure {failure:?}"),
         Ok(_) => panic!("failed status was accepted"),
     }

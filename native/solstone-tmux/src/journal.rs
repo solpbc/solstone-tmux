@@ -24,12 +24,11 @@ use tokio::task::JoinHandle;
 
 use crate::health::DiagnosticCode;
 use crate::name::derive_component;
-use crate::private_link::{MAX_REQUEST_BODY_BYTES, PROTOCOL_VERSION_NUMBER, PrivateLinkBridge};
+use crate::private_link::{MAX_REQUEST_BODY_BYTES, PrivateLinkBridge};
 use crate::storage::open_regular_readonly;
 use crate::sync::SyncInstrumentation;
 
 pub const INGEST_PATH: &str = "/app/devices/ingest";
-pub const INGEST_SEGMENTS_PATH: &str = "/app/devices/ingest/segments/{day}";
 pub const SYSTEM_STATUS_PATH: &str = "/api/system/status";
 pub const CLIENTS_SELF_PATH: &str = "/app/network/api/clients/self";
 pub const RELAY_ACCESS_PATH: &str = "/app/network/api/relay/access";
@@ -261,41 +260,6 @@ pub struct LocalFile {
     pub name: String,
     pub size: u64,
     pub sha256: String,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
-#[serde(rename_all = "lowercase")]
-pub enum ListingFileStatus {
-    Present,
-    Missing,
-    Processed,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
-pub struct SegmentFile {
-    pub name: String,
-    pub size: u64,
-    pub sha256: String,
-    pub status: ListingFileStatus,
-    #[serde(default)]
-    pub submitted_name: Option<String>,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
-pub struct SegmentItem {
-    pub key: String,
-    #[serde(default)]
-    pub observed: bool,
-    pub files: Vec<SegmentFile>,
-    #[serde(default)]
-    pub original_key: Option<String>,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
-pub struct SegmentsEnvelope {
-    pub items: Vec<SegmentItem>,
-    pub total: usize,
-    pub protocol_version: u64,
 }
 
 struct PreparedFile {
@@ -585,33 +549,6 @@ impl JournalClient {
             return Err(classify_error_response(status.as_u16(), &body));
         }
         decode_upload_response(&body)
-    }
-
-    pub async fn ingest_segments(
-        &self,
-        day: &str,
-        source: &str,
-    ) -> Result<SegmentsEnvelope, JournalError> {
-        if !valid_day(day) {
-            return Err(JournalError::local(DiagnosticCode::LocalSegmentInvalid));
-        }
-        let path = INGEST_SEGMENTS_PATH.replace("{day}", day);
-        let response = self
-            .ingest_request(Method::GET, &path, source)?
-            .send()
-            .await
-            .map_err(|error| {
-                JournalError::local(request_diagnostic(
-                    &error,
-                    DiagnosticCode::JournalUnavailable,
-                ))
-            })?;
-        let status = response.status();
-        let body = collect_response_body(response).await?;
-        if status != StatusCode::OK {
-            return Err(classify_error_response(status.as_u16(), &body));
-        }
-        decode_segments_response(&body)
     }
 
     pub async fn system_status(&self) -> Result<String, JournalError> {
@@ -920,21 +857,6 @@ pub fn decode_system_status_response(body: &[u8]) -> Result<String, JournalError
         return Err(JournalError::local(DiagnosticCode::JournalContractInvalid));
     }
     Ok(response.version.current)
-}
-
-pub fn decode_segments_response(body: &[u8]) -> Result<SegmentsEnvelope, JournalError> {
-    let response = serde_json::from_slice::<SegmentsEnvelope>(body)
-        .map_err(|_| JournalError::local(DiagnosticCode::JournalContractInvalid))?;
-    if response.protocol_version != PROTOCOL_VERSION_NUMBER
-        || response.total != response.items.len()
-        || response
-            .items
-            .iter()
-            .any(|item| item.key.is_empty() || item.files.iter().any(|file| file.name.is_empty()))
-    {
-        return Err(JournalError::local(DiagnosticCode::JournalContractInvalid));
-    }
-    Ok(response)
 }
 
 pub fn classify_error_response(status: u16, body: &[u8]) -> JournalError {

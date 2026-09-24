@@ -14,22 +14,17 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use sha2::{Digest, Sha256};
-use solstone_tmux::journal::{
-    ListingFileStatus, SegmentFile, SegmentItem, SegmentsEnvelope, inventory_files,
-};
-use solstone_tmux::name::{DerivedName, derive_component};
+use solstone_tmux::journal::inventory_files;
 use solstone_tmux::observer::{
     LifecycleLock, ObserverExit, ObserverOperationError, ShutdownEvent, ShutdownIndicator,
     SupervisionControl, shutdown_barrier, supervise_observer,
 };
-use solstone_tmux::private_link::PROTOCOL_VERSION_NUMBER;
 use solstone_tmux::sync::{
-    RetentionFence, RetentionOutcome, SegmentCandidate, SyncActivity,
+    FileIdentity, RetentionFence, SegmentCandidate, SyncActivity,
     delete_custodied_segment as delete_custodied_segment_fenced,
     delete_custodied_segment_with_hook,
 };
 use support::TestDirectory;
-use time::{Date, Month};
 
 const STREAM: &str = "host.tmux";
 const SEGMENT: &str = "120000_300";
@@ -37,194 +32,18 @@ const FILE: &str = "tmux_main_screen.jsonl";
 
 async fn delete_custodied_segment(
     captures_root: &Path,
-    configured_stream: &DerivedName,
-    today: Date,
-    retention_days: i64,
     candidate: &SegmentCandidate,
-    authoritative_key: &str,
-    listing: &SegmentsEnvelope,
-) -> RetentionOutcome {
+    expected_digests: &[(&str, &str)],
+    expected_identities: &[FileIdentity],
+) -> bool {
     delete_custodied_segment_fenced(
         captures_root,
-        configured_stream,
-        today,
-        retention_days,
         candidate,
-        authoritative_key,
-        listing,
-        solstone_tmux::sync::SyncInstrumentation::default(),
+        expected_digests,
+        expected_identities,
         Arc::new(RetentionFence::new()),
     )
     .await
-}
-
-#[test]
-fn negative_retention_returns_before_traversing() {
-    run(async {
-        let temporary = TestDirectory::new("retention-disabled");
-        let outside = create_segment(temporary.path(), "outside", "20260701", STREAM, SEGMENT);
-        let alias = temporary.path().join("captures");
-        symlink(temporary.path().join("outside"), &alias).expect("create captures alias");
-        let candidate = SegmentCandidate::new("20260701", STREAM, SEGMENT);
-        let listing = listing_for(&outside, &candidate, ListingFileStatus::Present).await;
-
-        let outcome = delete_custodied_segment(
-            &alias,
-            &stream(),
-            today(),
-            -1,
-            &candidate,
-            SEGMENT,
-            &listing,
-        )
-        .await;
-
-        assert_eq!(outcome, RetentionOutcome::Disabled);
-        assert!(outside.is_dir());
-    });
-}
-
-#[test]
-fn zero_retention_deletes_older_segments_but_skips_today() {
-    run(async {
-        let temporary = TestDirectory::new("retention-zero");
-        let captures = temporary.path().join("captures");
-        let old = create_segment(temporary.path(), "captures", "20260709", STREAM, SEGMENT);
-        let current = create_segment(temporary.path(), "captures", "20260710", STREAM, SEGMENT);
-        let old_candidate = SegmentCandidate::new("20260709", STREAM, SEGMENT);
-        let current_candidate = SegmentCandidate::new("20260710", STREAM, SEGMENT);
-
-        let old_listing = listing_for(&old, &old_candidate, ListingFileStatus::Present).await;
-        let current_listing =
-            listing_for(&current, &current_candidate, ListingFileStatus::Present).await;
-        assert_eq!(
-            delete_custodied_segment(
-                &captures,
-                &stream(),
-                today(),
-                0,
-                &old_candidate,
-                SEGMENT,
-                &old_listing,
-            )
-            .await,
-            RetentionOutcome::Deleted
-        );
-        assert_eq!(
-            delete_custodied_segment(
-                &captures,
-                &stream(),
-                today(),
-                0,
-                &current_candidate,
-                SEGMENT,
-                &current_listing,
-            )
-            .await,
-            RetentionOutcome::Ineligible
-        );
-        assert!(!old.exists());
-        assert!(current.is_dir());
-    });
-}
-
-#[test]
-fn positive_retention_honors_the_cutoff_boundary() {
-    run(async {
-        let temporary = TestDirectory::new("retention-positive");
-        let captures = temporary.path().join("captures");
-        let older = create_segment(temporary.path(), "captures", "20260702", STREAM, SEGMENT);
-        let cutoff = create_segment(temporary.path(), "captures", "20260703", STREAM, SEGMENT);
-        let older_candidate = SegmentCandidate::new("20260702", STREAM, SEGMENT);
-        let cutoff_candidate = SegmentCandidate::new("20260703", STREAM, SEGMENT);
-        let older_listing =
-            listing_for(&older, &older_candidate, ListingFileStatus::Processed).await;
-        let cutoff_listing =
-            listing_for(&cutoff, &cutoff_candidate, ListingFileStatus::Processed).await;
-
-        assert_eq!(
-            delete_custodied_segment(
-                &captures,
-                &stream(),
-                today(),
-                7,
-                &older_candidate,
-                SEGMENT,
-                &older_listing,
-            )
-            .await,
-            RetentionOutcome::Deleted
-        );
-        assert_eq!(
-            delete_custodied_segment(
-                &captures,
-                &stream(),
-                today(),
-                7,
-                &cutoff_candidate,
-                SEGMENT,
-                &cutoff_listing,
-            )
-            .await,
-            RetentionOutcome::Ineligible
-        );
-        assert!(!older.exists());
-        assert!(cutoff.is_dir());
-    });
-}
-
-#[test]
-fn custody_is_required_before_deletion() {
-    run(async {
-        let temporary = TestDirectory::new("retention-custody");
-        let captures = temporary.path().join("captures");
-        let segment = create_segment(temporary.path(), "captures", "20260701", STREAM, SEGMENT);
-        let candidate = SegmentCandidate::new("20260701", STREAM, SEGMENT);
-        let listing = listing_for(&segment, &candidate, ListingFileStatus::Missing).await;
-        let before = snapshot_segment_entries(&segment);
-
-        let outcome = delete_custodied_segment(
-            &captures,
-            &stream(),
-            today(),
-            0,
-            &candidate,
-            SEGMENT,
-            &listing,
-        )
-        .await;
-
-        assert_eq!(outcome, RetentionOutcome::Retained);
-        assert_segment_entries_unchanged(&segment, &before);
-    });
-}
-
-#[test]
-fn retention_reinventory_hashes_are_counted() {
-    run(async {
-        let temporary = TestDirectory::new("retention-instrumentation");
-        let captures = temporary.path().join("captures");
-        let segment = create_segment(temporary.path(), "captures", "20260701", STREAM, SEGMENT);
-        let candidate = SegmentCandidate::new("20260701", STREAM, SEGMENT);
-        let listing = listing_for(&segment, &candidate, ListingFileStatus::Present).await;
-        let instrumentation = solstone_tmux::sync::SyncInstrumentation::default();
-
-        let outcome = delete_custodied_segment_fenced(
-            &captures,
-            &stream(),
-            today(),
-            0,
-            &candidate,
-            SEGMENT,
-            &listing,
-            instrumentation.clone(),
-            Arc::new(RetentionFence::new()),
-        )
-        .await;
-
-        assert_eq!(outcome, RetentionOutcome::Deleted);
-        assert!(instrumentation.snapshot().hashed_files >= 2);
-    });
 }
 
 #[test]
@@ -240,25 +59,17 @@ fn traversal_candidate_cannot_escape_its_stream() {
             SEGMENT,
         );
         let candidate = SegmentCandidate::new("20260701", STREAM, "../outside");
-        let listing = SegmentsEnvelope {
-            items: Vec::new(),
-            total: 0,
-            protocol_version: PROTOCOL_VERSION_NUMBER,
-        };
         let before = snapshot_segment_entries(&outside);
+        let (digests, identities) = expected_for(&outside).await;
+        let digests_ref: Vec<(&str, &str)> = digests
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
 
-        let outcome = delete_custodied_segment(
-            &captures,
-            &stream(),
-            today(),
-            0,
-            &candidate,
-            SEGMENT,
-            &listing,
-        )
-        .await;
+        let removed =
+            delete_custodied_segment(&captures, &candidate, &digests_ref, &identities).await;
 
-        assert_eq!(outcome, RetentionOutcome::Retained);
+        assert!(!removed);
         assert_segment_entries_unchanged(&outside, &before);
     });
 }
@@ -300,24 +111,7 @@ fn symlink_and_special_file_retain_the_whole_segment() {
             ("120500_300", &socket_segment),
         ] {
             let candidate = SegmentCandidate::new("20260701", STREAM, segment_name);
-            let listing = SegmentsEnvelope {
-                items: Vec::new(),
-                total: 0,
-                protocol_version: PROTOCOL_VERSION_NUMBER,
-            };
-            assert_eq!(
-                delete_custodied_segment(
-                    &captures,
-                    &stream(),
-                    today(),
-                    0,
-                    &candidate,
-                    segment_name,
-                    &listing,
-                )
-                .await,
-                RetentionOutcome::Retained
-            );
+            assert!(!delete_custodied_segment(&captures, &candidate, &[], &[]).await);
         }
         assert_segment_entries_unchanged(&symlink_segment, &symlink_before);
         assert_segment_entries_unchanged(&socket_segment, &socket_before);
@@ -366,21 +160,14 @@ fn reserved_and_unrelated_entries_are_never_touched() {
         );
         let non_date = create_segment(temporary.path(), "captures", "not-a-day", STREAM, SEGMENT);
         let candidate = SegmentCandidate::new("20260701", STREAM, SEGMENT);
-        let listing = listing_for(&finalized, &candidate, ListingFileStatus::Present).await;
+        let (digests, identities) = expected_for(&finalized).await;
+        let digests_ref: Vec<(&str, &str)> = digests
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
 
-        assert_eq!(
-            delete_custodied_segment(
-                &captures,
-                &stream(),
-                today(),
-                0,
-                &candidate,
-                SEGMENT,
-                &listing,
-            )
-            .await,
-            RetentionOutcome::Deleted
-        );
+        assert!(delete_custodied_segment(&captures, &candidate, &digests_ref, &identities).await);
+        assert!(!finalized.exists());
         assert!(incomplete.is_dir());
         assert!(failed.is_dir());
         assert!(metadata.is_file());
@@ -396,7 +183,11 @@ fn replacement_between_inspection_and_unlink_is_retained() {
         let captures = temporary.path().join("captures");
         let segment = create_segment(temporary.path(), "captures", "20260701", STREAM, SEGMENT);
         let candidate = SegmentCandidate::new("20260701", STREAM, SEGMENT);
-        let listing = listing_for(&segment, &candidate, ListingFileStatus::Present).await;
+        let (digests, identities) = expected_for(&segment).await;
+        let digests_ref: Vec<(&str, &str)> = digests
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
         let target = segment.join(FILE);
         let hook_target = target.clone();
         let hook = Arc::new(move |index| {
@@ -409,18 +200,15 @@ fn replacement_between_inspection_and_unlink_is_retained() {
 
         let outcome = delete_custodied_segment_with_hook(
             &captures,
-            &stream(),
-            today(),
-            0,
             &candidate,
-            (SEGMENT, &listing),
-            hook,
-            solstone_tmux::sync::SyncInstrumentation::default(),
+            &digests_ref,
+            &identities,
+            Some(hook),
             Arc::new(RetentionFence::new()),
         )
         .await;
 
-        assert_eq!(outcome, RetentionOutcome::Retained);
+        assert!(!outcome);
         assert!(segment.is_dir());
         assert_eq!(
             fs::read(&target).expect("read restored fixture"),
@@ -442,7 +230,11 @@ fn mid_deletion_failure_restores_every_removed_file() {
         let auxiliary = segment.join("tmux_aux_screen.jsonl");
         fs::write(&auxiliary, b"auxiliary fixture\n").expect("write auxiliary fixture");
         let candidate = SegmentCandidate::new("20260701", STREAM, SEGMENT);
-        let listing = listing_for(&segment, &candidate, ListingFileStatus::Processed).await;
+        let (digests, identities) = expected_for(&segment).await;
+        let digests_ref: Vec<(&str, &str)> = digests
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
         let main = segment.join(FILE);
         let hook_main = main.clone();
         let hook = Arc::new(move |index| {
@@ -455,18 +247,15 @@ fn mid_deletion_failure_restores_every_removed_file() {
 
         let outcome = delete_custodied_segment_with_hook(
             &captures,
-            &stream(),
-            today(),
-            0,
             &candidate,
-            (SEGMENT, &listing),
-            hook,
-            solstone_tmux::sync::SyncInstrumentation::default(),
+            &digests_ref,
+            &identities,
+            Some(hook),
             Arc::new(RetentionFence::new()),
         )
         .await;
 
-        assert_eq!(outcome, RetentionOutcome::Retained);
+        assert!(!outcome);
         assert!(segment.is_dir());
         assert_eq!(
             fs::read(auxiliary).expect("read restored auxiliary"),
@@ -490,7 +279,11 @@ fn in_place_mutation_before_unlink_is_retained() {
         let captures = temporary.path().join("captures");
         let segment = create_segment(temporary.path(), "captures", "20260701", STREAM, SEGMENT);
         let candidate = SegmentCandidate::new("20260701", STREAM, SEGMENT);
-        let listing = listing_for(&segment, &candidate, ListingFileStatus::Present).await;
+        let (digests, identities) = expected_for(&segment).await;
+        let digests_ref: Vec<(&str, &str)> = digests
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
         let target = sorted_segment_files(&segment)
             .into_iter()
             .next()
@@ -512,18 +305,15 @@ fn in_place_mutation_before_unlink_is_retained() {
 
         let outcome = delete_custodied_segment_with_hook(
             &captures,
-            &stream(),
-            today(),
-            0,
             &candidate,
-            (SEGMENT, &listing),
-            hook,
-            solstone_tmux::sync::SyncInstrumentation::default(),
+            &digests_ref,
+            &identities,
+            Some(hook),
             Arc::new(RetentionFence::new()),
         )
         .await;
 
-        assert_eq!(outcome, RetentionOutcome::Retained);
+        assert!(!outcome);
         let mutated_metadata = fs::metadata(&target).expect("inspect mutated fixture");
         let mutated_on_disk = fs::read(&target).expect("read mutated fixture");
         assert_eq!(
@@ -556,7 +346,11 @@ fn late_byte_mismatch_rolls_back_prior_unlinks() {
         )
         .expect("write auxiliary fixture");
         let candidate = SegmentCandidate::new("20260701", STREAM, SEGMENT);
-        let listing = listing_for(&segment, &candidate, ListingFileStatus::Processed).await;
+        let (digests, identities) = expected_for(&segment).await;
+        let digests_ref: Vec<(&str, &str)> = digests
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
         let sorted_paths = sorted_segment_files(&segment);
         assert_eq!(sorted_paths.len(), 2);
         let first = sorted_paths[0].clone();
@@ -584,18 +378,15 @@ fn late_byte_mismatch_rolls_back_prior_unlinks() {
 
         let outcome = delete_custodied_segment_with_hook(
             &captures,
-            &stream(),
-            today(),
-            0,
             &candidate,
-            (SEGMENT, &listing),
-            hook,
-            solstone_tmux::sync::SyncInstrumentation::default(),
+            &digests_ref,
+            &identities,
+            Some(hook),
             Arc::new(RetentionFence::new()),
         )
         .await;
 
-        assert_eq!(outcome, RetentionOutcome::Retained);
+        assert!(!outcome);
         assert_eq!(
             fs::read(&first).expect("read restored first fixture"),
             original_first
@@ -627,7 +418,7 @@ async fn retention_fence_keeps_the_lock_until_a_gated_unlink_finishes() {
     let captures = temporary.path().join("captures");
     let segment = create_segment(temporary.path(), "captures", "20260701", STREAM, SEGMENT);
     let candidate = SegmentCandidate::new("20260701", STREAM, SEGMENT);
-    let listing = listing_for(&segment, &candidate, ListingFileStatus::Present).await;
+    let (digests, identities) = expected_for(&segment).await;
     let fence = Arc::new(RetentionFence::new());
     let (entered_sender, entered_receiver) = tokio::sync::oneshot::channel();
     let entered_sender = Arc::new(Mutex::new(Some(entered_sender)));
@@ -647,15 +438,16 @@ async fn retention_fence_keeps_the_lock_until_a_gated_unlink_finishes() {
     });
     let sync_fence = Arc::clone(&fence);
     let sync = async move {
+        let digests_ref: Vec<(&str, &str)> = digests
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
         let _ = delete_custodied_segment_with_hook(
             &captures,
-            &stream(),
-            today(),
-            0,
             &candidate,
-            (SEGMENT, &listing),
-            hook,
-            solstone_tmux::sync::SyncInstrumentation::default(),
+            &digests_ref,
+            &identities,
+            Some(hook),
             sync_fence,
         )
         .await;
@@ -721,14 +513,6 @@ fn run(future: impl std::future::Future<Output = ()>) {
         .build()
         .expect("build test runtime")
         .block_on(future);
-}
-
-fn today() -> Date {
-    Date::from_calendar_date(2026, Month::July, 10).expect("test date")
-}
-
-fn stream() -> DerivedName {
-    derive_component(STREAM).expect("stream name")
 }
 
 fn create_segment(root: &Path, captures: &str, day: &str, stream: &str, segment: &str) -> PathBuf {
@@ -833,38 +617,37 @@ impl Drop for RecordingLock {
     }
 }
 
-async fn listing_for(
-    segment: &Path,
-    candidate: &SegmentCandidate,
-    status: ListingFileStatus,
-) -> SegmentsEnvelope {
-    let paths = fs::read_dir(segment)
+async fn expected_for(segment: &Path) -> (Vec<(String, String)>, Vec<FileIdentity>) {
+    let mut paths = fs::read_dir(segment)
         .expect("read fixture segment")
         .map(|entry| entry.expect("read fixture entry").path())
         .collect::<Vec<_>>();
-    let local = inventory_files(paths, None)
+    paths.sort();
+    let local = inventory_files(paths.clone(), None)
         .await
         .expect("inventory fixture");
-    let files = local
+    let digests: Vec<(String, String)> = local
         .into_iter()
-        .map(|file| SegmentFile {
-            name: file.name,
-            size: file.size,
-            sha256: file.sha256,
-            status,
-            submitted_name: None,
+        .map(|file| (file.name, file.sha256))
+        .collect();
+    let identities = paths
+        .iter()
+        .map(|path| {
+            let file = solstone_tmux::storage::open_regular_readonly(path).expect("open fixture");
+            let meta = file.metadata().expect("meta");
+            FileIdentity {
+                name: path.file_name().unwrap().to_str().unwrap().to_owned(),
+                device: meta.dev(),
+                inode: meta.ino(),
+                size: meta.len(),
+                mtime: meta.mtime(),
+                mtime_nsec: meta.mtime_nsec(),
+                ctime: meta.ctime(),
+                ctime_nsec: meta.ctime_nsec(),
+            }
         })
         .collect();
-    SegmentsEnvelope {
-        items: vec![SegmentItem {
-            key: candidate.segment().to_owned(),
-            observed: false,
-            files,
-            original_key: None,
-        }],
-        total: 1,
-        protocol_version: PROTOCOL_VERSION_NUMBER,
-    }
+    (digests, identities)
 }
 
 fn sorted_segment_files(segment: &Path) -> Vec<PathBuf> {

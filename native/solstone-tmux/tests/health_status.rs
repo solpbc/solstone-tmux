@@ -181,12 +181,8 @@ fn production_failure_paths_redact_secrets_and_owner_content() {
             .await
             .expect("start redaction session");
 
-        peer.enqueue_response(200, RESPONSE_BODY_SENTINEL.as_bytes());
-        let response_error = match owner
-            .journal()
-            .ingest_segments("20260728", solstone_tmux::config::DEFAULT_SOURCE)
-            .await
-        {
+        peer.enqueue_system_status_response(200, RESPONSE_BODY_SENTINEL.as_bytes());
+        let response_error = match owner.journal().system_status().await {
             Err(error) => error,
             Ok(_) => panic!("malformed response was accepted"),
         };
