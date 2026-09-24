@@ -8,8 +8,8 @@ Format adapted from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
-- a correction to the 2.0.5 notes: they said a pairing link could point at any address you can reach your journal at. it has to be an IPv4 address, private or public. a hostname or an IPv6 address isn't accepted.
-- solstone-tmux no longer offers your journal the same screen text again every minute, or asks it every minute about days your journal already holds.
+- a correction to the 2.0.5 notes: they said a pairing link could point at any address you can reach your journal at. a pairing link that reaches your journal directly has to use an IPv4 address, private or public. a hostname or an IPv6 address isn't accepted there.
+- solstone-tmux no longer offers your journal the same terminal text again every minute, or asks it every minute about days your journal already holds.
 
 ## [2.0.5] - 2026-09-23
 
