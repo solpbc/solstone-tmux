@@ -6,6 +6,8 @@ Format adapted from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [2.0.6] - 2026-09-24
+
 ### Fixed
 
 - a correction to the 2.0.5 notes: they said a pairing link could point at any address you can reach your journal at. a pairing link that reaches your journal directly has to use an IPv4 address, private or public. a hostname or an IPv6 address isn't accepted there.
