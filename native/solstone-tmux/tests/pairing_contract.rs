@@ -10,12 +10,12 @@ use sha2::{Digest, Sha256};
 use spl_core::pairlink::{self, ParsedPairLink};
 
 const AUTHORITY_REPOSITORY: &str = "https://github.com/solpbc/solstone-journal";
-const AUTHORITY_COMMIT: &str = "ba16c8ca55b4151430166f0e7f9b0da2d15c6f45";
+const AUTHORITY_COMMIT: &str = "f3622ddcae6ba4eee398c16baaf8c2e3fe240205";
 const AUTHORITY_CREATION_COMMIT: &str = "c1e9589e60213b39042b92cae94a5d2f0448535e";
-const BUNDLE_VERSION: &str = "1.0.0";
+const BUNDLE_VERSION: &str = "2.0.0";
 const MANIFEST_PATH: &str = "manifest.json";
 const AUTHORITY_INPUT_SHA256: &str =
-    "34a0ca85485e7fbdeb8397fb33a1d0fb6e6d3845d85d0a7f8219dfd335affdda";
+    "e0b07805a0e2f309e3d5f6e1443db076624274169088265866f90d91265a8cd4";
 const VENDORED_ROOT: &str = "native/solstone-tmux/vendor/pairing-contract";
 const IMPORT_PATH: &str = "contracts/pairing-contract-import.json";
 const CONTRACT_FILES: [&str; 4] = [
