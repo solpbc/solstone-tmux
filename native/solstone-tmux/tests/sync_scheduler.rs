@@ -767,7 +767,7 @@ fn conflict_and_failed_contacts_do_not_claim_successful_custody() {
 #[test]
 fn invalid_upload_receipt_records_no_diagnostic_and_keeps_the_segment() {
     run(async {
-        let temporary = TestDirectory::new("sync-unproven-listing");
+        let temporary = TestDirectory::new("sync-invalid-receipt");
         create_segment(&temporary, "20260701", "120000_300", b"fixture\n");
         let mut scheduler = scheduler(&temporary, SyncWake::default());
         let mut journal = FakeJournal::default();
@@ -951,9 +951,9 @@ fn startup_finalization_and_periodic_wakes_converge_on_a_rescan() {
         let temporary = TestDirectory::new("sync-wake-sources");
         let clock = clock();
         let wake = SyncWake::default();
-        let (listings, mut received) = mpsc::unbounded_channel();
+        let (status_probes, mut received) = mpsc::unbounded_channel();
         let journal = BackoffJournal {
-            listings,
+            status_probes,
             outcomes: VecDeque::new(),
         };
         let (stop, shutdown) = watch::channel(false);
@@ -963,11 +963,11 @@ fn startup_finalization_and_periodic_wakes_converge_on_a_rescan() {
             scheduler.run_with_shutdown(&mut journal, shutdown).await;
         });
 
-        expect_listing(&mut received, "startup").await;
+        expect_status_probe(&mut received, "startup").await;
         wake.segment_closed(&SegmentClose::Finalized(PathBuf::from("wake")));
-        expect_listing(&mut received, "finalization").await;
+        expect_status_probe(&mut received, "finalization").await;
         advance_both(&clock, Duration::from_secs(60) + Duration::from_millis(1)).await;
-        expect_listing(&mut received, "periodic").await;
+        expect_status_probe(&mut received, "periodic").await;
 
         stop.send_replace(true);
         task.await.expect("join scheduler");
@@ -980,9 +980,9 @@ fn one_backoff_owner_advances_holds_resets_and_never_stops_capture() {
         let temporary = TestDirectory::new("sync-backoff");
         let clock = clock();
         let wake = SyncWake::default();
-        let (listings, mut received) = mpsc::unbounded_channel();
+        let (status_probes, mut received) = mpsc::unbounded_channel();
         let journal = BackoffJournal {
-            listings,
+            status_probes,
             outcomes: VecDeque::from([
                 Err(SyncOperationError::EndSweep(
                     solstone_tmux::sync::SyncFailureClass::Direct,
@@ -1033,10 +1033,10 @@ fn one_backoff_owner_advances_holds_resets_and_never_stops_capture() {
             },
         ));
 
-        expect_listing(&mut received, "initial failure").await;
+        expect_status_probe(&mut received, "initial failure").await;
         wake.segment_closed(&SegmentClose::Finalized(PathBuf::from("coalesced")));
         advance_both(&clock, Duration::from_secs(4)).await;
-        assert_no_listing(&mut received).await;
+        assert_no_status_probe(&mut received).await;
 
         for (delay, context) in [
             (1_u64, "five-second retry"),
@@ -1052,17 +1052,17 @@ fn one_backoff_owner_advances_holds_resets_and_never_stops_capture() {
                 Duration::from_secs(delay) + Duration::from_millis(1),
             )
             .await;
-            expect_listing(&mut received, context).await;
+            expect_status_probe(&mut received, context).await;
             assert!(captures.load(Ordering::SeqCst) > captures_before);
             assert!(segments.load(Ordering::SeqCst) > segments_before);
         }
 
         wake.segment_closed(&SegmentClose::Finalized(PathBuf::from("reset")));
-        expect_listing(&mut received, "post-success failure").await;
+        expect_status_probe(&mut received, "post-success failure").await;
         advance_both(&clock, Duration::from_secs(4)).await;
-        assert_no_listing(&mut received).await;
+        assert_no_status_probe(&mut received).await;
         advance_both(&clock, Duration::from_secs(1) + Duration::from_millis(1)).await;
-        expect_listing(&mut received, "reset five-second retry").await;
+        expect_status_probe(&mut received, "reset five-second retry").await;
 
         stop.send_replace(true);
         observer_stop.send(()).expect("stop observer");
@@ -1891,12 +1891,33 @@ fn ack_write_failure_before_rename_reuploads_on_the_next_scheduler() {
         let summary = scheduler1.run_sweep(&mut journal, no_shutdown()).await;
         set_atomic_write_fault(None);
         assert_eq!(summary.custodied, 0);
+        let seg = segment_path(&temporary, "20260701", "120000_300");
+        assert!(seg.exists(), "an unwritten ack keeps the segment");
 
         let mut scheduler2 = scheduler(&temporary, SyncWake::default());
         journal.clear_calls();
+        journal.upload_outcome(
+            "120000_300",
+            Ok(UploadResult {
+                status: UploadStatus::Duplicate,
+                authoritative_key: Some("120000_300".to_owned()),
+                descriptors: Some(Ok(vec![ParsedDescriptor {
+                    submitted: FILE.to_owned(),
+                    written: FILE.to_owned(),
+                    sha256: sha256_hex(b"fixture\n"),
+                    size: b"fixture\n".len() as u64,
+                    disposition: "already_held".to_owned(),
+                }])),
+            }),
+        );
         let summary2 = scheduler2.run_sweep(&mut journal, no_shutdown()).await;
         assert_eq!(summary2.attempted, 1);
+        assert_eq!(summary2.custodied, 1);
         assert_eq!(journal.uploads(), vec!["120000_300".to_owned()]);
+        assert!(
+            !seg.exists(),
+            "the already-held receipt removes the segment"
+        );
     });
 }
 
@@ -1990,7 +2011,21 @@ fn ack_for_another_journal_is_not_an_ack() {
         let mut journal = FakeJournal::default();
         let summary = scheduler.run_sweep(&mut journal, no_shutdown()).await;
         assert_eq!(summary.attempted, 1);
+        assert_eq!(summary.custodied, 1);
         assert_eq!(journal.uploads(), vec!["120000_300".to_owned()]);
+        assert!(
+            !segment_path(&temporary, "20260701", "120000_300").exists(),
+            "this journal's receipt removes the segment"
+        );
+        assert!(
+            !temporary
+                .path()
+                .join("sync-ledger/20260701")
+                .join(STREAM)
+                .join("120000_300")
+                .exists(),
+            "the removed segment leaves no ledger entry"
+        );
     });
 }
 
@@ -2019,12 +2054,12 @@ fn ack_file_set_mismatch_is_not_an_ack() {
     });
 }
 
-// === Successor Acceptance Scenarios (1..10) ===
+// === Confirmed Removal ===
 
 #[test]
-fn scenario_1_upload_receipt_confirms_and_removes_segment_and_ledger() {
+fn upload_receipt_removes_the_segment_and_its_ledger_entry() {
     run(async {
-        let temporary = TestDirectory::new("scenario-1-upload-remove");
+        let temporary = TestDirectory::new("upload-receipt-removes");
         create_segment(&temporary, "20260701", "120000_300", b"fixture\n");
         let seg_path = segment_path(&temporary, "20260701", "120000_300");
         let ledger_path = temporary
@@ -2034,7 +2069,11 @@ fn scenario_1_upload_receipt_confirms_and_removes_segment_and_ledger() {
             .join(STREAM)
             .join("120000_300");
 
-        let mut scheduler = scheduler(&temporary, SyncWake::default());
+        let lock = InstanceLock::acquire(temporary.path()).expect("acquire lock");
+        let health_writer = HealthWriter::new(temporary.path().to_path_buf(), &lock);
+        let (activity, _rx) = watch::channel(SyncActivity::Idle);
+        let mut scheduler =
+            scheduler(&temporary, SyncWake::default()).with_observability(activity, health_writer);
         let mut journal = FakeJournal::default();
         let summary = scheduler.run_sweep(&mut journal, no_shutdown()).await;
 
@@ -2042,13 +2081,31 @@ fn scenario_1_upload_receipt_confirms_and_removes_segment_and_ledger() {
         assert_eq!(summary.attempted, 1);
         assert!(!seg_path.exists(), "segment directory must be removed");
         assert!(!ledger_path.exists(), "ledger directory must be removed");
+
+        // The next sweep, through the scheduler loop so it publishes health.
+        std::fs::remove_file(temporary.path().join(HEALTH_FILENAME)).expect("clear health");
+        journal.clear_calls();
+        let (stop, shutdown) = watch::channel(false);
+        let task = tokio::spawn(async move {
+            scheduler.run_with_shutdown(&mut journal, shutdown).await;
+            journal
+        });
+        let snapshot = wait_for_idle_snapshot(temporary.path()).await;
+        stop.send_replace(true);
+        let journal = task.await.expect("join scheduler");
+
+        assert!(
+            journal.uploads().is_empty(),
+            "the next sweep uploads nothing"
+        );
+        assert_eq!(snapshot["pending_segments"], 0);
     });
 }
 
 #[test]
-fn scenario_2_local_ack_matches_journal_unlinked_at_sweep_start() {
+fn matching_local_ack_removes_the_segment_before_any_upload() {
     run(async {
-        let temporary = TestDirectory::new("scenario-2-local-ack-finish");
+        let temporary = TestDirectory::new("matching-ack-local-finish");
         let bytes = b"fixture\n";
         create_segment(&temporary, "20260701", "120000_300", bytes);
         let seg_path = segment_path(&temporary, "20260701", "120000_300");
@@ -2090,9 +2147,9 @@ fn scenario_2_local_ack_matches_journal_unlinked_at_sweep_start() {
 }
 
 #[test]
-fn scenario_3_segment_removed_on_upload_writes_ack_removes_segment_and_continues() {
+fn segment_removed_on_upload_removes_the_segment_and_the_sweep_continues() {
     run(async {
-        let temporary = TestDirectory::new("scenario-3-segment-removed");
+        let temporary = TestDirectory::new("segment-removed-continues");
         create_segment(&temporary, "20260701", "120000_300", b"first\n");
         create_segment(&temporary, "20260701", "120100_300", b"second\n");
         let seg1 = segment_path(&temporary, "20260701", "120000_300");
@@ -2116,9 +2173,9 @@ fn scenario_3_segment_removed_on_upload_writes_ack_removes_segment_and_continues
 }
 
 #[test]
-fn scenario_3b_single_segment_removed_on_upload_sets_contact_without_custody() {
+fn a_lone_segment_removed_answer_counts_as_contact_not_sync() {
     run(async {
-        let temporary = TestDirectory::new("scenario-3b-segment-removed-single");
+        let temporary = TestDirectory::new("segment-removed-lone");
         create_segment(&temporary, "20260701", "120000_300", b"first\n");
         let seg1 = segment_path(&temporary, "20260701", "120000_300");
         let ledger_path = temporary
@@ -2158,9 +2215,9 @@ fn scenario_3b_single_segment_removed_on_upload_sets_contact_without_custody() {
 }
 
 #[test]
-fn scenario_4_upload_failure_keeps_segment_and_backs_off() {
+fn failed_upload_keeps_the_segment_and_defers_it() {
     paused(async {
-        let temporary = TestDirectory::new("scenario-4-upload-failure");
+        let temporary = TestDirectory::new("failed-upload-deferred");
         create_segment(&temporary, "20260701", "120000_300", b"fixture\n");
         let seg = segment_path(&temporary, "20260701", "120000_300");
 
@@ -2198,42 +2255,50 @@ fn scenario_4_upload_failure_keeps_segment_and_backs_off() {
 }
 
 #[test]
-fn scenario_5_content_change_or_duplicate_submitted_invalidates_ack_reuploaded() {
+fn strict_subset_ack_with_changed_bytes_is_dropped_and_the_segment_uploads_once() {
     run(async {
-        let temporary = TestDirectory::new("scenario-5-ack-invalidation");
-        let bytes = b"first content\n";
-        create_segment(&temporary, "20260701", "120000_300", bytes);
-        let sha256 = sha256_hex(bytes);
-        let size = bytes.len() as u64;
+        let temporary = TestDirectory::new("strict-subset-changed-bytes");
+        let acked = b"first content\n";
+        let acked_sha = sha256_hex(acked);
+        let other_sha = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
         let ack_val = valid_ack_json(
             &temporary,
             "20260701",
             "120000_300",
-            &[(FILE, size, &sha256)],
+            &[
+                (FILE, acked.len() as u64, &acked_sha),
+                ("tmux_aux_screen.jsonl", 100, other_sha),
+            ],
         );
         write_ack(&temporary, "20260701", "120000_300", &ack_val);
-
-        // Content changed on disk:
-        std::fs::write(
-            segment_path(&temporary, "20260701", "120000_300").join(FILE),
-            b"modified content\n",
-        )
-        .unwrap();
+        // Only one of the two acknowledged files is on disk, and its bytes changed.
+        create_segment(&temporary, "20260701", "120000_300", b"changed content\n");
+        let seg = segment_path(&temporary, "20260701", "120000_300");
+        let ledger = temporary
+            .path()
+            .join("sync-ledger/20260701")
+            .join(STREAM)
+            .join("120000_300");
 
         let mut scheduler = scheduler(&temporary, SyncWake::default());
         let mut journal = FakeJournal::default();
         let summary = scheduler.run_sweep(&mut journal, no_shutdown()).await;
 
-        assert_eq!(summary.attempted, 1, "invalidated ack forces reupload");
+        assert_eq!(summary.attempted, 1, "the dropped ack forces one upload");
         assert_eq!(summary.custodied, 1);
         assert_eq!(journal.uploads(), vec!["120000_300".to_owned()]);
+        assert!(!seg.exists(), "the upload receipt removes the segment");
+        assert!(
+            !ledger.exists(),
+            "the removed segment leaves no ledger entry"
+        );
     });
 }
 
 #[test]
-fn scenario_6_ack_different_identity_reuploaded_without_deleting_ack() {
-    run(async {
-        let temporary = TestDirectory::new("scenario-6-ack-diff-identity");
+fn ack_for_another_identity_is_kept_until_a_new_receipt_removes_the_segment() {
+    paused(async {
+        let temporary = TestDirectory::new("ack-other-identity-kept");
         let bytes = b"fixture\n";
         create_segment(&temporary, "20260701", "120000_300", bytes);
         let sha256 = sha256_hex(bytes);
@@ -2255,7 +2320,9 @@ fn scenario_6_ack_different_identity_reuploaded_without_deleting_ack() {
             .join("120000_300")
             .join("ack.json");
 
-        let mut scheduler = scheduler(&temporary, SyncWake::default());
+        let test_clock = clock();
+        let mut scheduler =
+            scheduler_with_clock(&temporary, SyncWake::default(), Arc::clone(&test_clock));
         let mut journal = FakeJournal::default();
         journal.upload_outcome(
             "120000_300",
@@ -2272,13 +2339,25 @@ fn scenario_6_ack_different_identity_reuploaded_without_deleting_ack() {
             "re-uploaded because ack is for different identity"
         );
         assert!(ack_path.exists(), "unmatched ack is not deleted");
+        let seg = segment_path(&temporary, "20260701", "120000_300");
+        assert!(seg.exists(), "a failed upload keeps the segment");
+
+        advance_both(&test_clock, Duration::from_secs(3_600 + 60)).await;
+        journal.clear_calls();
+        let summary2 = scheduler.run_sweep(&mut journal, no_shutdown()).await;
+
+        assert_eq!(summary2.attempted, 1);
+        assert_eq!(summary2.custodied, 1);
+        assert_eq!(journal.uploads(), vec!["120000_300".to_owned()]);
+        assert!(!seg.exists(), "this journal's receipt removes the segment");
+        assert!(!ack_path.exists(), "the removed segment leaves no ack");
     });
 }
 
 #[test]
-fn scenario_7_local_finish_runs_before_backoff_sleep_in_run_with_shutdown() {
+fn local_finish_runs_before_the_backoff_wait() {
     run(async {
-        let temporary = TestDirectory::new("scenario-7-local-finish-backoff");
+        let temporary = TestDirectory::new("local-finish-before-backoff");
         let bytes = b"fixture\n";
         create_segment(&temporary, "20260701", "120000_300", bytes);
         let sha256 = sha256_hex(bytes);
@@ -2316,10 +2395,10 @@ fn scenario_7_local_finish_runs_before_backoff_sleep_in_run_with_shutdown() {
 }
 
 #[test]
-fn scenario_8_removal_failure_leaves_ack_intact_for_retry() {
+fn failed_removal_keeps_the_ack_and_the_next_sweep_finishes_it() {
     run(async {
         use std::os::unix::fs::PermissionsExt;
-        let temporary = TestDirectory::new("scenario-8-removal-failure");
+        let temporary = TestDirectory::new("failed-removal-retry");
         create_segment(&temporary, "20260701", "120000_300", b"fixture\n");
         let seg_path = segment_path(&temporary, "20260701", "120000_300");
         let ack_path = temporary
@@ -2360,9 +2439,9 @@ fn scenario_8_removal_failure_leaves_ack_intact_for_retry() {
 }
 
 #[test]
-fn scenario_9_two_stage_observer_called_in_order() {
+fn removal_observer_sees_files_then_directory_unlinked() {
     run(async {
-        let temporary = TestDirectory::new("scenario-9-removal-observer");
+        let temporary = TestDirectory::new("removal-observer-order");
         create_segment(&temporary, "20260701", "120000_300", b"fixture\n");
         let seg_path = segment_path(&temporary, "20260701", "120000_300");
         let upload_file = seg_path.join(FILE);
@@ -2423,9 +2502,9 @@ fn scenario_9_two_stage_observer_called_in_order() {
 }
 
 #[test]
-fn scenario_10_empty_segment_directory_removed_during_local_finish() {
+fn empty_segment_directory_is_removed_by_local_finish() {
     run(async {
-        let temporary = TestDirectory::new("scenario-10-empty-dir");
+        let temporary = TestDirectory::new("empty-segment-directory");
         let empty_path = segment_path(&temporary, "20260701", "120000_300");
         std::fs::create_dir_all(&empty_path).unwrap();
         assert!(empty_path.is_dir());
@@ -2443,9 +2522,9 @@ fn scenario_10_empty_segment_directory_removed_during_local_finish() {
 }
 
 #[test]
-fn acceptance_strict_subset_ack_removes_segment_locally_without_upload() {
+fn strict_subset_ack_removes_the_segment_without_upload() {
     run(async {
-        let temporary = TestDirectory::new("acceptance-strict-subset");
+        let temporary = TestDirectory::new("strict-subset-ack");
         let bytes1 = b"file1\n";
         let sha1 = sha256_hex(bytes1);
         let size1 = bytes1.len() as u64;
@@ -2483,9 +2562,9 @@ fn acceptance_strict_subset_ack_removes_segment_locally_without_upload() {
 }
 
 #[test]
-fn acceptance_empty_sealed_directories_with_and_without_ack_are_removed() {
+fn empty_sealed_directories_are_removed_with_or_without_an_ack() {
     run(async {
-        let temporary = TestDirectory::new("acceptance-empty-dirs");
+        let temporary = TestDirectory::new("empty-sealed-directories");
         // Empty dir 1: no ack
         let empty1 = segment_path(&temporary, "20260701", "120000_300");
         std::fs::create_dir_all(&empty1).unwrap();
@@ -2517,9 +2596,9 @@ fn acceptance_empty_sealed_directories_with_and_without_ack_are_removed() {
 }
 
 #[test]
-fn acceptance_acked_segment_removed_before_transport_failure_on_unacked_segment() {
+fn acked_segment_is_removed_before_a_transport_failure_on_an_unacked_one() {
     run(async {
-        let temporary = TestDirectory::new("acceptance-acked-and-unacked-fail");
+        let temporary = TestDirectory::new("acked-before-transport-failure");
         let bytes1 = b"first\n";
         let sha1 = sha256_hex(bytes1);
         let size1 = bytes1.len() as u64;
@@ -2561,9 +2640,9 @@ fn acceptance_acked_segment_removed_before_transport_failure_on_unacked_segment(
 }
 
 #[test]
-fn acceptance_no_sync_ledger_dir_uploads_and_removes_on_already_held_receipt() {
+fn missing_ledger_uploads_and_removes_on_an_already_held_receipt() {
     run(async {
-        let temporary = TestDirectory::new("acceptance-no-ledger");
+        let temporary = TestDirectory::new("missing-ledger-already-held");
         let bytes = b"payload\n";
         create_segment(&temporary, "20260701", "120000_300", bytes);
         let seg = segment_path(&temporary, "20260701", "120000_300");
@@ -2603,9 +2682,9 @@ fn acceptance_no_sync_ledger_dir_uploads_and_removes_on_already_held_receipt() {
 }
 
 #[test]
-fn acceptance_206_shaped_tree_cleans_hold_and_processes_terminal_keep() {
+fn earlier_ledger_tree_drops_hold_files_and_uploads_past_terminal_keep() {
     run(async {
-        let temporary = TestDirectory::new("acceptance-206-tree");
+        let temporary = TestDirectory::new("earlier-ledger-tree");
         // Segment 1: has valid ack for this journal
         let bytes1 = b"seg1\n";
         create_segment(&temporary, "20260701", "120000_300", bytes1);
@@ -2667,9 +2746,9 @@ fn acceptance_206_shaped_tree_cleans_hold_and_processes_terminal_keep() {
 }
 
 #[test]
-fn acceptance_state_with_future_attempt_and_terminal_keep_defers_and_strips_terminal_keep() {
+fn future_attempt_defers_and_strips_the_terminal_keep_marker() {
     run(async {
-        let temporary = TestDirectory::new("acceptance-future-attempt-terminal-keep");
+        let temporary = TestDirectory::new("future-attempt-terminal-keep");
         let bytes = b"deferred\n";
         create_segment(&temporary, "20260701", "120000_300", bytes);
         let seg = segment_path(&temporary, "20260701", "120000_300");
@@ -2713,10 +2792,9 @@ fn acceptance_state_with_future_attempt_and_terminal_keep_defers_and_strips_term
 }
 
 #[test]
-fn acceptance_recreated_segment_at_same_name_different_bytes_or_name_uploads_and_same_bytes_local_finish()
- {
+fn recreated_segment_at_the_same_name_uploads_changed_bytes_and_finishes_identical_bytes_locally() {
     run(async {
-        let temporary = TestDirectory::new("acceptance-recreated-segment");
+        let temporary = TestDirectory::new("recreated-segment-bytes");
         let original_bytes = b"original\n";
         let orig_sha = sha256_hex(original_bytes);
         let orig_size = original_bytes.len() as u64;
@@ -2764,9 +2842,184 @@ fn acceptance_recreated_segment_at_same_name_different_bytes_or_name_uploads_and
 }
 
 #[test]
-fn acceptance_confirmed_removal_preserves_day_stream_and_failed_incomplete_siblings() {
+fn recreated_segment_with_a_file_the_stale_ack_does_not_cover_uploads_once_and_is_removed() {
+    let Some(stderr) = child_stderr(
+        "recreated_segment_with_a_file_the_stale_ack_does_not_cover_uploads_once_and_is_removed",
+        || {
+            run(async {
+                let temporary = TestDirectory::new("recreated-segment-uncovered-name");
+                let original = b"original\n";
+                let ack_val = valid_ack_json(
+                    &temporary,
+                    "20260701",
+                    "120000_300",
+                    &[(FILE, original.len() as u64, &sha256_hex(original))],
+                );
+                write_ack(&temporary, "20260701", "120000_300", &ack_val);
+                // The later segment keeps the acknowledged file unchanged and adds
+                // a file the stale ack never named.
+                create_segment(&temporary, "20260701", "120000_300", original);
+                let seg = segment_path(&temporary, "20260701", "120000_300");
+                std::fs::write(seg.join("tmux_aux_screen.jsonl"), b"new pane\n")
+                    .expect("write uncovered file");
+                let ledger = temporary
+                    .path()
+                    .join("sync-ledger/20260701")
+                    .join(STREAM)
+                    .join("120000_300");
+
+                let acked_names = Arc::new(Mutex::new(Vec::new()));
+                let observed_names = Arc::clone(&acked_names);
+                let ack_path = ledger.join("ack.json");
+                let observer: SegmentRemovalObserver = Arc::new(move |_, stage| {
+                    if stage == SegmentRemovalStage::FilesUnlinked {
+                        let ack: serde_json::Value = serde_json::from_slice(
+                            &std::fs::read(&ack_path).expect("read ack before removal"),
+                        )
+                        .expect("parse ack before removal");
+                        let mut names = ack["files"]
+                            .as_array()
+                            .expect("ack files")
+                            .iter()
+                            .map(|file| file["submitted"].as_str().expect("name").to_owned())
+                            .collect::<Vec<_>>();
+                        names.sort();
+                        *observed_names.lock().expect("ack names lock") = names;
+                    }
+                });
+                let mut scheduler =
+                    scheduler(&temporary, SyncWake::default()).with_removal_observer(observer);
+                let mut journal = FakeJournal::default();
+                let summary = scheduler.run_sweep(&mut journal, no_shutdown()).await;
+
+                assert_eq!(summary.attempted, 1, "an uncovered file forces an upload");
+                assert_eq!(summary.custodied, 1);
+                assert_eq!(journal.uploads(), vec!["120000_300".to_owned()]);
+                assert_eq!(
+                    *acked_names.lock().expect("ack names lock"),
+                    vec!["tmux_aux_screen.jsonl".to_owned(), FILE.to_owned()],
+                    "the segment is acked on its own receipt"
+                );
+                assert!(!seg.exists(), "the receipt removes the segment");
+                assert!(
+                    !ledger.exists(),
+                    "the removed segment leaves no ledger entry"
+                );
+
+                for _ in 0..2 {
+                    journal.clear_calls();
+                    let later = scheduler.run_sweep(&mut journal, no_shutdown()).await;
+                    assert_eq!(later.attempted, 0);
+                    assert!(journal.uploads().is_empty(), "the segment uploads once");
+                }
+            });
+        },
+    ) else {
+        return;
+    };
+    assert_eq!(
+        stderr.matches(REMOVAL_FAILURE_LINE).count(),
+        0,
+        "the removal-failure line must not appear, let alone repeat:\n{stderr}"
+    );
+}
+
+#[test]
+fn a_removal_refused_after_a_change_logs_one_line_and_keeps_the_segment() {
+    let Some(stderr) = child_stderr(
+        "a_removal_refused_after_a_change_logs_one_line_and_keeps_the_segment",
+        || {
+            run(async {
+                let temporary = TestDirectory::new("refused-removal-logs");
+                create_segment(&temporary, "20260701", "120000_300", b"fixture\n");
+                let seg = segment_path(&temporary, "20260701", "120000_300");
+                let rewritten = b"rewritten while the upload was in flight\n".to_vec();
+
+                let mut scheduler = scheduler(&temporary, SyncWake::default());
+                let mut journal = FakeJournal {
+                    rewrite_after_receipt: Some((seg.join(FILE), rewritten.clone())),
+                    ..FakeJournal::default()
+                };
+                let summary = scheduler.run_sweep(&mut journal, no_shutdown()).await;
+
+                assert_eq!(summary.custodied, 1);
+                assert_eq!(
+                    std::fs::read(seg.join(FILE)).expect("read kept file"),
+                    rewritten,
+                    "a file changed after its receipt keeps the segment"
+                );
+                eprintln!("-- next sweep --");
+
+                journal.clear_calls();
+                let next = scheduler.run_sweep(&mut journal, no_shutdown()).await;
+                assert_eq!(next.attempted, 1, "the changed bytes upload again");
+                assert_eq!(next.custodied, 1);
+                assert!(!seg.exists(), "their receipt removes the segment");
+            });
+        },
+    ) else {
+        return;
+    };
+    let (first_sweep, next_sweep) = stderr
+        .split_once("-- next sweep --")
+        .expect("child reached the next sweep");
+    assert_eq!(
+        first_sweep.matches(REMOVAL_FAILURE_LINE).count(),
+        1,
+        "a refused removal logs one line:\n{stderr}"
+    );
+    assert_eq!(
+        next_sweep.matches(REMOVAL_FAILURE_LINE).count(),
+        0,
+        "a completed removal logs nothing:\n{stderr}"
+    );
+}
+
+#[test]
+fn local_finish_stops_at_a_shutdown_request_before_the_next_candidate() {
     run(async {
-        let temporary = TestDirectory::new("acceptance-preserve-structure");
+        let temporary = TestDirectory::new("local-finish-shutdown");
+        let segments = ["120000_300", "120100_300", "120200_300"];
+        for (index, segment) in segments.iter().enumerate() {
+            let bytes = format!("fixture {index}\n");
+            create_segment(&temporary, "20260701", segment, bytes.as_bytes());
+            let ack_val = valid_ack_json(
+                &temporary,
+                "20260701",
+                segment,
+                &[(FILE, bytes.len() as u64, &sha256_hex(bytes.as_bytes()))],
+            );
+            write_ack(&temporary, "20260701", segment, &ack_val);
+        }
+
+        let (stop, shutdown) = watch::channel(false);
+        let stop = Arc::new(stop);
+        let hook_stop = Arc::clone(&stop);
+        let mut scheduler =
+            scheduler(&temporary, SyncWake::default()).with_delete_hook(Arc::new(move |_| {
+                hook_stop.send_replace(true);
+            }));
+        let mut journal = FakeJournal::default();
+        let summary = scheduler.run_sweep(&mut journal, shutdown).await;
+
+        assert!(summary.cancelled, "the shutdown request ends the sweep");
+        assert_eq!(summary.attempted, 0);
+        assert!(journal.calls.is_empty(), "a stopped sweep calls no journal");
+        let kept = segments
+            .iter()
+            .filter(|segment| segment_path(&temporary, "20260701", segment).exists())
+            .count();
+        assert_eq!(
+            kept, 2,
+            "the removal under way finishes and no later candidate starts"
+        );
+    });
+}
+
+#[test]
+fn confirmed_removal_keeps_day_stream_and_failed_or_incomplete_siblings() {
+    run(async {
+        let temporary = TestDirectory::new("confirmed-removal-siblings");
         create_segment(&temporary, "20260701", "120000_300", b"content\n");
         let confirmed_seg = segment_path(&temporary, "20260701", "120000_300");
 
@@ -2791,6 +3044,35 @@ fn acceptance_confirmed_removal_preserves_day_stream_and_failed_incomplete_sibli
 }
 
 // === Test Helpers ===
+
+const REMOVAL_FAILURE_LINE: &str = "solstone-tmux: confirmed segment was not removed";
+const STDERR_CHILD_ENV: &str = "SOLSTONE_TMUX_TEST_STDERR_CHILD";
+
+/// Runs `body` in a fresh process of this test binary, filtered to the test
+/// named `test_name`, and returns what that process wrote to stderr. Inside the
+/// child process the body runs and this returns `None`.
+fn child_stderr(test_name: &str, body: impl FnOnce()) -> Option<String> {
+    if std::env::var(STDERR_CHILD_ENV).is_ok_and(|name| name == test_name) {
+        body();
+        return None;
+    }
+    let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
+        .args([test_name, "--exact", "--nocapture", "--test-threads=1"])
+        .env(STDERR_CHILD_ENV, test_name)
+        .output()
+        .expect("run the test in a child process");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert!(
+        output.status.success(),
+        "child test failed\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert!(
+        stdout.contains("test result: ok. 1 passed"),
+        "child process did not run {test_name}:\n{stdout}"
+    );
+    Some(stderr)
+}
 
 fn test_journal_identity() -> JournalIdentity {
     JournalIdentity {
@@ -3029,29 +3311,29 @@ async fn advance_both(clock: &TestClock, duration: Duration) {
     }
 }
 
-async fn expect_listing(listings: &mut mpsc::UnboundedReceiver<()>, context: &str) {
+async fn expect_status_probe(status_probes: &mut mpsc::UnboundedReceiver<()>, context: &str) {
     let deadline = std::time::Instant::now() + HANG_GUARD;
     loop {
-        if listings.try_recv().is_ok() {
+        if status_probes.try_recv().is_ok() {
             for _ in 0..SCHEDULER_TURNS {
                 tokio::task::yield_now().await;
             }
             return;
         }
         if std::time::Instant::now() >= deadline {
-            panic!("scheduler did not make the expected listing contact: {context}");
+            panic!("scheduler did not make the expected status probe: {context}");
         }
         tokio::task::yield_now().await;
         std::thread::sleep(Duration::from_millis(1));
     }
 }
 
-async fn assert_no_listing(listings: &mut mpsc::UnboundedReceiver<()>) {
+async fn assert_no_status_probe(status_probes: &mut mpsc::UnboundedReceiver<()>) {
     for _ in 0..SCHEDULER_TURNS {
         tokio::task::yield_now().await;
     }
     assert!(
-        listings.try_recv().is_err(),
+        status_probes.try_recv().is_err(),
         "scheduler bypassed its wake or backoff boundary"
     );
 }
@@ -3083,6 +3365,9 @@ struct FakeJournal {
     remote: HashMap<String, HashMap<String, Vec<LocalFile>>>,
     upload_outcomes: HashMap<String, VecDeque<Result<UploadResult, SyncOperationError>>>,
     status_outcomes: VecDeque<Result<(), SyncOperationError>>,
+    /// Rewrites one file after the receipt is computed, as if the file changed
+    /// while the upload was in flight.
+    rewrite_after_receipt: Option<(PathBuf, Vec<u8>)>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -3178,6 +3463,9 @@ impl SyncJournal for FakeJournal {
                     disposition: "written".to_owned(),
                 })
                 .collect();
+            if let Some((path, bytes)) = self.rewrite_after_receipt.take() {
+                std::fs::write(path, bytes).expect("rewrite file after receipt");
+            }
             if self.evidence_visible(source) {
                 self.remote
                     .entry(candidate.day().to_owned())
@@ -3207,7 +3495,7 @@ impl SyncJournal for FakeJournal {
 }
 
 struct BackoffJournal {
-    listings: mpsc::UnboundedSender<()>,
+    status_probes: mpsc::UnboundedSender<()>,
     outcomes: VecDeque<Result<(), SyncOperationError>>,
 }
 
@@ -3225,7 +3513,7 @@ impl SyncJournal for BackoffJournal {
         &'a mut self,
     ) -> Pin<Box<dyn Future<Output = Result<(), SyncOperationError>> + Send + 'a>> {
         Box::pin(async move {
-            let _ = self.listings.send(());
+            let _ = self.status_probes.send(());
             self.outcomes.pop_front().unwrap_or(Ok(()))
         })
     }

@@ -487,7 +487,7 @@ fn journal_write_failed_ends_the_sweep() {
         let temporary = TestDirectory::new("journal-write-failed");
         ensure_private_directory(temporary.path()).expect("private root");
         let lock = InstanceLock::acquire(temporary.path()).expect("acquire lock");
-        let _cand1 = create_linked_device_candidate(&temporary);
+        let cand1 = create_linked_device_candidate(&temporary);
         let cand2 = temporary
             .path()
             .join("captures")
@@ -535,9 +535,117 @@ fn journal_write_failed_ends_the_sweep() {
 
         let health_json = wait_for_idle_snapshot(temporary.path()).await;
         assert_eq!(health_json["state"], "offline");
+        assert_eq!(
+            fs::read(&cand1).expect("segment answered with a write failure"),
+            LINKED_DEVICE_BYTES,
+            "a journal write failure keeps the segment"
+        );
+        assert!(
+            cand2.exists(),
+            "the ended sweep keeps the segment it did not reach"
+        );
+        assert_eq!(
+            peer.requests()
+                .iter()
+                .filter(|request| request.path_without_query() == INGEST_PATH)
+                .count(),
+            1,
+            "the write failure ends the sweep before the next upload"
+        );
 
         stop.send_replace(true);
         task.await.expect("join task");
+        peer.shutdown().await;
+    });
+}
+
+#[test]
+fn ignored_retention_setting_still_removes_a_confirmed_segment_in_the_same_sweep() {
+    linked_device_runtime().block_on(async {
+        let fixture = BindingFixture::new("retention-setting-ignored");
+        fixture.install_config(
+            br#"{"stream":"host.tmux","capture_interval":5,"segment_interval":300,"cache_retention_days":-1,"status_indicator":false}"#,
+        );
+        let hostname = "host";
+        let config =
+            RuntimeConfig::load(&fixture.config_root, hostname).expect("load runtime settings");
+        assert_eq!(config.cache_retention_days, -1);
+        assert_eq!(config.stream.as_str(), LINKED_DEVICE_STREAM);
+
+        let peer = PrivateLinkPeer::start().await;
+        peer.answer_uploads_with_received_descriptors();
+        persist_credential(&fixture.config_root, &peer.credential())
+            .expect("persist paired credential");
+        let candidate = fixture
+            .data_root
+            .join("captures")
+            .join(LINKED_DEVICE_DAY)
+            .join(LINKED_DEVICE_STREAM)
+            .join(LINKED_DEVICE_SEGMENT)
+            .join(LINKED_DEVICE_FILE);
+        fs::create_dir_all(candidate.parent().expect("candidate parent"))
+            .expect("candidate directory");
+        fs::write(&candidate, LINKED_DEVICE_BYTES).expect("candidate bytes");
+
+        let clock = Arc::new(test_clock());
+        let lock = InstanceLock::acquire(&fixture.data_root).expect("instance lock");
+        let (stop, shutdown) = watch::channel(false);
+        let (activity, _activity_receiver) = watch::channel(SyncActivity::Idle);
+        let sync = tokio::spawn(
+            SyncTask {
+                config_root: fixture.config_root.clone(),
+                data_root: fixture.data_root.clone(),
+                config,
+                hostname: hostname.to_owned(),
+                clock: Arc::clone(&clock) as Arc<dyn Clock>,
+                wake: SyncWake::default(),
+                activity,
+                health: HealthWriter::new(fixture.data_root.clone(), &lock),
+                retention_fence: Arc::new(solstone_tmux::sync::RetentionFence::new()),
+                identity: lock.identity().clone(),
+            }
+            .run(shutdown),
+        );
+
+        // The first published sync ends the first sweep. With no wake and the
+        // periodic interval a minute away, no second sweep runs before these
+        // reads.
+        let health = wait_for_successful_sync(&fixture.data_root).await;
+        let removed_in_first_sweep = !candidate.exists();
+        let requests = peer.requests();
+        stop.send_replace(true);
+        tokio::time::timeout(Duration::from_secs(5), sync)
+            .await
+            .expect("sync stops after shutdown")
+            .expect("join sync")
+            .expect("clean shutdown");
+        drop(lock);
+
+        assert!(
+            removed_in_first_sweep,
+            "the confirmed segment is removed in the sweep that uploaded it"
+        );
+        assert!(!candidate.parent().expect("segment directory").exists());
+        assert!(
+            !fixture
+                .data_root
+                .join("sync-ledger")
+                .join(LINKED_DEVICE_DAY)
+                .join(LINKED_DEVICE_STREAM)
+                .join(LINKED_DEVICE_SEGMENT)
+                .exists(),
+            "the removed segment leaves no ledger entry"
+        );
+        assert_eq!(health["pending_segments"], 0);
+        assert!(health["last_error_code"].is_null());
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|request| request.path_without_query() == INGEST_PATH)
+                .count(),
+            1,
+            "the segment uploads once"
+        );
         peer.shutdown().await;
     });
 }
@@ -1159,6 +1267,23 @@ async fn wait_for_idle_snapshot(data_root: &Path) -> Value {
     })
     .await
     .expect("idle health timeout")
+}
+
+async fn wait_for_successful_sync(data_root: &Path) -> Value {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Ok(bytes) = fs::read(data_root.join(HEALTH_FILENAME))
+                && let Ok(snapshot) = serde_json::from_slice::<Value>(&bytes)
+                && snapshot["sync_in_progress"] == false
+                && snapshot["last_successful_sync_unix_seconds"].is_number()
+            {
+                return snapshot;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("successful sync health timeout")
 }
 
 async fn wait_until(context: &str, predicate: impl Fn() -> bool) {

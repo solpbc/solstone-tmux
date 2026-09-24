@@ -803,75 +803,6 @@ impl Default for RetentionFence {
     }
 }
 
-pub async fn delete_custodied_segment(
-    captures_root: &Path,
-    candidate: &SegmentCandidate,
-    expected_digests: &[(&str, &str)],
-    expected_identities: &[FileIdentity],
-    fence: Arc<RetentionFence>,
-) -> bool {
-    delete_custodied_segment_with_hook(
-        captures_root,
-        candidate,
-        expected_digests,
-        expected_identities,
-        None,
-        fence,
-    )
-    .await
-}
-
-pub async fn delete_custodied_segment_with_hook(
-    captures_root: &Path,
-    candidate: &SegmentCandidate,
-    expected_digests: &[(&str, &str)],
-    expected_identities: &[FileIdentity],
-    delete_hook: Option<Arc<dyn Fn(usize) + Send + Sync>>,
-    fence: Arc<RetentionFence>,
-) -> bool {
-    let digests_map: HashMap<String, String> = expected_digests
-        .iter()
-        .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
-        .collect();
-    let root = captures_root.to_owned();
-    let target = candidate.clone();
-    let expected_paths: Vec<PathBuf> = match resolve_segment_files(&root, &target) {
-        ResolvedSegmentFiles::Found(paths) => paths,
-        _ => return false,
-    };
-    let expected_identities_vec = expected_identities.to_vec();
-    let Some(permit) = fence.begin_irreversible().await else {
-        return false;
-    };
-    match tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        delete_revalidated_segment(
-            &root,
-            &target,
-            &expected_paths,
-            &expected_identities_vec,
-            &digests_map,
-            delete_hook.as_deref(),
-            None,
-        )
-    })
-    .await
-    {
-        Ok(RemovalResult::Removed) => true,
-        Ok(RemovalResult::Failed) => {
-            let cap_dir = captures_root
-                .join(candidate.day())
-                .join(candidate.stream())
-                .join(candidate.segment());
-            if cap_dir.exists() {
-                eprintln!("solstone-tmux: confirmed segment was not removed");
-            }
-            false
-        }
-        _ => false,
-    }
-}
-
 #[allow(clippy::too_many_arguments)]
 pub async fn delete_confirmed_segment(
     captures_root: &Path,
@@ -918,7 +849,7 @@ pub async fn delete_confirmed_segment(
     .await
     {
         Ok(RemovalResult::Removed) | Ok(RemovalResult::Absent) => true,
-        Ok(RemovalResult::Failed) => {
+        Ok(RemovalResult::Failed) | Ok(RemovalResult::Refused) => {
             let cap_dir = captures_root
                 .join(candidate.day())
                 .join(candidate.stream())
@@ -955,7 +886,7 @@ pub async fn delete_empty_segment(
     .await
     {
         Ok(RemovalResult::Removed) | Ok(RemovalResult::Absent) => true,
-        Ok(RemovalResult::Failed) => {
+        Ok(RemovalResult::Failed) | Ok(RemovalResult::Refused) => {
             let cap_dir = captures_root
                 .join(candidate.day())
                 .join(candidate.stream())
@@ -1535,7 +1466,9 @@ impl SyncScheduler {
         loop {
             if requested {
                 if let Some(deadline) = self.backoff.deadline() {
-                    self.local_finish().await;
+                    if !self.local_finish(&mut shutdown).await {
+                        return;
+                    }
                     if Instant::now() >= deadline {
                         self.backoff.deadline_reached();
                     } else {
@@ -1579,7 +1512,10 @@ impl SyncScheduler {
         }
     }
 
-    pub async fn local_finish(&mut self) {
+    /// Finishes local removals for acknowledged and empty candidates. Returns
+    /// false when a shutdown request stopped it before every candidate was
+    /// visited.
+    pub async fn local_finish(&mut self, shutdown: &mut watch::Receiver<bool>) -> bool {
         let captures_root = self.captures_root.clone();
         let stream = self.stream.clone();
         let candidates =
@@ -1587,7 +1523,7 @@ impl SyncScheduler {
                 .await
             {
                 Ok(Ok(c)) => c,
-                _ => return,
+                _ => return true,
             };
 
         let snapshot = candidates.iter().cloned().collect::<HashSet<_>>();
@@ -1602,6 +1538,9 @@ impl SyncScheduler {
         .await;
 
         for candidate in candidates {
+            if shutdown_requested(shutdown) {
+                return false;
+            }
             let root = self.captures_root.clone();
             let target = candidate.clone();
             let resolved =
@@ -1664,6 +1603,7 @@ impl SyncScheduler {
                 _ => {}
             }
         }
+        true
     }
 
     pub async fn run_sweep(
@@ -1679,7 +1619,9 @@ impl SyncScheduler {
         .await
         .ok();
 
-        self.local_finish().await;
+        if !self.local_finish(&mut shutdown).await {
+            return self.cancelled_sweep(summary).await;
+        }
 
         let now = self.clock.wall_now().unix_timestamp();
         let captures_root = self.captures_root.clone();

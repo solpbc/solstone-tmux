@@ -20,9 +20,7 @@ use solstone_tmux::observer::{
     SupervisionControl, shutdown_barrier, supervise_observer,
 };
 use solstone_tmux::sync::{
-    FileIdentity, RetentionFence, SegmentCandidate, SyncActivity,
-    delete_custodied_segment as delete_custodied_segment_fenced,
-    delete_custodied_segment_with_hook,
+    FileIdentity, RetentionFence, SegmentCandidate, SyncActivity, delete_confirmed_segment,
 };
 use support::TestDirectory;
 
@@ -30,27 +28,49 @@ const STREAM: &str = "host.tmux";
 const SEGMENT: &str = "120000_300";
 const FILE: &str = "tmux_main_screen.jsonl";
 
-async fn delete_custodied_segment(
-    captures_root: &Path,
+type DeleteHook = Arc<dyn Fn(usize) + Send + Sync>;
+
+/// Runs the production removal path: the captures tree under `data_root`,
+/// its sync ledger beside it, and no removal observer.
+async fn delete_confirmed(
+    data_root: &Path,
     candidate: &SegmentCandidate,
     expected_digests: &[(&str, &str)],
     expected_identities: &[FileIdentity],
+    delete_hook: Option<DeleteHook>,
+    fence: Arc<RetentionFence>,
 ) -> bool {
-    delete_custodied_segment_fenced(
-        captures_root,
+    delete_confirmed_segment(
+        &data_root.join("captures"),
+        &data_root.join("sync-ledger"),
         candidate,
         expected_digests,
         expected_identities,
-        Arc::new(RetentionFence::new()),
+        delete_hook,
+        None,
+        fence,
     )
     .await
+}
+
+/// Writes a stand-in acknowledgment where the removal path keeps it, so a test
+/// can see whether a removal also cleared the ledger entry.
+fn write_ledger_ack(data_root: &Path, candidate: &SegmentCandidate) -> PathBuf {
+    let path = data_root
+        .join("sync-ledger")
+        .join(candidate.day())
+        .join(candidate.stream())
+        .join(candidate.segment())
+        .join("ack.json");
+    fs::create_dir_all(path.parent().expect("ledger parent")).expect("create ledger entry");
+    fs::write(&path, b"{}").expect("write ledger acknowledgment");
+    path
 }
 
 #[test]
 fn traversal_candidate_cannot_escape_its_stream() {
     run(async {
         let temporary = TestDirectory::new("retention-traversal");
-        let captures = temporary.path().join("captures");
         let outside = create_segment(
             temporary.path(),
             "captures/20260701",
@@ -66,8 +86,15 @@ fn traversal_candidate_cannot_escape_its_stream() {
             .map(|(k, v)| (k.as_str(), v.as_str()))
             .collect();
 
-        let removed =
-            delete_custodied_segment(&captures, &candidate, &digests_ref, &identities).await;
+        let removed = delete_confirmed(
+            temporary.path(),
+            &candidate,
+            &digests_ref,
+            &identities,
+            None,
+            Arc::new(RetentionFence::new()),
+        )
+        .await;
 
         assert!(!removed);
         assert_segment_entries_unchanged(&outside, &before);
@@ -111,7 +138,19 @@ fn symlink_and_special_file_retain_the_whole_segment() {
             ("120500_300", &socket_segment),
         ] {
             let candidate = SegmentCandidate::new("20260701", STREAM, segment_name);
-            assert!(!delete_custodied_segment(&captures, &candidate, &[], &[]).await);
+            let ack = write_ledger_ack(temporary.path(), &candidate);
+            assert!(
+                !delete_confirmed(
+                    temporary.path(),
+                    &candidate,
+                    &[],
+                    &[],
+                    None,
+                    Arc::new(RetentionFence::new()),
+                )
+                .await
+            );
+            assert!(ack.is_file(), "a retained segment keeps its acknowledgment");
         }
         assert_segment_entries_unchanged(&symlink_segment, &symlink_before);
         assert_segment_entries_unchanged(&socket_segment, &socket_before);
@@ -142,7 +181,6 @@ fn symlink_and_special_file_retain_the_whole_segment() {
 fn reserved_and_unrelated_entries_are_never_touched() {
     run(async {
         let temporary = TestDirectory::new("retention-unrelated");
-        let captures = temporary.path().join("captures");
         let finalized = create_segment(temporary.path(), "captures", "20260701", STREAM, SEGMENT);
         let stream_root = finalized.parent().expect("stream root");
         let incomplete = stream_root.join("121000.incomplete");
@@ -166,8 +204,25 @@ fn reserved_and_unrelated_entries_are_never_touched() {
             .map(|(k, v)| (k.as_str(), v.as_str()))
             .collect();
 
-        assert!(delete_custodied_segment(&captures, &candidate, &digests_ref, &identities).await);
+        let ack = write_ledger_ack(temporary.path(), &candidate);
+
+        assert!(
+            delete_confirmed(
+                temporary.path(),
+                &candidate,
+                &digests_ref,
+                &identities,
+                None,
+                Arc::new(RetentionFence::new()),
+            )
+            .await
+        );
         assert!(!finalized.exists());
+        assert!(!ack.exists(), "a removed segment takes its acknowledgment");
+        assert!(
+            !ack.parent().expect("ledger entry").exists(),
+            "a removed segment takes its ledger entry"
+        );
         assert!(incomplete.is_dir());
         assert!(failed.is_dir());
         assert!(metadata.is_file());
@@ -180,7 +235,6 @@ fn reserved_and_unrelated_entries_are_never_touched() {
 fn replacement_between_inspection_and_unlink_is_retained() {
     run(async {
         let temporary = TestDirectory::new("retention-replacement");
-        let captures = temporary.path().join("captures");
         let segment = create_segment(temporary.path(), "captures", "20260701", STREAM, SEGMENT);
         let candidate = SegmentCandidate::new("20260701", STREAM, SEGMENT);
         let (digests, identities) = expected_for(&segment).await;
@@ -198,8 +252,10 @@ fn replacement_between_inspection_and_unlink_is_retained() {
             }
         });
 
-        let outcome = delete_custodied_segment_with_hook(
-            &captures,
+        let ack = write_ledger_ack(temporary.path(), &candidate);
+
+        let outcome = delete_confirmed(
+            temporary.path(),
             &candidate,
             &digests_ref,
             &identities,
@@ -209,6 +265,7 @@ fn replacement_between_inspection_and_unlink_is_retained() {
         .await;
 
         assert!(!outcome);
+        assert!(ack.is_file(), "a retained segment keeps its acknowledgment");
         assert!(segment.is_dir());
         assert_eq!(
             fs::read(&target).expect("read restored fixture"),
@@ -225,7 +282,6 @@ fn replacement_between_inspection_and_unlink_is_retained() {
 fn mid_deletion_failure_restores_every_removed_file() {
     run(async {
         let temporary = TestDirectory::new("retention-rollback");
-        let captures = temporary.path().join("captures");
         let segment = create_segment(temporary.path(), "captures", "20260701", STREAM, SEGMENT);
         let auxiliary = segment.join("tmux_aux_screen.jsonl");
         fs::write(&auxiliary, b"auxiliary fixture\n").expect("write auxiliary fixture");
@@ -245,8 +301,10 @@ fn mid_deletion_failure_restores_every_removed_file() {
             }
         });
 
-        let outcome = delete_custodied_segment_with_hook(
-            &captures,
+        let ack = write_ledger_ack(temporary.path(), &candidate);
+
+        let outcome = delete_confirmed(
+            temporary.path(),
             &candidate,
             &digests_ref,
             &identities,
@@ -256,6 +314,7 @@ fn mid_deletion_failure_restores_every_removed_file() {
         .await;
 
         assert!(!outcome);
+        assert!(ack.is_file(), "a retained segment keeps its acknowledgment");
         assert!(segment.is_dir());
         assert_eq!(
             fs::read(auxiliary).expect("read restored auxiliary"),
@@ -276,7 +335,6 @@ fn mid_deletion_failure_restores_every_removed_file() {
 fn in_place_mutation_before_unlink_is_retained() {
     run(async {
         let temporary = TestDirectory::new("retention-in-place-mutation");
-        let captures = temporary.path().join("captures");
         let segment = create_segment(temporary.path(), "captures", "20260701", STREAM, SEGMENT);
         let candidate = SegmentCandidate::new("20260701", STREAM, SEGMENT);
         let (digests, identities) = expected_for(&segment).await;
@@ -303,8 +361,10 @@ fn in_place_mutation_before_unlink_is_retained() {
             }
         });
 
-        let outcome = delete_custodied_segment_with_hook(
-            &captures,
+        let ack = write_ledger_ack(temporary.path(), &candidate);
+
+        let outcome = delete_confirmed(
+            temporary.path(),
             &candidate,
             &digests_ref,
             &identities,
@@ -314,6 +374,7 @@ fn in_place_mutation_before_unlink_is_retained() {
         .await;
 
         assert!(!outcome);
+        assert!(ack.is_file(), "a retained segment keeps its acknowledgment");
         let mutated_metadata = fs::metadata(&target).expect("inspect mutated fixture");
         let mutated_on_disk = fs::read(&target).expect("read mutated fixture");
         assert_eq!(
@@ -338,7 +399,6 @@ fn in_place_mutation_before_unlink_is_retained() {
 fn late_byte_mismatch_rolls_back_prior_unlinks() {
     run(async {
         let temporary = TestDirectory::new("retention-late-byte-mismatch");
-        let captures = temporary.path().join("captures");
         let segment = create_segment(temporary.path(), "captures", "20260701", STREAM, SEGMENT);
         fs::write(
             segment.join("tmux_aux_screen.jsonl"),
@@ -376,8 +436,10 @@ fn late_byte_mismatch_rolls_back_prior_unlinks() {
             }
         });
 
-        let outcome = delete_custodied_segment_with_hook(
-            &captures,
+        let ack = write_ledger_ack(temporary.path(), &candidate);
+
+        let outcome = delete_confirmed(
+            temporary.path(),
             &candidate,
             &digests_ref,
             &identities,
@@ -387,6 +449,7 @@ fn late_byte_mismatch_rolls_back_prior_unlinks() {
         .await;
 
         assert!(!outcome);
+        assert!(ack.is_file(), "a retained segment keeps its acknowledgment");
         assert_eq!(
             fs::read(&first).expect("read restored first fixture"),
             original_first
@@ -415,7 +478,7 @@ fn late_byte_mismatch_rolls_back_prior_unlinks() {
 #[tokio::test(start_paused = true)]
 async fn retention_fence_keeps_the_lock_until_a_gated_unlink_finishes() {
     let temporary = TestDirectory::new("retention-fence");
-    let captures = temporary.path().join("captures");
+    let data_root = temporary.path().to_path_buf();
     let segment = create_segment(temporary.path(), "captures", "20260701", STREAM, SEGMENT);
     let candidate = SegmentCandidate::new("20260701", STREAM, SEGMENT);
     let (digests, identities) = expected_for(&segment).await;
@@ -442,8 +505,8 @@ async fn retention_fence_keeps_the_lock_until_a_gated_unlink_finishes() {
             .iter()
             .map(|(k, v)| (k.as_str(), v.as_str()))
             .collect();
-        let _ = delete_custodied_segment_with_hook(
-            &captures,
+        let _ = delete_confirmed(
+            &data_root,
             &candidate,
             &digests_ref,
             &identities,

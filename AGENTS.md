@@ -219,11 +219,13 @@ enter cert, source ID, `captures/` history, or relay UA.
 
 ### Sync and custody
 
-The sync task takes one filesystem snapshot on startup, segment finalization,
-and periodic wakeups, then processes that snapshot in sequential batches of at
-most eight candidates, yielding between batches. It owns one bounded backoff
-sequence. Local file inventories are reused while the sorted member names and
-file identities match; a content rewrite, member addition, removal, or rename
+The sync task sweeps on startup, segment finalization, and periodic wakeups.
+A sweep first finishes local removals over its own filesystem snapshot,
+checking for a shutdown request before each candidate, then takes a fresh
+snapshot and uploads the due candidates in sequential batches of at most eight,
+yielding between batches. The sync task owns one bounded backoff sequence.
+Local file inventories are reused while the sorted member names and file
+identities match; a content rewrite, member addition, removal, or rename
 invalidates that reuse.
 
 Before attempting journal uploads, each sweep finishes local removals for
