@@ -220,20 +220,21 @@ enter cert, source ID, `captures/` history, or relay UA.
 ### Sync and custody
 
 The sync task sweeps on startup, segment finalization, and periodic wakeups.
-A sweep first finishes local removals over its own filesystem snapshot,
-checking for a shutdown request before each candidate, then takes a fresh
-snapshot and uploads the due candidates in sequential batches of at most eight,
-yielding between batches. The sync task owns one bounded backoff sequence.
-Local file inventories are reused while the sorted member names and file
-identities match; a content rewrite, member addition, removal, or rename
+A sweep first finishes local removals for candidates confirmed by a durable
+acknowledgment or left empty, working over its own filesystem snapshot and
+checking for a shutdown request before each candidate. It then takes a fresh snapshot and
+uploads the due unconfirmed candidates in sequential batches of at most eight,
+yielding between batches; a valid receipt or segment-removed response removes
+that segment during the same sweep. Sweeps and startup recovery cover every
+stream directory under each capture day, so segments left under a previous
+hostname's default stream still upload. The sync task owns one bounded backoff
+sequence. Local file inventories are reused while the sorted member names and
+file identities match; a content rewrite, member addition, removal, or rename
 invalidates that reuse.
 
-Before attempting journal uploads, each sweep finishes local removals for
-candidates confirmed by a durable acknowledgment or left empty. An unconfirmed
-candidate uploads next, and a valid receipt or segment-removed response removes
-that segment during the same sweep. Immediately before each irreversible unlink,
-the deletion path re-reads bytes through its open descriptor and matches the
-acknowledged SHA-256. Journal responses are limited to 4 MiB.
+Immediately before each irreversible unlink, the deletion path re-reads bytes
+through its open descriptor and matches the acknowledged SHA-256. Journal
+responses are limited to 4 MiB.
 
 Supervision gives sync fifteen seconds to stop during an authorized shutdown.
 If an irreversible deletion is already running, the instance lock is held

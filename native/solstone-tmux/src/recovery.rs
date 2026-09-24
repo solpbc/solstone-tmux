@@ -12,7 +12,7 @@ use serde_json::Value;
 use time::{Date, Month, OffsetDateTime, UtcOffset};
 
 use crate::instance_lock::InstanceLock;
-use crate::name::{DerivedName, derive_component};
+use crate::name::derive_component;
 use crate::segment::finalized_name;
 use crate::storage::{MetadataLifecycle, SegmentMetadata, atomic_write_metadata, sync_directory};
 
@@ -64,10 +64,12 @@ pub fn recover_stream_with_options(
     recover_stream_inner(data_root, stream_dir, options)
 }
 
-pub fn recover_configured_streams(
+/// Recovers every stream directory under each capture date, not only the
+/// configured stream: a default stream follows the hostname, so a renamed
+/// machine can leave an interrupted segment under the previous stream name.
+pub fn recover_capture_streams(
     instance_lock: &InstanceLock,
     data_root: &Path,
-    stream: &DerivedName,
 ) -> Result<Vec<RecoveryRecord>, RecoveryError> {
     let _held_lock = instance_lock.file();
     let captures = data_root.join("captures");
@@ -116,19 +118,31 @@ pub fn recover_configured_streams(
         if file_type.is_symlink() || !file_type.is_dir() {
             return Err(RecoveryError::SpecialTarget(entry.path()));
         }
-        let stream_dir = stream
-            .join_checked(&entry.path())
-            .map_err(|_| RecoveryError::EscapesDataRoot(entry.path()))?;
-        match fs::symlink_metadata(&stream_dir) {
-            Ok(_) => stream_directories.push(stream_dir),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(source) => {
-                return Err(RecoveryError::Io {
-                    operation: "inspect configured stream",
-                    path: stream_dir,
-                    source,
-                });
+        let date_dir = entry.path();
+        let stream_entries = fs::read_dir(&date_dir).map_err(|source| RecoveryError::Io {
+            operation: "scan capture streams",
+            path: date_dir.clone(),
+            source,
+        })?;
+        for stream_entry in stream_entries {
+            let stream_entry = stream_entry.map_err(|source| RecoveryError::Io {
+                operation: "read capture stream entry",
+                path: date_dir.clone(),
+                source,
+            })?;
+            let Some(name) = stream_entry.file_name().to_str().map(str::to_owned) else {
+                continue;
+            };
+            let Ok(stream) = derive_component(&name) else {
+                continue;
+            };
+            if stream_entry.file_type().is_ok_and(|kind| kind.is_file()) {
+                continue;
             }
+            let stream_dir = stream
+                .join_checked(&date_dir)
+                .map_err(|_| RecoveryError::EscapesDataRoot(date_dir.clone()))?;
+            stream_directories.push(stream_dir);
         }
     }
     stream_directories.sort();

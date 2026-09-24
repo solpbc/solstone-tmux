@@ -10,9 +10,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use solstone_tmux::instance_lock::InstanceLock;
-use solstone_tmux::name::derive_component;
 use solstone_tmux::recovery::{
-    RecoveryAction, RecoveryError, RecoveryOptions, recover_configured_streams, recover_stream,
+    RecoveryAction, RecoveryError, RecoveryOptions, recover_capture_streams, recover_stream,
     recover_stream_with_options,
 };
 use solstone_tmux::segment::SegmentState;
@@ -492,12 +491,39 @@ fn configured_stream_scan_rejects_symlinked_captures_root() {
     fs::create_dir(&outside).expect("outside");
     symlink(&outside, data_root.join("captures")).expect("captures symlink");
     let instance_lock = InstanceLock::acquire(&data_root).expect("recovery lock");
-    let stream = derive_component("main").expect("stream");
 
     assert!(matches!(
-        recover_configured_streams(&instance_lock, &data_root, &stream),
+        recover_capture_streams(&instance_lock, &data_root),
         Err(RecoveryError::SpecialTarget(path)) if path == data_root.join("captures")
     ));
+}
+
+#[test]
+fn startup_recovery_finalizes_a_segment_left_under_a_previous_hostname_stream() {
+    let temporary = TestDirectory::new("recovery-previous-hostname-stream");
+    let data_root = temporary.path().join("data");
+    let previous = data_root
+        .join("captures")
+        .join("20260728")
+        .join("oldhost.tmux");
+    fs::create_dir_all(&previous).expect("previous stream");
+    let date = Date::from_calendar_date(2026, Month::July, 28).expect("date");
+    let time = Time::from_hms(12, 0, 0).expect("time");
+    let wall = PrimitiveDateTime::new(date, time).assume_utc();
+    let mut segment =
+        SegmentState::create(&previous, wall, Duration::ZERO, UtcOffset::UTC).expect("segment");
+    segment
+        .append_capture(&golden_capture("main"), 0.25, Duration::from_secs(1))
+        .expect("append");
+    let finalized = previous.join(&segment.metadata().finalized_dir);
+    drop(segment);
+    let instance_lock = InstanceLock::acquire(&data_root).expect("recovery lock");
+
+    let records = recover_capture_streams(&instance_lock, &data_root).expect("recovery");
+
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].action, RecoveryAction::Finalized);
+    assert!(finalized.is_dir());
 }
 
 struct Incomplete {

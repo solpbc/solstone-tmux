@@ -20,7 +20,6 @@ use solstone_tmux::journal::{
     inventory_files,
 };
 use solstone_tmux::model::CaptureResult;
-use solstone_tmux::name::{DerivedName, derive_component};
 use solstone_tmux::observer::{
     CaptureProvider, ObserverConfig, ObserverOperationError, SegmentLifecycle, ShutdownEvent,
     run_observer, shutdown_barrier,
@@ -2682,6 +2681,53 @@ fn missing_ledger_uploads_and_removes_on_an_already_held_receipt() {
 }
 
 #[test]
+fn segments_left_under_a_previous_hostname_stream_upload_and_are_removed() {
+    run(async {
+        let temporary = TestDirectory::new("previous-hostname-stream");
+        let bytes = b"payload\n";
+        let previous = temporary
+            .path()
+            .join("captures")
+            .join("20260701")
+            .join("oldhost.tmux")
+            .join("110000_300");
+        std::fs::create_dir_all(&previous).expect("create previous-stream segment");
+        std::fs::write(previous.join(FILE), bytes).expect("write previous-stream segment");
+        create_segment(&temporary, "20260701", "120000_300", bytes);
+        let current = segment_path(&temporary, "20260701", "120000_300");
+
+        let mut journal = FakeJournal::default();
+        for segment in ["110000_300", "120000_300"] {
+            journal.upload_outcome(
+                segment,
+                Ok(UploadResult {
+                    status: UploadStatus::Duplicate,
+                    authoritative_key: Some(segment.to_owned()),
+                    descriptors: Some(Ok(vec![ParsedDescriptor {
+                        submitted: FILE.to_owned(),
+                        written: FILE.to_owned(),
+                        sha256: sha256_hex(bytes),
+                        size: bytes.len() as u64,
+                        disposition: "already_held".to_owned(),
+                    }])),
+                }),
+            );
+        }
+
+        let mut scheduler = scheduler(&temporary, SyncWake::default());
+        let summary = scheduler.run_sweep(&mut journal, no_shutdown()).await;
+
+        assert_eq!(
+            journal.uploads(),
+            vec!["120000_300".to_owned(), "110000_300".to_owned()]
+        );
+        assert_eq!(summary.custodied, 2);
+        assert!(!previous.exists());
+        assert!(!current.exists());
+    });
+}
+
+#[test]
 fn earlier_ledger_tree_drops_hold_files_and_uploads_past_terminal_keep() {
     run(async {
         let temporary = TestDirectory::new("earlier-ledger-tree");
@@ -3089,7 +3135,6 @@ fn scheduler(temporary: &TestDirectory, wake: SyncWake) -> SyncScheduler {
 fn scheduler_with_source(temporary: &TestDirectory, wake: SyncWake, source: &str) -> SyncScheduler {
     SyncScheduler::new(
         temporary.path().to_path_buf(),
-        stream(),
         source.to_owned(),
         clock(),
         wake,
@@ -3113,7 +3158,6 @@ fn scheduler_with_clock_and_identity(
 ) -> SyncScheduler {
     SyncScheduler::new(
         temporary.path().to_path_buf(),
-        stream(),
         DEFAULT_SOURCE.to_owned(),
         clock,
         wake,
@@ -3220,10 +3264,6 @@ fn run_receipt_matrix_test(
         );
         assert_eq!(journal.uploads(), vec!["120000_300".to_owned()]);
     });
-}
-
-fn stream() -> DerivedName {
-    derive_component(STREAM).expect("stream")
 }
 
 fn clock() -> Arc<TestClock> {

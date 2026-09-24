@@ -1345,7 +1345,6 @@ impl Backoff {
 pub struct SyncScheduler {
     captures_root: PathBuf,
     ledger_root: PathBuf,
-    stream: DerivedName,
     source: String,
     clock: Arc<dyn Clock>,
     wake: SyncWake,
@@ -1365,7 +1364,6 @@ pub struct SyncScheduler {
 impl SyncScheduler {
     pub fn new(
         data_root: PathBuf,
-        stream: DerivedName,
         source: String,
         clock: Arc<dyn Clock>,
         wake: SyncWake,
@@ -1376,7 +1374,6 @@ impl SyncScheduler {
         Self {
             captures_root,
             ledger_root,
-            stream,
             source,
             clock,
             wake,
@@ -1517,11 +1514,8 @@ impl SyncScheduler {
     /// visited.
     pub async fn local_finish(&mut self, shutdown: &mut watch::Receiver<bool>) -> bool {
         let captures_root = self.captures_root.clone();
-        let stream = self.stream.clone();
         let candidates =
-            match tokio::task::spawn_blocking(move || scan_candidates(&captures_root, &stream))
-                .await
-            {
+            match tokio::task::spawn_blocking(move || scan_candidates(&captures_root)).await {
                 Ok(Ok(c)) => c,
                 _ => return true,
             };
@@ -1625,11 +1619,8 @@ impl SyncScheduler {
 
         let now = self.clock.wall_now().unix_timestamp();
         let captures_root = self.captures_root.clone();
-        let stream = self.stream.clone();
         let remaining_candidates =
-            match tokio::task::spawn_blocking(move || scan_candidates(&captures_root, &stream))
-                .await
-            {
+            match tokio::task::spawn_blocking(move || scan_candidates(&captures_root)).await {
                 Ok(Ok(candidates)) => candidates,
                 _ => {
                     self.facts.pending_segments = 0;
@@ -2318,7 +2309,6 @@ impl SyncTask {
             };
             let mut scheduler = SyncScheduler::new(
                 data_root.clone(),
-                config.stream,
                 config.source,
                 clock,
                 wake,
@@ -2513,10 +2503,11 @@ fn diagnostic_for_failure(failure: SyncFailureClass) -> DiagnosticCode {
     }
 }
 
-fn scan_candidates(
-    captures_root: &Path,
-    stream: &DerivedName,
-) -> Result<Vec<SegmentCandidate>, ()> {
+/// Enumerates every stream directory under each capture day, not only the
+/// stream this run captures into: a default stream follows the hostname, so a
+/// renamed machine leaves its earlier segments under the previous stream name.
+/// The upload carries no stream, so those segments deliver like any other.
+fn scan_candidates(captures_root: &Path) -> Result<Vec<SegmentCandidate>, ()> {
     match fs::symlink_metadata(captures_root) {
         Ok(metadata) if is_plain_directory(&metadata) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -2537,25 +2528,44 @@ fn scan_candidates(
         if day_path != entry.path() {
             return Err(());
         }
-        let stream_path = stream.join_checked(&day_path).map_err(|_| ())?;
-        match fs::symlink_metadata(&stream_path) {
-            Ok(metadata) if is_plain_directory(&metadata) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            _ => return Err(()),
-        }
-        for segment_entry in fs::read_dir(&stream_path).map_err(|_| ())? {
-            let segment_entry = segment_entry.map_err(|_| ())?;
-            let segment = segment_entry.file_name().into_string().map_err(|_| ())?;
-            if !valid_segment_name(&segment) {
+        for stream_entry in fs::read_dir(&day_path).map_err(|_| ())? {
+            let stream_entry = stream_entry.map_err(|_| ())?;
+            let Ok(stream_name) = stream_entry.file_name().into_string() else {
+                continue;
+            };
+            let Ok(stream) = derive_component(&stream_name) else {
+                continue;
+            };
+            if stream_entry.file_type().is_ok_and(|kind| kind.is_file()) {
                 continue;
             }
-            if !plain_directory_entry(&segment_entry) {
+            if !plain_directory_entry(&stream_entry) {
                 return Err(());
             }
-            candidates.push(SegmentCandidate::new(day.clone(), stream.as_str(), segment));
+            let stream_path = stream.join_checked(&day_path).map_err(|_| ())?;
+            if stream_path != stream_entry.path() {
+                return Err(());
+            }
+            for segment_entry in fs::read_dir(&stream_path).map_err(|_| ())? {
+                let segment_entry = segment_entry.map_err(|_| ())?;
+                let segment = segment_entry.file_name().into_string().map_err(|_| ())?;
+                if !valid_segment_name(&segment) {
+                    continue;
+                }
+                if !plain_directory_entry(&segment_entry) {
+                    return Err(());
+                }
+                candidates.push(SegmentCandidate::new(day.clone(), stream.as_str(), segment));
+            }
         }
     }
-    candidates.sort_by(|left, right| right.cmp(left));
+    candidates.sort_by(|left, right| {
+        (right.day(), right.segment(), right.stream()).cmp(&(
+            left.day(),
+            left.segment(),
+            left.stream(),
+        ))
+    });
     Ok(candidates)
 }
 

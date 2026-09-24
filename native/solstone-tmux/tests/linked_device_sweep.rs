@@ -388,7 +388,6 @@ fn segment_removed_deletes_segment_and_continues() {
         let clock = Arc::new(test_clock());
         let scheduler = SyncScheduler::new(
             temporary.path().to_path_buf(),
-            solstone_tmux::name::derive_component(LINKED_DEVICE_STREAM).expect("derived stream"),
             solstone_tmux::config::DEFAULT_SOURCE.to_owned(),
             Arc::clone(&clock) as Arc<dyn Clock>,
             SyncWake::default(),
@@ -436,7 +435,6 @@ fn segment_removed_deletes_segment_and_continues() {
 
         let mut fresh_scheduler = SyncScheduler::new(
             temporary.path().to_path_buf(),
-            solstone_tmux::name::derive_component(LINKED_DEVICE_STREAM).expect("derived stream"),
             solstone_tmux::config::DEFAULT_SOURCE.to_owned(),
             Arc::clone(&clock) as Arc<dyn Clock>,
             SyncWake::default(),
@@ -696,7 +694,6 @@ fn content_conflict_follows_the_hourly_bound() {
         let clock = Arc::new(test_clock());
         let mut scheduler = SyncScheduler::new(
             temporary.path().to_path_buf(),
-            solstone_tmux::name::derive_component(LINKED_DEVICE_STREAM).expect("derived stream"),
             solstone_tmux::config::DEFAULT_SOURCE.to_owned(),
             Arc::clone(&clock) as Arc<dyn Clock>,
             SyncWake::default(),
@@ -1160,7 +1157,6 @@ fn linked_device_scheduler_with_source(
     };
     SyncScheduler::new(
         temporary.path().to_path_buf(),
-        solstone_tmux::name::derive_component(LINKED_DEVICE_STREAM).expect("derived stream"),
         source.to_owned(),
         Arc::new(test_clock()),
         SyncWake::default(),

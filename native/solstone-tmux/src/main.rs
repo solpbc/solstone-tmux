@@ -22,7 +22,7 @@ use solstone_tmux::paths::{
     ProcessEnvironment, ensure_private_directory, resolve_config_root, resolve_data_root,
 };
 use solstone_tmux::private_link;
-use solstone_tmux::recovery::{RecoveryAction, recover_configured_streams};
+use solstone_tmux::recovery::{RecoveryAction, recover_capture_streams};
 use solstone_tmux::segment::SegmentState;
 use solstone_tmux::service::{
     ServiceController, ServiceStatus, current_platform, load_local_observer, status_exit_code,
@@ -182,8 +182,8 @@ fn run_native(
             .map_err(|error| error.to_string())?,
     );
 
-    for record in recover_configured_streams(&instance_lock, &data_root, &config.stream)
-        .map_err(|error| error.to_string())?
+    for record in
+        recover_capture_streams(&instance_lock, &data_root).map_err(|error| error.to_string())?
     {
         if matches!(
             record.action,
