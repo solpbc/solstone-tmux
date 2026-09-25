@@ -6,6 +6,8 @@ Format adapted from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [2.0.7] - 2026-09-25
+
 ### Changed
 
 - solstone-tmux now removes terminal text from this computer as soon as your journal confirms it has it, or that you removed it from your journal, instead of keeping it as long as the `cache_retention_days` setting said (seven days unless you changed it). anything an earlier version kept goes on the first sync after this update, once your journal has confirmed it. the setting no longer does anything, and a config file that still has it keeps working.
