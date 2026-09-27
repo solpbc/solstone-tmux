@@ -485,7 +485,7 @@ fn clients_self_integrates_with_journal_session() {
             Duration::from_secs(5),
             Arc::new(|| Some("session-host".to_owned())),
             PlatformKind::Linux,
-            Arc::new(solstone_tmux::clock::SystemClock::new(time::UtcOffset::UTC)),
+            Arc::new(solstone_tmux::clock::SystemClock::utc()),
         )
         .await
         .expect("start session");
@@ -608,7 +608,7 @@ fn clients_self_description_b_during_a_is_published_on_one_follow_up() {
             Duration::from_secs(5),
             hostname_source,
             PlatformKind::Linux,
-            Arc::new(solstone_tmux::clock::SystemClock::new(time::UtcOffset::UTC)),
+            Arc::new(solstone_tmux::clock::SystemClock::utc()),
         )
         .await
         .expect("start session");
@@ -697,7 +697,7 @@ fn clients_self_invalid_name_nulls_field_without_tmux_fallback() {
             Duration::from_secs(5),
             Arc::new(move || Some(invalid_hostname.to_owned())),
             PlatformKind::Linux,
-            Arc::new(solstone_tmux::clock::SystemClock::new(time::UtcOffset::UTC)),
+            Arc::new(solstone_tmux::clock::SystemClock::utc()),
         )
         .await
         .expect("start session");
@@ -761,7 +761,7 @@ fn clients_self_redirect_is_refused() {
             Duration::from_secs(5),
             Arc::new(|| Some("session-host".to_owned())),
             PlatformKind::Linux,
-            Arc::new(solstone_tmux::clock::SystemClock::new(time::UtcOffset::UTC)),
+            Arc::new(solstone_tmux::clock::SystemClock::utc()),
         )
         .await
         .expect("start session");
@@ -833,7 +833,7 @@ fn clients_self_timeout_releases_slot_and_fences_late_io() {
             Duration::from_millis(400),
             Arc::new(|| Some("session-host".to_owned())),
             PlatformKind::Linux,
-            Arc::new(solstone_tmux::clock::SystemClock::new(time::UtcOffset::UTC)),
+            Arc::new(solstone_tmux::clock::SystemClock::utc()),
         )
         .await
         .expect("start session");
@@ -933,7 +933,7 @@ fn clients_self_optional_failure_preserves_upload_progress() {
             Duration::from_secs(5),
             Arc::new(|| Some("session-host".to_owned())),
             PlatformKind::Linux,
-            Arc::new(solstone_tmux::clock::SystemClock::new(time::UtcOffset::UTC)),
+            Arc::new(solstone_tmux::clock::SystemClock::utc()),
         )
         .await
         .expect("start session");

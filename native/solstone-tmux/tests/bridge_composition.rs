@@ -31,7 +31,6 @@ use solstone_tmux::sync::JournalSession;
 use spl_core::frame::RECOMMENDED_CHUNK;
 use support::TestDirectory;
 use support::private_link_peer::PrivateLinkPeer;
-use time::UtcOffset;
 use tokio::sync::{Notify, oneshot};
 
 #[test]
@@ -444,7 +443,7 @@ fn slow_large_multipart_preserves_capture_on_the_production_runtime() {
                 polled: Arc::clone(&capture_polled),
             }),
             Box::new(CountingSegment),
-            Arc::new(SystemClock::new(UtcOffset::UTC)) as Arc<dyn Clock>,
+            Arc::new(SystemClock::utc()) as Arc<dyn Clock>,
             Box::pin(async move {
                 let _ = observer_shutdown.await;
                 ShutdownEvent::Injected

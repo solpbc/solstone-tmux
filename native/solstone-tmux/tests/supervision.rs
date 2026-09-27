@@ -208,17 +208,13 @@ fn shutdown_keeps_the_final_segment_for_a_later_scan() {
     ensure_private_directory(&data_root).expect("data root");
     let lock =
         solstone_tmux::instance_lock::InstanceLock::acquire(&data_root).expect("instance lock");
-    let clock = test_clock();
+    let clock = Arc::new(test_clock());
     let stream = derive_component("host.tmux").expect("stream");
-    let stream_dir = stream_directory(&data_root, &stream, clock.wall_now(), clock.local_offset())
-        .expect("stream directory");
-    let mut segment = SegmentState::create(
-        &stream_dir,
-        clock.wall_now(),
-        Duration::ZERO,
-        clock.local_offset(),
-    )
-    .expect("segment");
+    let offset = clock.offset_at(clock.wall_now());
+    let stream_dir =
+        stream_directory(&data_root, &stream, clock.wall_now(), offset).expect("stream directory");
+    let mut segment = SegmentState::create(&stream_dir, clock.wall_now(), Duration::ZERO, offset)
+        .expect("segment");
     segment
         .append_capture(&golden_capture("main"), 0.25, Duration::from_secs(1))
         .expect("append capture");
@@ -229,14 +225,14 @@ fn shutdown_keeps_the_final_segment_for_a_later_scan() {
         segment,
         data_root.clone(),
         stream,
-        clock.local_offset(),
+        Arc::clone(&clock) as Arc<dyn Clock>,
         wake.clone(),
     );
     let (observer_barrier, supervisor_barrier) = shutdown_barrier();
     let observer = run_observer(
         Arc::new(NoCaptures),
         Box::new(manager),
-        Arc::new(clock) as Arc<dyn Clock>,
+        Arc::clone(&clock) as Arc<dyn Clock>,
         Box::pin(async { ShutdownEvent::Injected }),
         observer_barrier,
         ObserverConfig {

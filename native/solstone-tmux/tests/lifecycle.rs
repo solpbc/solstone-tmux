@@ -70,7 +70,7 @@ fn nonempty_segment_finalizes_exactly_once() {
         segment,
         data_root,
         stream,
-        clock.local_offset(),
+        Arc::clone(&clock) as Arc<dyn Clock>,
         SyncWake::default(),
     );
 
@@ -80,7 +80,7 @@ fn nonempty_segment_finalizes_exactly_once() {
         Box::new(RecordingLock::default()),
         Box::pin(ready(ShutdownEvent::Injected)),
         Arc::new(NoCaptures),
-        Arc::new(clock),
+        Arc::clone(&clock) as Arc<dyn Clock>,
     );
 
     assert_eq!(exit.exit_code, 0);
@@ -104,7 +104,7 @@ fn confirmed_empty_segment_is_removed() {
         segment,
         data_root,
         stream,
-        clock.local_offset(),
+        Arc::clone(&clock) as Arc<dyn Clock>,
         SyncWake::default(),
     );
 
@@ -114,7 +114,7 @@ fn confirmed_empty_segment_is_removed() {
         Box::new(RecordingLock::default()),
         Box::pin(ready(ShutdownEvent::Injected)),
         Arc::new(NoCaptures),
-        Arc::new(clock),
+        Arc::clone(&clock) as Arc<dyn Clock>,
     );
 
     assert_eq!(exit.exit_code, 0);
@@ -154,7 +154,7 @@ fn finalize_failure_exits_nonzero_and_keeps_source() {
         segment,
         data_root,
         stream,
-        clock.local_offset(),
+        Arc::clone(&clock) as Arc<dyn Clock>,
         SyncWake::default(),
     );
 
@@ -164,7 +164,7 @@ fn finalize_failure_exits_nonzero_and_keeps_source() {
         Box::new(RecordingLock::default()),
         Box::pin(ready(ShutdownEvent::Injected)),
         Arc::new(NoCaptures),
-        Arc::new(clock),
+        Arc::clone(&clock) as Arc<dyn Clock>,
     );
 
     assert_eq!(exit.exit_code, 1);
@@ -329,20 +329,22 @@ fn runtime() -> tokio::runtime::Runtime {
 fn actual_segment(
     label: &str,
     nonempty: bool,
-) -> (TestDirectory, SegmentState, TestClock, PathBuf, DerivedName) {
+) -> (
+    TestDirectory,
+    SegmentState,
+    Arc<TestClock>,
+    PathBuf,
+    DerivedName,
+) {
     let temporary = TestDirectory::new(label);
-    let clock = test_clock();
+    let clock = Arc::new(test_clock());
     let data_root = temporary.path().join("data");
     let stream = derive_component("test.tmux").expect("stream name");
-    let stream_dir = stream_directory(&data_root, &stream, clock.wall_now(), clock.local_offset())
-        .expect("stream path");
-    let mut segment = SegmentState::create(
-        &stream_dir,
-        clock.wall_now(),
-        Duration::ZERO,
-        clock.local_offset(),
-    )
-    .expect("segment");
+    let offset = clock.offset_at(clock.wall_now());
+    let stream_dir =
+        stream_directory(&data_root, &stream, clock.wall_now(), offset).expect("stream path");
+    let mut segment = SegmentState::create(&stream_dir, clock.wall_now(), Duration::ZERO, offset)
+        .expect("segment");
     if nonempty {
         segment
             .append_capture(&golden_capture("main"), 0.25, Duration::from_secs(1))
@@ -478,4 +480,341 @@ impl Drop for RecordingLock {
     fn drop(&mut self) {
         self.log.lock().expect("log poisoned").push("lock");
     }
+}
+
+#[test]
+fn rotation_uses_the_offset_at_each_segment_start() {
+    let date = Date::from_calendar_date(2026, Month::July, 15).expect("date");
+    let time = Time::from_hms(18, 0, 0).expect("time");
+    let t = PrimitiveDateTime::new(date, time).assume_utc();
+    let before_offset = UtcOffset::from_hms(-6, 0, 0).expect("offset");
+    let after_offset = UtcOffset::from_hms(-7, 0, 0).expect("offset");
+
+    let clock = Arc::new(TestClock::with_offset_step(
+        t - time::Duration::seconds(10),
+        Duration::ZERO,
+        before_offset,
+        t,
+        after_offset,
+    ));
+    let temporary = TestDirectory::new("rotation-offset-step");
+    let data_root = temporary.path().join("data");
+    let stream = derive_component("test.tmux").expect("stream");
+    let initial_wall = clock.wall_now();
+    let initial_offset = clock.offset_at(initial_wall);
+    let stream_dir =
+        stream_directory(&data_root, &stream, initial_wall, initial_offset).expect("stream dir");
+    let segment = SegmentState::create(&stream_dir, initial_wall, Duration::ZERO, initial_offset)
+        .expect("create segment");
+    let mut manager = SegmentManager::new(
+        segment,
+        data_root.clone(),
+        stream,
+        Arc::clone(&clock) as Arc<dyn Clock>,
+        SyncWake::default(),
+    );
+    let segment_interval = Duration::from_secs(2);
+
+    let wall_t_minus_1 = t - time::Duration::seconds(1);
+    clock.set_wall(wall_t_minus_1);
+    clock.set_monotonic(Duration::from_secs(2));
+    manager
+        .process_poll(
+            &[golden_capture("main")],
+            wall_t_minus_1,
+            Duration::from_secs(2),
+            segment_interval,
+        )
+        .expect("poll at t-1s");
+
+    let wall_t_plus_1 = t + time::Duration::seconds(1);
+    clock.set_wall(wall_t_plus_1);
+    clock.set_monotonic(Duration::from_secs(4));
+    manager
+        .process_poll(
+            &[golden_capture("main")],
+            wall_t_plus_1,
+            Duration::from_secs(4),
+            segment_interval,
+        )
+        .expect("poll at t+1s");
+
+    let finalized_t_minus_1 = data_root
+        .join("captures")
+        .join("20260715")
+        .join("test.tmux")
+        .join("115959_002");
+    assert!(
+        finalized_t_minus_1.is_dir(),
+        "finalized segment must exist at {:?}",
+        finalized_t_minus_1
+    );
+
+    let incomplete_t_plus_1 = data_root
+        .join("captures")
+        .join("20260715")
+        .join("test.tmux")
+        .join("110001.incomplete");
+    assert!(
+        incomplete_t_plus_1.is_dir(),
+        "incomplete segment must exist at {:?}",
+        incomplete_t_plus_1
+    );
+
+    let meta_path = data_root
+        .join("captures")
+        .join("20260715")
+        .join("test.tmux")
+        .join("110001.incomplete.meta");
+    let meta_bytes = std::fs::read(&meta_path).expect("read incomplete meta");
+    let meta: solstone_tmux::storage::SegmentMetadata =
+        serde_json::from_slice(&meta_bytes).expect("parse metadata");
+    assert_eq!(meta.local_offset_seconds, after_offset.whole_seconds());
+}
+
+#[test]
+fn forward_offset_step_opens_the_new_local_date() {
+    let date = Date::from_calendar_date(2026, Month::January, 15).expect("date");
+    let time = Time::from_hms(7, 0, 0).expect("time");
+    let t = PrimitiveDateTime::new(date, time).assume_utc();
+    let before_offset = UtcOffset::from_hms(-7, 0, 0).expect("offset");
+    let after_offset = UtcOffset::from_hms(-6, 0, 0).expect("offset");
+
+    let initial_wall = t - time::Duration::seconds(1);
+    let clock = Arc::new(TestClock::with_offset_step(
+        initial_wall,
+        Duration::ZERO,
+        before_offset,
+        t,
+        after_offset,
+    ));
+    let temporary = TestDirectory::new("forward-offset-step");
+    let data_root = temporary.path().join("data");
+    let stream = derive_component("test.tmux").expect("stream");
+    let initial_offset = clock.offset_at(initial_wall);
+    let stream_dir =
+        stream_directory(&data_root, &stream, initial_wall, initial_offset).expect("stream dir");
+    let segment = SegmentState::create(&stream_dir, initial_wall, Duration::ZERO, initial_offset)
+        .expect("create segment");
+    let mut manager = SegmentManager::new(
+        segment,
+        data_root.clone(),
+        stream,
+        Arc::clone(&clock) as Arc<dyn Clock>,
+        SyncWake::default(),
+    );
+    let interval = Duration::from_secs(2);
+
+    let poll_wall = t + time::Duration::seconds(1);
+    clock.set_wall(poll_wall);
+    clock.set_monotonic(interval);
+    manager
+        .process_poll(&[], poll_wall, interval, interval)
+        .expect("process poll");
+
+    let new_incomplete = data_root
+        .join("captures")
+        .join("20260115")
+        .join("test.tmux")
+        .join("010001.incomplete");
+    assert!(new_incomplete.is_dir());
+
+    let old_stream_dir = data_root
+        .join("captures")
+        .join("20260114")
+        .join("test.tmux");
+    if old_stream_dir.exists() {
+        let count = std::fs::read_dir(&old_stream_dir)
+            .expect("read old stream dir")
+            .count();
+        assert_eq!(count, 0);
+    }
+}
+
+#[test]
+fn backward_offset_step_across_midnight_opens_the_earlier_date() {
+    let date = Date::from_calendar_date(2026, Month::January, 15).expect("date");
+    let time = Time::from_hms(7, 0, 0).expect("time");
+    let t = PrimitiveDateTime::new(date, time).assume_utc();
+    let before_offset = UtcOffset::from_hms(-7, 0, 0).expect("offset");
+    let after_offset = UtcOffset::from_hms(-8, 0, 0).expect("offset");
+
+    let initial_wall = t - time::Duration::seconds(5);
+    let clock = Arc::new(TestClock::with_offset_step(
+        initial_wall,
+        Duration::ZERO,
+        before_offset,
+        t,
+        after_offset,
+    ));
+    let temporary = TestDirectory::new("backward-offset-step");
+    let data_root = temporary.path().join("data");
+    let stream = derive_component("test.tmux").expect("stream");
+    let initial_offset = clock.offset_at(initial_wall);
+    let stream_dir =
+        stream_directory(&data_root, &stream, initial_wall, initial_offset).expect("stream dir");
+    let segment = SegmentState::create(&stream_dir, initial_wall, Duration::ZERO, initial_offset)
+        .expect("create segment");
+    let mut manager = SegmentManager::new(
+        segment,
+        data_root.clone(),
+        stream,
+        Arc::clone(&clock) as Arc<dyn Clock>,
+        SyncWake::default(),
+    );
+    let interval = Duration::from_secs(2);
+
+    clock.set_wall(t);
+    clock.set_monotonic(interval);
+    manager
+        .process_poll(&[], t, interval, interval)
+        .expect("process poll");
+
+    let new_incomplete = data_root
+        .join("captures")
+        .join("20260114")
+        .join("test.tmux")
+        .join("230000.incomplete");
+    assert!(new_incomplete.is_dir());
+}
+
+#[test]
+fn fallback_hour_reuses_a_stem_and_records_each_start_offset() {
+    let date = Date::from_calendar_date(2026, Month::November, 1).expect("date");
+    let time = Time::from_hms(8, 0, 0).expect("time");
+    let t = PrimitiveDateTime::new(date, time).assume_utc();
+    let before_offset = UtcOffset::from_hms(-6, 0, 0).expect("offset -6");
+    let after_offset = UtcOffset::from_hms(-7, 0, 0).expect("offset -7");
+
+    let start_wall = PrimitiveDateTime::new(
+        Date::from_calendar_date(2026, Month::November, 1).expect("date"),
+        Time::from_hms(7, 0, 0).expect("time"),
+    )
+    .assume_utc();
+    let clock = Arc::new(TestClock::with_offset_step(
+        start_wall,
+        Duration::ZERO,
+        before_offset,
+        t,
+        after_offset,
+    ));
+    let temporary = TestDirectory::new("fallback-hour");
+    let data_root = temporary.path().join("data");
+    let stream = derive_component("test.tmux").expect("stream");
+    let initial_offset = clock.offset_at(start_wall);
+    let stream_dir =
+        stream_directory(&data_root, &stream, start_wall, initial_offset).expect("stream dir");
+    let segment = SegmentState::create(&stream_dir, start_wall, Duration::ZERO, initial_offset)
+        .expect("create segment");
+    let mut manager = SegmentManager::new(
+        segment,
+        data_root.clone(),
+        stream.clone(),
+        Arc::clone(&clock) as Arc<dyn Clock>,
+        SyncWake::default(),
+    );
+    let interval = Duration::from_secs(300);
+
+    // Initial poll at monotonic 0
+    manager
+        .process_poll(
+            &[golden_capture("main")],
+            start_wall,
+            Duration::ZERO,
+            interval,
+        )
+        .expect("initial poll");
+
+    let (initial_date, initial_stem) =
+        solstone_tmux::clock::local_date_and_time(start_wall, initial_offset);
+    let initial_meta_path = data_root
+        .join("captures")
+        .join(&initial_date)
+        .join("test.tmux")
+        .join(format!("{initial_stem}.incomplete.meta"));
+    let initial_meta_bytes = std::fs::read(&initial_meta_path).expect("read initial metadata");
+    let initial_meta: solstone_tmux::storage::SegmentMetadata =
+        serde_json::from_slice(&initial_meta_bytes).expect("parse initial metadata");
+    assert_eq!(
+        initial_meta.local_offset_seconds,
+        clock.offset_at(start_wall).whole_seconds()
+    );
+    assert_eq!(
+        initial_meta.incomplete_dir,
+        format!("{initial_stem}.incomplete")
+    );
+
+    let mut utc_minus_6_stems = vec![initial_stem];
+    let mut utc_minus_7_stems = Vec::new();
+
+    let mut current_wall = start_wall;
+    let mut current_monotonic = Duration::ZERO;
+
+    for _step in 1..=12 {
+        current_wall += time::Duration::seconds(300);
+        current_monotonic += interval;
+        clock.set_wall(current_wall);
+        clock.set_monotonic(current_monotonic);
+
+        let prev_wall = current_wall - time::Duration::seconds(300);
+        let prev_offset = clock.offset_at(prev_wall);
+
+        manager
+            .process_poll(
+                &[golden_capture("main")],
+                current_wall,
+                current_monotonic,
+                interval,
+            )
+            .expect("rotation poll");
+
+        // The previous segment finalized: if it was UTC-6, simulate confirm-and-delete
+        if prev_offset == before_offset {
+            let (prev_date, prev_time) =
+                solstone_tmux::clock::local_date_and_time(prev_wall, prev_offset);
+            let prev_finalized = data_root
+                .join("captures")
+                .join(&prev_date)
+                .join("test.tmux")
+                .join(format!("{prev_time}_300"));
+            if prev_finalized.is_dir() {
+                std::fs::remove_dir_all(&prev_finalized).expect("remove finalized");
+            }
+        }
+
+        // Check the newly opened segment's metadata
+        let expected_offset = clock.offset_at(current_wall);
+        let (expected_date, expected_stem) =
+            solstone_tmux::clock::local_date_and_time(current_wall, expected_offset);
+        if expected_offset == before_offset {
+            utc_minus_6_stems.push(expected_stem.clone());
+        } else {
+            utc_minus_7_stems.push(expected_stem.clone());
+        }
+
+        let meta_path = data_root
+            .join("captures")
+            .join(&expected_date)
+            .join("test.tmux")
+            .join(format!("{expected_stem}.incomplete.meta"));
+        let meta_bytes = std::fs::read(&meta_path).expect("read metadata");
+        let meta: solstone_tmux::storage::SegmentMetadata =
+            serde_json::from_slice(&meta_bytes).expect("parse metadata");
+
+        let start_wall_dt = OffsetDateTime::from_unix_timestamp_nanos(meta.start_wall_unix_nanos)
+            .expect("valid timestamp");
+        assert_eq!(
+            meta.local_offset_seconds,
+            clock.offset_at(start_wall_dt).whole_seconds()
+        );
+        assert_eq!(meta.incomplete_dir, format!("{expected_stem}.incomplete"));
+        assert_eq!(expected_date, "20261101");
+    }
+
+    assert!(
+        utc_minus_7_stems
+            .iter()
+            .any(|stem| utc_minus_6_stems.contains(stem)),
+        "at least one UTC-7 stem must equal a UTC-6 stem"
+    );
 }

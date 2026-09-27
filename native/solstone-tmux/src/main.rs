@@ -29,7 +29,6 @@ use solstone_tmux::service::{
 };
 use solstone_tmux::sync::{RetentionFence, SyncActivity, SyncTask, SyncWake};
 use solstone_tmux::tmux::TmuxAdapter;
-use time::UtcOffset;
 
 fn main() {
     let exit_code = run().unwrap_or_else(|error| {
@@ -84,11 +83,12 @@ fn run() -> Result<i32, String> {
             }
         }
         cli::CliCommand::Run => {
-            // This must happen before Tokio can create a worker or driver thread.
-            let local_offset = UtcOffset::current_local_offset().map_err(|error| {
-                format!("could not determine the local UTC offset at startup: {error}")
-            })?;
-            run_native(platform, &environment, SystemClock::new(local_offset))
+            let resolved = solstone_tmux::clock::resolve_system_zone();
+            let (clock, warning) = SystemClock::from_resolved(resolved);
+            if let Some(warning) = warning {
+                eprintln!("solstone-tmux: warning: {warning}");
+            }
+            run_native(platform, &environment, clock)
         }
         command => {
             let runtime = runtime()?;
@@ -205,11 +205,11 @@ fn run_native(
     let clock: Arc<dyn Clock> = Arc::new(clock);
     let wall_now = clock.wall_now();
     let monotonic_now = clock.monotonic_now();
-    let stream_dir = stream_directory(&data_root, &config.stream, wall_now, clock.local_offset())
+    let offset = clock.offset_at(wall_now);
+    let stream_dir = stream_directory(&data_root, &config.stream, wall_now, offset)
         .map_err(|error| error.to_string())?;
-    let mut segment =
-        SegmentState::create(&stream_dir, wall_now, monotonic_now, clock.local_offset())
-            .map_err(|error| error.to_string())?;
+    let mut segment = SegmentState::create(&stream_dir, wall_now, monotonic_now, offset)
+        .map_err(|error| error.to_string())?;
     let indicator: Box<dyn ShutdownIndicator> = if config.status_indicator {
         let indicator_io = CommandIndicatorIo::new(TokioCommandRunner, tmux_path)
             .map_err(|error| error.to_string())?;
@@ -227,7 +227,7 @@ fn run_native(
         segment,
         data_root.clone(),
         config.stream.clone(),
-        clock.local_offset(),
+        Arc::clone(&clock),
         sync_wake.clone(),
     );
     let health = HealthWriter::new(data_root.clone(), &instance_lock);

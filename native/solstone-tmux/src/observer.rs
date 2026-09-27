@@ -82,7 +82,7 @@ pub struct SegmentManager {
     segment: SegmentState,
     data_root: PathBuf,
     stream: DerivedName,
-    local_offset: UtcOffset,
+    clock: Arc<dyn Clock>,
     sync_wake: SyncWake,
 }
 
@@ -91,14 +91,14 @@ impl SegmentManager {
         segment: SegmentState,
         data_root: PathBuf,
         stream: DerivedName,
-        local_offset: UtcOffset,
+        clock: Arc<dyn Clock>,
         sync_wake: SyncWake,
     ) -> Self {
         Self {
             segment,
             data_root,
             stream,
-            local_offset,
+            clock,
             sync_wake,
         }
     }
@@ -118,11 +118,10 @@ impl SegmentLifecycle for SegmentManager {
                 .finalize(monotonic_now)
                 .map_err(operation_error)?;
             self.sync_wake.segment_closed(&close);
-            let stream_dir =
-                stream_directory(&self.data_root, &self.stream, wall_now, self.local_offset)?;
-            self.segment =
-                SegmentState::create(&stream_dir, wall_now, monotonic_now, self.local_offset)
-                    .map_err(operation_error)?;
+            let offset = self.clock.offset_at(wall_now);
+            let stream_dir = stream_directory(&self.data_root, &self.stream, wall_now, offset)?;
+            self.segment = SegmentState::create(&stream_dir, wall_now, monotonic_now, offset)
+                .map_err(operation_error)?;
         }
         let timestamp = self.segment.frame_timestamp(wall_now);
         for capture in captures {

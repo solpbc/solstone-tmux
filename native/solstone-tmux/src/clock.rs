@@ -9,20 +9,67 @@ use time::{OffsetDateTime, UtcOffset};
 pub trait Clock: Send + Sync {
     fn wall_now(&self) -> OffsetDateTime;
     fn monotonic_now(&self) -> Duration;
-    fn local_offset(&self) -> UtcOffset;
+    fn offset_at(&self, instant: OffsetDateTime) -> UtcOffset;
+}
+
+#[derive(Clone, Debug)]
+pub struct Zone {
+    inner: jiff::tz::TimeZone,
+}
+
+impl Zone {
+    pub fn utc() -> Self {
+        Self {
+            inner: jiff::tz::TimeZone::UTC,
+        }
+    }
+
+    pub fn from_tzif(name: &str, data: &[u8]) -> Result<Self, String> {
+        jiff::tz::TimeZone::tzif(name, data)
+            .map(|inner| Self { inner })
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn from_posix(posix_tz: &str) -> Result<Self, String> {
+        jiff::tz::TimeZone::posix(posix_tz)
+            .map(|inner| Self { inner })
+            .map_err(|error| error.to_string())
+    }
+}
+
+pub fn resolve_system_zone() -> Result<Zone, String> {
+    jiff::tz::TimeZone::try_system()
+        .map(|inner| Zone { inner })
+        .map_err(|error| error.to_string())
 }
 
 #[derive(Debug)]
 pub struct SystemClock {
     monotonic_start: Instant,
-    local_offset: UtcOffset,
+    zone: Zone,
 }
 
 impl SystemClock {
-    pub fn new(local_offset: UtcOffset) -> Self {
+    pub fn utc() -> Self {
+        Self::from_zone(Zone::utc())
+    }
+
+    pub fn from_zone(zone: Zone) -> Self {
         Self {
             monotonic_start: Instant::now(),
-            local_offset,
+            zone,
+        }
+    }
+
+    pub fn from_resolved(result: Result<Zone, String>) -> (Self, Option<String>) {
+        match result {
+            Ok(zone) => (Self::from_zone(zone), None),
+            Err(cause) => (
+                Self::utc(),
+                Some(format!(
+                    "could not load the local time zone ({cause}); set TZ or repair /etc/localtime"
+                )),
+            ),
         }
     }
 }
@@ -36,16 +83,29 @@ impl Clock for SystemClock {
         self.monotonic_start.elapsed()
     }
 
-    fn local_offset(&self) -> UtcOffset {
-        self.local_offset
+    fn offset_at(&self, instant: OffsetDateTime) -> UtcOffset {
+        let timestamp = jiff::Timestamp::from_second(instant.unix_timestamp())
+            .expect("instant seconds fit jiff Timestamp range");
+        let seconds = self.zone.inner.to_offset(timestamp).seconds();
+        UtcOffset::from_whole_seconds(seconds).expect("jiff offset fits time UtcOffset range")
     }
+}
+
+#[derive(Debug)]
+enum TestOffsetRule {
+    Fixed(UtcOffset),
+    Step {
+        before: UtcOffset,
+        at: OffsetDateTime,
+        at_and_after: UtcOffset,
+    },
 }
 
 #[derive(Debug)]
 pub struct TestClock {
     wall: Mutex<OffsetDateTime>,
     monotonic: Mutex<Duration>,
-    local_offset: UtcOffset,
+    offset_rule: TestOffsetRule,
 }
 
 impl TestClock {
@@ -53,7 +113,25 @@ impl TestClock {
         Self {
             wall: Mutex::new(wall),
             monotonic: Mutex::new(monotonic),
-            local_offset,
+            offset_rule: TestOffsetRule::Fixed(local_offset),
+        }
+    }
+
+    pub fn with_offset_step(
+        wall: OffsetDateTime,
+        monotonic: Duration,
+        before: UtcOffset,
+        at: OffsetDateTime,
+        at_and_after: UtcOffset,
+    ) -> Self {
+        Self {
+            wall: Mutex::new(wall),
+            monotonic: Mutex::new(monotonic),
+            offset_rule: TestOffsetRule::Step {
+                before,
+                at,
+                at_and_after,
+            },
         }
     }
 
@@ -81,8 +159,21 @@ impl Clock for TestClock {
             .expect("test monotonic clock poisoned")
     }
 
-    fn local_offset(&self) -> UtcOffset {
-        self.local_offset
+    fn offset_at(&self, instant: OffsetDateTime) -> UtcOffset {
+        match self.offset_rule {
+            TestOffsetRule::Fixed(offset) => offset,
+            TestOffsetRule::Step {
+                before,
+                at,
+                at_and_after,
+            } => {
+                if instant < at {
+                    before
+                } else {
+                    at_and_after
+                }
+            }
+        }
     }
 }
 

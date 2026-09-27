@@ -82,7 +82,7 @@ impl PostConnectCoordinator {
             version_refresh,
             Arc::new(|| system_hostname().ok()),
             platform,
-            Arc::new(SystemClock::new(time::UtcOffset::UTC)),
+            Arc::new(SystemClock::utc()),
             OPTIONAL_JOB_TIMEOUT,
         )
     }

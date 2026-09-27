@@ -909,14 +909,14 @@ async fn run_binding_failure(
         &fixture.data_root,
         &config.stream,
         clock.wall_now(),
-        clock.local_offset(),
+        clock.offset_at(clock.wall_now()),
     )
     .expect("active stream directory");
     let segment = SegmentState::create(
         &stream_dir,
         clock.wall_now(),
         Duration::ZERO,
-        clock.local_offset(),
+        clock.offset_at(clock.wall_now()),
     )
     .expect("active segment");
     let polls = Arc::new(AtomicUsize::new(0));
@@ -929,7 +929,7 @@ async fn run_binding_failure(
             segment,
             fixture.data_root.clone(),
             config.stream.clone(),
-            clock.local_offset(),
+            Arc::clone(&clock) as Arc<dyn Clock>,
             SyncWake::default(),
         )),
         Arc::clone(&clock) as Arc<dyn Clock>,

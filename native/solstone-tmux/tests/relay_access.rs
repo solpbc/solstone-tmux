@@ -167,7 +167,7 @@ fn relay_access_post_connect_job_redial_quiesces_then_external_redial_starts_one
             Duration::from_secs(5),
             Arc::new(|| Some("burst-host".to_owned())),
             solstone_tmux::paths::PlatformKind::Linux,
-            Arc::new(solstone_tmux::clock::SystemClock::new(time::UtcOffset::UTC)),
+            Arc::new(solstone_tmux::clock::SystemClock::utc()),
         )
         .await
         .expect("start session");
@@ -746,7 +746,7 @@ fn relay_access_integrates_with_journal_session() {
             Duration::from_secs(5),
             Arc::new(|| Some("session-host".to_owned())),
             solstone_tmux::paths::PlatformKind::Linux,
-            Arc::new(solstone_tmux::clock::SystemClock::new(time::UtcOffset::UTC)),
+            Arc::new(solstone_tmux::clock::SystemClock::utc()),
         )
         .await
         .expect("start session");
@@ -815,7 +815,7 @@ fn relay_access_redirect_is_refused() {
             Duration::from_secs(5),
             Arc::new(|| Some("session-host".to_owned())),
             solstone_tmux::paths::PlatformKind::Linux,
-            Arc::new(solstone_tmux::clock::SystemClock::new(time::UtcOffset::UTC)),
+            Arc::new(solstone_tmux::clock::SystemClock::utc()),
         )
         .await
         .expect("start session");
@@ -880,7 +880,7 @@ fn relay_access_404_and_503_preserve_existing_relay_cache() {
             Duration::from_secs(5),
             Arc::new(|| Some("session-host".to_owned())),
             solstone_tmux::paths::PlatformKind::Linux,
-            Arc::new(solstone_tmux::clock::SystemClock::new(time::UtcOffset::UTC)),
+            Arc::new(solstone_tmux::clock::SystemClock::utc()),
         )
         .await
         .expect("start session");
@@ -988,7 +988,7 @@ fn relay_access_jwt_extra_claims_and_instance_mismatch_preserve_cache() {
             Duration::from_secs(5),
             Arc::new(|| Some("session-host".to_owned())),
             solstone_tmux::paths::PlatformKind::Linux,
-            Arc::new(solstone_tmux::clock::SystemClock::new(time::UtcOffset::UTC)),
+            Arc::new(solstone_tmux::clock::SystemClock::utc()),
         )
         .await
         .expect("start session");

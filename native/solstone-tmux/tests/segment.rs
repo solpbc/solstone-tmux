@@ -7,7 +7,7 @@ use std::fs;
 use std::os::unix::fs::symlink;
 use std::time::Duration;
 
-use solstone_tmux::segment::{AppendOutcome, SegmentClose, SegmentState};
+use solstone_tmux::segment::{AppendOutcome, SegmentClose, SegmentError, SegmentState};
 use support::{TestDirectory, golden_capture};
 use time::{Date, Month, PrimitiveDateTime, Time, UtcOffset};
 
@@ -152,4 +152,54 @@ fn segment(label: &str) -> (TestDirectory, SegmentState) {
     let segment = SegmentState::create(&stream, wall, Duration::ZERO, UtcOffset::UTC)
         .expect("create segment");
     (temporary, segment)
+}
+
+#[test]
+fn empty_finalized_directory_is_a_collision() {
+    let (_temporary, mut segment) = segment("empty-collision");
+    segment
+        .append_capture(&golden_capture("main"), 0.25, Duration::from_secs(1))
+        .expect("append");
+    let source = segment.incomplete_dir().to_owned();
+    let metadata_path = segment.metadata_path().to_owned();
+    let finalized = source.parent().expect("stream").join("120000_005");
+    fs::create_dir(&finalized).expect("create empty finalized directory");
+
+    let error = segment
+        .finalize(Duration::from_secs(5))
+        .expect_err("empty directory collision must fail finalize");
+
+    assert!(matches!(error, SegmentError::Collision(_)));
+    assert!(finalized.is_dir());
+    assert_eq!(
+        fs::read_dir(&finalized)
+            .expect("read finalized directory")
+            .count(),
+        0
+    );
+    assert!(source.is_dir());
+    assert!(metadata_path.exists());
+}
+
+#[test]
+fn nonempty_finalized_directory_is_a_collision() {
+    let (_temporary, mut segment) = segment("nonempty-collision");
+    segment
+        .append_capture(&golden_capture("main"), 0.25, Duration::from_secs(1))
+        .expect("append");
+    let source = segment.incomplete_dir().to_owned();
+    let metadata_path = segment.metadata_path().to_owned();
+    let finalized = source.parent().expect("stream").join("120000_005");
+    fs::create_dir(&finalized).expect("create finalized directory");
+    let marker = finalized.join("marker.txt");
+    fs::write(&marker, b"keep-me").expect("write marker file");
+
+    let error = segment
+        .finalize(Duration::from_secs(5))
+        .expect_err("nonempty directory collision must fail finalize");
+
+    assert!(matches!(error, SegmentError::Collision(_)));
+    assert_eq!(fs::read(&marker).expect("read marker"), b"keep-me");
+    assert!(source.is_dir());
+    assert!(metadata_path.exists());
 }

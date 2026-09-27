@@ -621,7 +621,7 @@ impl JournalSession {
             OPTIONAL_JOB_TIMEOUT,
             Arc::new(|| crate::config::system_hostname().ok()),
             platform,
-            Arc::new(crate::clock::SystemClock::new(time::UtcOffset::UTC)),
+            Arc::new(crate::clock::SystemClock::utc()),
         )
         .await
     }
