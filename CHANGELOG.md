@@ -8,6 +8,7 @@ Format adapted from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- after the clocks change for daylight saving time, your terminal text now goes into your journal under the right hour and day right away. before, solstone-tmux kept the old offset until it restarted, and text from that stretch stays an hour off. if it can't tell your time zone, it still uses UTC and now prints a warning when it starts, saying how to fix it.
 - security fix: when you paired this computer while your journal's private network was on, even over your own wifi, solstone-tmux sent your pairing link's one-time secret through the relay before checking it had reached your journal, so someone who could sit where the relay sits could have read the secret and used it to pair their own device. it now checks first that it's talking to your journal. please install this update before you pair again. if you paired this way, open your journal's network app and remove any device you don't recognize, including under "nothing added yet".
 
 ## [2.0.7] - 2026-09-25
