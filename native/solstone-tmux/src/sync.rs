@@ -1711,13 +1711,11 @@ impl SyncScheduler {
                 })
                 .await;
 
+                // The zone is context for the journal, never a reason to hold
+                // a segment back: an unreadable record uploads without it.
                 let meta = match capture_time_load {
-                    Ok(CaptureTimeLoad::Absent) => None,
                     Ok(CaptureTimeLoad::Present(ct)) => Some(ct),
-                    Ok(CaptureTimeLoad::Unreadable) | Err(_) => {
-                        summary.diagnostic = Some(DiagnosticCode::LocalSegmentInvalid);
-                        continue;
-                    }
+                    Ok(CaptureTimeLoad::Absent | CaptureTimeLoad::Unreadable) | Err(_) => None,
                 };
 
                 let ledger_root = self.ledger_root.clone();
