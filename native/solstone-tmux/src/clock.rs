@@ -35,6 +35,10 @@ impl Zone {
             .map(|inner| Self { inner })
             .map_err(|error| error.to_string())
     }
+
+    pub fn iana_name(&self) -> Option<String> {
+        self.inner.iana_name().map(str::to_owned)
+    }
 }
 
 pub fn resolve_system_zone() -> Result<Zone, String> {
@@ -59,6 +63,10 @@ impl SystemClock {
             monotonic_start: Instant::now(),
             zone,
         }
+    }
+
+    pub fn iana_name(&self) -> Option<String> {
+        self.zone.iana_name()
     }
 
     pub fn from_resolved(result: Result<Zone, String>) -> (Self, Option<String>) {

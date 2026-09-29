@@ -202,14 +202,21 @@ fn run_native(
     let shutdown = runtime
         .block_on(async { production_shutdown_future() })
         .map_err(|error| error.to_string())?;
+    let capture_tz = clock.iana_name();
     let clock: Arc<dyn Clock> = Arc::new(clock);
     let wall_now = clock.wall_now();
     let monotonic_now = clock.monotonic_now();
     let offset = clock.offset_at(wall_now);
     let stream_dir = stream_directory(&data_root, &config.stream, wall_now, offset)
         .map_err(|error| error.to_string())?;
-    let mut segment = SegmentState::create(&stream_dir, wall_now, monotonic_now, offset)
-        .map_err(|error| error.to_string())?;
+    let mut segment = SegmentState::create(
+        &stream_dir,
+        wall_now,
+        monotonic_now,
+        offset,
+        capture_tz.as_deref(),
+    )
+    .map_err(|error| error.to_string())?;
     let indicator: Box<dyn ShutdownIndicator> = if config.status_indicator {
         let indicator_io = CommandIndicatorIo::new(TokioCommandRunner, tmux_path)
             .map_err(|error| error.to_string())?;
@@ -229,6 +236,7 @@ fn run_native(
         config.stream.clone(),
         Arc::clone(&clock),
         sync_wake.clone(),
+        capture_tz,
     );
     let health = HealthWriter::new(data_root.clone(), &instance_lock);
     let (activity_sender, activity_receiver) = tokio::sync::watch::channel(SyncActivity::Idle);

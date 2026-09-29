@@ -72,6 +72,7 @@ fn nonempty_segment_finalizes_exactly_once() {
         stream,
         Arc::clone(&clock) as Arc<dyn Clock>,
         SyncWake::default(),
+        None,
     );
 
     let exit = run_with_clock(
@@ -106,6 +107,7 @@ fn confirmed_empty_segment_is_removed() {
         stream,
         Arc::clone(&clock) as Arc<dyn Clock>,
         SyncWake::default(),
+        None,
     );
 
     let exit = run_with_clock(
@@ -156,6 +158,7 @@ fn finalize_failure_exits_nonzero_and_keeps_source() {
         stream,
         Arc::clone(&clock) as Arc<dyn Clock>,
         SyncWake::default(),
+        None,
     );
 
     let exit = run_with_clock(
@@ -343,8 +346,9 @@ fn actual_segment(
     let offset = clock.offset_at(clock.wall_now());
     let stream_dir =
         stream_directory(&data_root, &stream, clock.wall_now(), offset).expect("stream path");
-    let mut segment = SegmentState::create(&stream_dir, clock.wall_now(), Duration::ZERO, offset)
-        .expect("segment");
+    let mut segment =
+        SegmentState::create(&stream_dir, clock.wall_now(), Duration::ZERO, offset, None)
+            .expect("segment");
     if nonempty {
         segment
             .append_capture(&golden_capture("main"), 0.25, Duration::from_secs(1))
@@ -504,14 +508,21 @@ fn rotation_uses_the_offset_at_each_segment_start() {
     let initial_offset = clock.offset_at(initial_wall);
     let stream_dir =
         stream_directory(&data_root, &stream, initial_wall, initial_offset).expect("stream dir");
-    let segment = SegmentState::create(&stream_dir, initial_wall, Duration::ZERO, initial_offset)
-        .expect("create segment");
+    let segment = SegmentState::create(
+        &stream_dir,
+        initial_wall,
+        Duration::ZERO,
+        initial_offset,
+        None,
+    )
+    .expect("create segment");
     let mut manager = SegmentManager::new(
         segment,
         data_root.clone(),
         stream,
         Arc::clone(&clock) as Arc<dyn Clock>,
         SyncWake::default(),
+        None,
     );
     let segment_interval = Duration::from_secs(2);
 
@@ -594,14 +605,21 @@ fn forward_offset_step_opens_the_new_local_date() {
     let initial_offset = clock.offset_at(initial_wall);
     let stream_dir =
         stream_directory(&data_root, &stream, initial_wall, initial_offset).expect("stream dir");
-    let segment = SegmentState::create(&stream_dir, initial_wall, Duration::ZERO, initial_offset)
-        .expect("create segment");
+    let segment = SegmentState::create(
+        &stream_dir,
+        initial_wall,
+        Duration::ZERO,
+        initial_offset,
+        None,
+    )
+    .expect("create segment");
     let mut manager = SegmentManager::new(
         segment,
         data_root.clone(),
         stream,
         Arc::clone(&clock) as Arc<dyn Clock>,
         SyncWake::default(),
+        None,
     );
     let interval = Duration::from_secs(2);
 
@@ -653,14 +671,21 @@ fn backward_offset_step_across_midnight_opens_the_earlier_date() {
     let initial_offset = clock.offset_at(initial_wall);
     let stream_dir =
         stream_directory(&data_root, &stream, initial_wall, initial_offset).expect("stream dir");
-    let segment = SegmentState::create(&stream_dir, initial_wall, Duration::ZERO, initial_offset)
-        .expect("create segment");
+    let segment = SegmentState::create(
+        &stream_dir,
+        initial_wall,
+        Duration::ZERO,
+        initial_offset,
+        None,
+    )
+    .expect("create segment");
     let mut manager = SegmentManager::new(
         segment,
         data_root.clone(),
         stream,
         Arc::clone(&clock) as Arc<dyn Clock>,
         SyncWake::default(),
+        None,
     );
     let interval = Duration::from_secs(2);
 
@@ -704,14 +729,21 @@ fn fallback_hour_reuses_a_stem_and_records_each_start_offset() {
     let initial_offset = clock.offset_at(start_wall);
     let stream_dir =
         stream_directory(&data_root, &stream, start_wall, initial_offset).expect("stream dir");
-    let segment = SegmentState::create(&stream_dir, start_wall, Duration::ZERO, initial_offset)
-        .expect("create segment");
+    let segment = SegmentState::create(
+        &stream_dir,
+        start_wall,
+        Duration::ZERO,
+        initial_offset,
+        None,
+    )
+    .expect("create segment");
     let mut manager = SegmentManager::new(
         segment,
         data_root.clone(),
         stream.clone(),
         Arc::clone(&clock) as Arc<dyn Clock>,
         SyncWake::default(),
+        None,
     );
     let interval = Duration::from_secs(300);
 

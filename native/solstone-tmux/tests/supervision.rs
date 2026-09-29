@@ -213,8 +213,9 @@ fn shutdown_keeps_the_final_segment_for_a_later_scan() {
     let offset = clock.offset_at(clock.wall_now());
     let stream_dir =
         stream_directory(&data_root, &stream, clock.wall_now(), offset).expect("stream directory");
-    let mut segment = SegmentState::create(&stream_dir, clock.wall_now(), Duration::ZERO, offset)
-        .expect("segment");
+    let mut segment =
+        SegmentState::create(&stream_dir, clock.wall_now(), Duration::ZERO, offset, None)
+            .expect("segment");
     segment
         .append_capture(&golden_capture("main"), 0.25, Duration::from_secs(1))
         .expect("append capture");
@@ -227,6 +228,7 @@ fn shutdown_keeps_the_final_segment_for_a_later_scan() {
         stream,
         Arc::clone(&clock) as Arc<dyn Clock>,
         wake.clone(),
+        None,
     );
     let (observer_barrier, supervisor_barrier) = shutdown_barrier();
     let observer = run_observer(

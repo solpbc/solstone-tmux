@@ -14,7 +14,10 @@ use time::{Date, Month, OffsetDateTime, UtcOffset};
 use crate::instance_lock::InstanceLock;
 use crate::name::derive_component;
 use crate::segment::finalized_name;
-use crate::storage::{MetadataLifecycle, SegmentMetadata, atomic_write_metadata, sync_directory};
+use crate::storage::{
+    CaptureTime, MetadataLifecycle, SegmentMetadata, atomic_write_metadata, sync_directory,
+    write_capture_time,
+};
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct RecoveryOptions {
@@ -288,6 +291,15 @@ fn recover_candidate(
         if finalized_is_directory
             && validate_files(&finalized, &metadata)?.kind == ValidationKind::Exact
         {
+            write_capture_time(
+                stream_dir,
+                &metadata.finalized_dir,
+                &CaptureTime {
+                    tz: metadata.tz.clone(),
+                    utc_offset_seconds: metadata.local_offset_seconds,
+                },
+            )
+            .map_err(RecoveryError::Storage)?;
             fs::remove_file(&metadata_path).map_err(|source_error| RecoveryError::Io {
                 operation: "remove orphan finalized metadata",
                 path: metadata_path.clone(),
@@ -401,6 +413,15 @@ fn recover_candidate(
         });
     }
     sync_directory(stream_dir)?;
+    write_capture_time(
+        stream_dir,
+        &metadata.finalized_dir,
+        &CaptureTime {
+            tz: metadata.tz.clone(),
+            utc_offset_seconds: metadata.local_offset_seconds,
+        },
+    )
+    .map_err(RecoveryError::Storage)?;
     fs::remove_file(&metadata_path).map_err(|source_error| RecoveryError::Io {
         operation: "remove recovered metadata",
         path: metadata_path,

@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt;
 use std::fs::{self, File};
-use std::io::{Seek, SeekFrom, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -36,11 +36,59 @@ pub struct SegmentMetadata {
     pub finalized_dir: String,
     pub start_wall_unix_nanos: i128,
     pub local_offset_seconds: i32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tz: Option<String>,
     pub elapsed_nanos: u64,
     pub last_durable_frame_id: u64,
     pub durable_frame_count: u64,
     pub has_durable_frames: bool,
     pub sessions: BTreeMap<String, SessionMetadata>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct CaptureTime {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tz: Option<String>,
+    pub utc_offset_seconds: i32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CaptureTimeLoad {
+    Absent,
+    Present(CaptureTime),
+    Unreadable,
+}
+
+pub fn capture_time_path(stream_dir: &Path, finalized_name: &str) -> PathBuf {
+    stream_dir.join(format!("{finalized_name}.zone.json"))
+}
+
+pub fn write_capture_time(
+    stream_dir: &Path,
+    finalized_name: &str,
+    capture_time: &CaptureTime,
+) -> Result<(), StorageError> {
+    let bytes = serde_json::to_vec(capture_time).map_err(StorageError::Serialize)?;
+    let path = capture_time_path(stream_dir, finalized_name);
+    atomic_write_bytes(&path, stream_dir, &bytes)
+}
+
+pub fn load_capture_time(path: &Path) -> CaptureTimeLoad {
+    let mut file = match open_regular_readonly(path) {
+        Ok(file) => file,
+        Err(StorageError::Io { source, .. }) if source.kind() == std::io::ErrorKind::NotFound => {
+            return CaptureTimeLoad::Absent;
+        }
+        Err(_) => return CaptureTimeLoad::Unreadable,
+    };
+    let mut bytes = Vec::new();
+    if file.read_to_end(&mut bytes).is_err() {
+        return CaptureTimeLoad::Unreadable;
+    }
+    match serde_json::from_slice::<CaptureTime>(&bytes) {
+        Ok(capture_time) => CaptureTimeLoad::Present(capture_time),
+        Err(_) => CaptureTimeLoad::Unreadable,
+    }
 }
 
 impl SegmentMetadata {

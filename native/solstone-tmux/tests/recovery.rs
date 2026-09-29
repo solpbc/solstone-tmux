@@ -510,8 +510,8 @@ fn startup_recovery_finalizes_a_segment_left_under_a_previous_hostname_stream() 
     let date = Date::from_calendar_date(2026, Month::July, 28).expect("date");
     let time = Time::from_hms(12, 0, 0).expect("time");
     let wall = PrimitiveDateTime::new(date, time).assume_utc();
-    let mut segment =
-        SegmentState::create(&previous, wall, Duration::ZERO, UtcOffset::UTC).expect("segment");
+    let mut segment = SegmentState::create(&previous, wall, Duration::ZERO, UtcOffset::UTC, None)
+        .expect("segment");
     segment
         .append_capture(&golden_capture("main"), 0.25, Duration::from_secs(1))
         .expect("append");
@@ -588,7 +588,7 @@ fn incomplete(label: &str, append: bool) -> Incomplete {
     let time = Time::from_hms(12, 0, 0).expect("time");
     let wall = PrimitiveDateTime::new(date, time).assume_utc();
     let mut segment =
-        SegmentState::create(&stream, wall, Duration::ZERO, UtcOffset::UTC).expect("segment");
+        SegmentState::create(&stream, wall, Duration::ZERO, UtcOffset::UTC, None).expect("segment");
     if append {
         segment
             .append_capture(&golden_capture("main"), 0.25, Duration::from_secs(1))

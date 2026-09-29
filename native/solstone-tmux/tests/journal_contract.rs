@@ -49,7 +49,7 @@ fn v3_operations_use_projection_examples_and_exact_multipart_envelope() {
         peer.enqueue_response(200, projection_example("upload_normal"));
         session
             .journal()
-            .ingest_upload(DAY, SEGMENT, vec![first, second], DEFAULT_SOURCE)
+            .ingest_upload(DAY, SEGMENT, vec![first, second], DEFAULT_SOURCE, None)
             .await
             .expect("upload");
 
@@ -106,7 +106,7 @@ fn unrecognized_source_reason_code_is_a_generic_journal_rejection() {
         );
         let error = session
             .journal()
-            .ingest_upload(DAY, SEGMENT, vec![file], DEFAULT_SOURCE)
+            .ingest_upload(DAY, SEGMENT, vec![file], DEFAULT_SOURCE, None)
             .await
             .expect_err("source rejection accepted");
         assert_eq!(error.diagnostic(), DiagnosticCode::JournalRejected);
@@ -144,7 +144,7 @@ fn multipart_limits_reject_before_the_peer_and_admit_newly_supported_parts() {
         assert!(
             session
                 .journal()
-                .ingest_upload(DAY, SEGMENT, vec![admitted], DEFAULT_SOURCE)
+                .ingest_upload(DAY, SEGMENT, vec![admitted], DEFAULT_SOURCE, None)
                 .await
                 .is_ok()
         );
@@ -158,7 +158,7 @@ fn multipart_limits_reject_before_the_peer_and_admit_newly_supported_parts() {
         assert!(
             session
                 .journal()
-                .ingest_upload(DAY, SEGMENT, vec![exact_part], DEFAULT_SOURCE)
+                .ingest_upload(DAY, SEGMENT, vec![exact_part], DEFAULT_SOURCE, None)
                 .await
                 .is_ok()
         );
@@ -170,7 +170,7 @@ fn multipart_limits_reject_before_the_peer_and_admit_newly_supported_parts() {
             .expect("size oversized");
         let error = session
             .journal()
-            .ingest_upload(DAY, SEGMENT, vec![oversized], DEFAULT_SOURCE)
+            .ingest_upload(DAY, SEGMENT, vec![oversized], DEFAULT_SOURCE, None)
             .await
             .expect_err("oversized part accepted");
         assert_eq!(error.diagnostic(), DiagnosticCode::RequestTooLarge);
@@ -185,7 +185,7 @@ fn multipart_limits_reject_before_the_peer_and_admit_newly_supported_parts() {
         }
         let _error = session
             .journal()
-            .ingest_upload(DAY, SEGMENT, vec![first, second], DEFAULT_SOURCE)
+            .ingest_upload(DAY, SEGMENT, vec![first, second], DEFAULT_SOURCE, None)
             .await
             .expect_err("over-body multipart accepted");
         let ingest_requests = peer

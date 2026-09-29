@@ -84,6 +84,7 @@ pub struct SegmentManager {
     stream: DerivedName,
     clock: Arc<dyn Clock>,
     sync_wake: SyncWake,
+    capture_tz: Option<String>,
 }
 
 impl SegmentManager {
@@ -93,6 +94,7 @@ impl SegmentManager {
         stream: DerivedName,
         clock: Arc<dyn Clock>,
         sync_wake: SyncWake,
+        capture_tz: Option<String>,
     ) -> Self {
         Self {
             segment,
@@ -100,6 +102,7 @@ impl SegmentManager {
             stream,
             clock,
             sync_wake,
+            capture_tz,
         }
     }
 }
@@ -120,8 +123,14 @@ impl SegmentLifecycle for SegmentManager {
             self.sync_wake.segment_closed(&close);
             let offset = self.clock.offset_at(wall_now);
             let stream_dir = stream_directory(&self.data_root, &self.stream, wall_now, offset)?;
-            self.segment = SegmentState::create(&stream_dir, wall_now, monotonic_now, offset)
-                .map_err(operation_error)?;
+            self.segment = SegmentState::create(
+                &stream_dir,
+                wall_now,
+                monotonic_now,
+                offset,
+                self.capture_tz.as_deref(),
+            )
+            .map_err(operation_error)?;
         }
         let timestamp = self.segment.frame_timestamp(wall_now);
         for capture in captures {

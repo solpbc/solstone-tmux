@@ -39,8 +39,8 @@ use crate::private_link::{
 };
 use crate::segment::SegmentClose;
 use crate::storage::{
-    atomic_write_bytes, open_directory_readonly, open_regular_readonly, open_regular_readonly_at,
-    sync_directory,
+    CaptureTime, CaptureTimeLoad, atomic_write_bytes, capture_time_path, load_capture_time,
+    open_directory_readonly, open_regular_readonly, open_regular_readonly_at, sync_directory,
 };
 
 const RETRY_DELAYS: [Duration; 4] = [
@@ -843,6 +843,7 @@ pub async fn delete_confirmed_segment(
         );
         if res == RemovalResult::Removed || res == RemovalResult::Absent {
             remove_segment_ledger_dir(&ledger, &target);
+            remove_segment_zone_sibling(&root, &target);
         }
         res
     })
@@ -880,6 +881,7 @@ pub async fn delete_empty_segment(
         let res = remove_empty_segment_directory(&root, &target);
         if res == RemovalResult::Removed || res == RemovalResult::Absent {
             remove_segment_ledger_dir(&ledger, &target);
+            remove_segment_zone_sibling(&root, &target);
         }
         res
     })
@@ -944,6 +946,7 @@ pub trait SyncJournal: Send {
         candidate: &'a SegmentCandidate,
         files: Vec<PathBuf>,
         source: &'a str,
+        meta: Option<CaptureTime>,
     ) -> Pin<Box<dyn Future<Output = Result<UploadResult, SyncOperationError>> + Send + 'a>>;
 
     fn system_status<'a>(
@@ -1193,6 +1196,14 @@ fn remove_segment_ledger_dir(ledger_root: &Path, candidate: &SegmentCandidate) {
             let _ = fs::remove_dir(day_dir);
         }
     }
+}
+
+fn remove_segment_zone_sibling(captures_root: &Path, candidate: &SegmentCandidate) {
+    let path = capture_time_path(
+        &captures_root.join(candidate.day()).join(candidate.stream()),
+        candidate.segment(),
+    );
+    let _ = fs::remove_file(path);
 }
 
 fn prune_ledger_dirs(ledger_root: &Path, active_candidates: &HashSet<SegmentCandidate>) {
@@ -1687,6 +1698,28 @@ impl SyncScheduler {
 
             if ack_opt.is_none() {
                 non_acked_count += 1;
+                let captures_root_clone = self.captures_root.clone();
+                let candidate_clone = candidate.clone();
+                let capture_time_load = tokio::task::spawn_blocking(move || {
+                    let path = capture_time_path(
+                        &captures_root_clone
+                            .join(candidate_clone.day())
+                            .join(candidate_clone.stream()),
+                        candidate_clone.segment(),
+                    );
+                    load_capture_time(&path)
+                })
+                .await;
+
+                let meta = match capture_time_load {
+                    Ok(CaptureTimeLoad::Absent) => None,
+                    Ok(CaptureTimeLoad::Present(ct)) => Some(ct),
+                    Ok(CaptureTimeLoad::Unreadable) | Err(_) => {
+                        summary.diagnostic = Some(DiagnosticCode::LocalSegmentInvalid);
+                        continue;
+                    }
+                };
+
                 let ledger_root = self.ledger_root.clone();
                 let target = candidate.clone();
                 let state =
@@ -1710,7 +1743,7 @@ impl SyncScheduler {
                     continue;
                 }
 
-                upload_due.push((candidate.clone(), files, local_files, state));
+                upload_due.push((candidate.clone(), files, local_files, state, meta));
             }
         }
 
@@ -1724,7 +1757,7 @@ impl SyncScheduler {
             let mut consecutive_ack_write_errors = 0usize;
             for (batch_index, batch) in upload_due.chunks(CANDIDATES_PER_BATCH).enumerate() {
                 self.instrumentation.batch();
-                for (candidate, files, local_files, mut state) in batch.iter().cloned() {
+                for (candidate, files, local_files, mut state, meta) in batch.iter().cloned() {
                     if shutdown_requested(&mut shutdown) {
                         return self.cancelled_sweep_with_activity(summary, activity).await;
                     }
@@ -1735,7 +1768,7 @@ impl SyncScheduler {
                     made_requests = true;
                     let upload = match cancellable(
                         &mut shutdown,
-                        journal.upload(&candidate, files.clone(), &self.source),
+                        journal.upload(&candidate, files.clone(), &self.source, meta),
                     )
                     .await
                     {
@@ -2183,10 +2216,11 @@ impl SyncJournal for JournalSession {
         candidate: &'a SegmentCandidate,
         files: Vec<PathBuf>,
         source: &'a str,
+        meta: Option<CaptureTime>,
     ) -> Pin<Box<dyn Future<Output = Result<UploadResult, SyncOperationError>> + Send + 'a>> {
         Box::pin(async move {
             self.journal
-                .ingest_upload(candidate.day(), candidate.segment(), files, source)
+                .ingest_upload(candidate.day(), candidate.segment(), files, source, meta)
                 .await
                 .map_err(|error| self.map_error(error))
         })

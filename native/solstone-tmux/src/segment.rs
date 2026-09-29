@@ -15,8 +15,9 @@ use crate::name::derive_component;
 use crate::paths::ensure_private_directory;
 use crate::serialize::serialize_frame;
 use crate::storage::{
-    AppendFrame, DurableStorage, FaultPlan, FileStorage, MetadataLifecycle, SegmentMetadata,
-    SessionMetadata, StorageError, atomic_write_metadata, sync_directory,
+    AppendFrame, CaptureTime, DurableStorage, FaultPlan, FileStorage, MetadataLifecycle,
+    SegmentMetadata, SessionMetadata, StorageError, atomic_write_metadata, sync_directory,
+    write_capture_time,
 };
 
 pub struct SegmentState {
@@ -49,12 +50,14 @@ impl SegmentState {
         start_wall: OffsetDateTime,
         start_monotonic: Duration,
         local_offset: UtcOffset,
+        tz: Option<&str>,
     ) -> Result<Self, SegmentError> {
         Self::create_with_faults(
             stream_dir,
             start_wall,
             start_monotonic,
             local_offset,
+            tz,
             FaultPlan::default(),
         )
     }
@@ -64,6 +67,7 @@ impl SegmentState {
         start_wall: OffsetDateTime,
         start_monotonic: Duration,
         local_offset: UtcOffset,
+        tz: Option<&str>,
         faults: FaultPlan,
     ) -> Result<Self, SegmentError> {
         ensure_private_directory(stream_dir).map_err(SegmentError::Path)?;
@@ -90,6 +94,7 @@ impl SegmentState {
             finalized_dir: finalized_name(&stem, Duration::ZERO),
             start_wall_unix_nanos: start_wall.unix_timestamp_nanos(),
             local_offset_seconds: local_offset.whole_seconds(),
+            tz: tz.filter(|name| !name.is_empty()).map(str::to_owned),
             elapsed_nanos: 0,
             last_durable_frame_id: 0,
             durable_frame_count: 0,
@@ -226,6 +231,14 @@ impl SegmentState {
             source,
         })?;
         sync_directory(&self.stream_dir)?;
+        write_capture_time(
+            &self.stream_dir,
+            &self.metadata.finalized_dir,
+            &CaptureTime {
+                tz: self.metadata.tz.clone(),
+                utc_offset_seconds: self.metadata.local_offset_seconds,
+            },
+        )?;
         fs::remove_file(&self.metadata_path).map_err(|source| SegmentError::Io {
             operation: "remove finalized metadata",
             path: self.metadata_path.clone(),

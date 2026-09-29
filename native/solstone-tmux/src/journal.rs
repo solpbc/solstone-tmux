@@ -25,7 +25,7 @@ use tokio::task::JoinHandle;
 use crate::health::DiagnosticCode;
 use crate::name::derive_component;
 use crate::private_link::{MAX_REQUEST_BODY_BYTES, PrivateLinkBridge};
-use crate::storage::open_regular_readonly;
+use crate::storage::{CaptureTime, open_regular_readonly};
 use crate::sync::SyncInstrumentation;
 
 pub const INGEST_PATH: &str = "/app/devices/ingest";
@@ -273,6 +273,8 @@ struct UploadEnvelope {
     segment: String,
     source: String,
     files: Vec<UploadEnvelopeFile>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    meta: Option<CaptureTime>,
 }
 
 #[derive(Serialize)]
@@ -466,6 +468,7 @@ impl JournalClient {
         segment: &str,
         paths: Vec<PathBuf>,
         source: &str,
+        meta: Option<CaptureTime>,
     ) -> Result<UploadResult, JournalError> {
         if !valid_day(day) || !valid_component(segment) || paths.is_empty() {
             return Err(JournalError::local(DiagnosticCode::LocalSegmentInvalid));
@@ -478,6 +481,7 @@ impl JournalClient {
             segment: segment.to_owned(),
             source: source.to_owned(),
             files: Vec::with_capacity(prepared.len()),
+            meta,
         };
         let mut upload_files = Vec::with_capacity(prepared.len());
         for prepared_file in prepared {

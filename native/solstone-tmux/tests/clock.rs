@@ -102,6 +102,7 @@ fn segment_and_clock(label: &str) -> (TestDirectory, SegmentState, TestClock) {
         clock.wall_now(),
         Duration::from_secs(10),
         clock.offset_at(clock.wall_now()),
+        None,
     )
     .expect("segment");
     (temporary, segment, clock)

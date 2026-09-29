@@ -946,7 +946,7 @@ fn clients_self_optional_failure_preserves_upload_progress() {
 
         let upload_result = session
             .journal()
-            .ingest_upload("20260907", "test_segment", vec![part_path], "tmux")
+            .ingest_upload("20260907", "test_segment", vec![part_path], "tmux", None)
             .await;
         assert!(upload_result.is_ok());
 

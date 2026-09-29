@@ -339,7 +339,7 @@ fn linked_device_session_composes_on_the_production_runtime_shape() {
         fs::write(&capture, b"test").expect("write test file");
         session
             .journal()
-            .ingest_upload("20260815", "143000_1", vec![capture], DEFAULT_SOURCE)
+            .ingest_upload("20260815", "143000_1", vec![capture], DEFAULT_SOURCE, None)
             .await
             .expect("upload");
         let requests = peer
@@ -391,7 +391,13 @@ fn v3_routes_refuse_unconfined_day_values() {
         assert!(
             session
                 .journal()
-                .ingest_upload("20260815?foreign", "120000_300", vec![], DEFAULT_SOURCE)
+                .ingest_upload(
+                    "20260815?foreign",
+                    "120000_300",
+                    vec![],
+                    DEFAULT_SOURCE,
+                    None
+                )
                 .await
                 .is_err()
         );
@@ -457,7 +463,7 @@ fn slow_large_multipart_preserves_capture_on_the_production_runtime() {
         let mut upload = Box::pin(
             session
             .journal()
-            .ingest_upload("20260815", "143000_1", vec![capture.clone()], DEFAULT_SOURCE),
+            .ingest_upload("20260815", "143000_1", vec![capture.clone()], DEFAULT_SOURCE, None),
         );
         tokio::time::timeout(Duration::from_secs(5), async {
             tokio::select! {

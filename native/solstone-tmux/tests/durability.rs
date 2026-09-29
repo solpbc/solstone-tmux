@@ -152,6 +152,7 @@ fn segment_with_faults<const N: usize>(
         wall,
         Duration::ZERO,
         UtcOffset::UTC,
+        None,
         FaultPlan::at(faults),
     )
     .expect("create segment");

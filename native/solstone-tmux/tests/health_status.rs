@@ -199,6 +199,7 @@ fn production_failure_paths_redact_secrets_and_owner_content() {
                 "120000_300",
                 vec![capture_path],
                 solstone_tmux::config::DEFAULT_SOURCE,
+                None,
             )
             .await
         {

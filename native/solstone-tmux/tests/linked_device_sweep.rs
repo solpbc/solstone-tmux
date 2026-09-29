@@ -917,6 +917,7 @@ async fn run_binding_failure(
         clock.wall_now(),
         Duration::ZERO,
         clock.offset_at(clock.wall_now()),
+        None,
     )
     .expect("active segment");
     let polls = Arc::new(AtomicUsize::new(0));
@@ -931,6 +932,7 @@ async fn run_binding_failure(
             config.stream.clone(),
             Arc::clone(&clock) as Arc<dyn Clock>,
             SyncWake::default(),
+            None,
         )),
         Arc::clone(&clock) as Arc<dyn Clock>,
         Box::pin(async move {

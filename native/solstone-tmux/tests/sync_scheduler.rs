@@ -27,7 +27,7 @@ use solstone_tmux::observer::{
 use solstone_tmux::paths::ensure_private_directory;
 use solstone_tmux::segment::SegmentClose;
 use solstone_tmux::storage::{
-    AtomicWriteFault, set_atomic_write_fault, set_atomic_write_fault_for_prefix,
+    AtomicWriteFault, CaptureTime, set_atomic_write_fault, set_atomic_write_fault_for_prefix,
 };
 use solstone_tmux::sync::{
     JournalIdentity, SegmentCandidate, SegmentRemovalObserver, SegmentRemovalStage, SyncActivity,
@@ -3468,6 +3468,7 @@ impl SyncJournal for FakeJournal {
         candidate: &'a SegmentCandidate,
         files: Vec<PathBuf>,
         source: &'a str,
+        _meta: Option<CaptureTime>,
     ) -> Pin<Box<dyn Future<Output = Result<UploadResult, SyncOperationError>> + Send + 'a>> {
         Box::pin(async move {
             self.record_source(source);
@@ -3545,6 +3546,7 @@ impl SyncJournal for BackoffJournal {
         _candidate: &'a SegmentCandidate,
         _files: Vec<PathBuf>,
         _source: &'a str,
+        _meta: Option<CaptureTime>,
     ) -> Pin<Box<dyn Future<Output = Result<UploadResult, SyncOperationError>> + Send + 'a>> {
         Box::pin(async { unreachable!("backoff fixture scans no candidates") })
     }
@@ -3639,6 +3641,7 @@ impl SyncJournal for BlockingJournal {
         candidate: &'a SegmentCandidate,
         _files: Vec<PathBuf>,
         _source: &'a str,
+        _meta: Option<CaptureTime>,
     ) -> Pin<Box<dyn Future<Output = Result<UploadResult, SyncOperationError>> + Send + 'a>> {
         Box::pin(async move {
             self.uploads
