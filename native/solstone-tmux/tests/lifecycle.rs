@@ -1281,3 +1281,57 @@ fn existing_entries_stay_byte_identical_across_recovery_and_rotation() {
     assert!(!day_stream_dir.join("040000.failed").exists());
     assert!(!day_stream_dir.join("040000.failed.meta").exists());
 }
+
+#[test]
+fn bump_into_next_day_that_cannot_be_created_falls_back_to_the_natural_name() {
+    let kolkata_bytes = std::fs::read(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/asia-kolkata.tzif"),
+    )
+    .expect("read kolkata tzif");
+    let kolkata_zone = Zone::from_tzif("Asia/Kolkata", &kolkata_bytes).expect("kolkata zone");
+    struct KolkataZoneSource(Zone);
+    impl ZoneSource for KolkataZoneSource {
+        fn read(&mut self) -> Result<Zone, String> {
+            Ok(self.0.clone())
+        }
+    }
+
+    let t_kolkata = PrimitiveDateTime::new(
+        Date::from_calendar_date(2026, Month::September, 29).expect("date"),
+        Time::from_hms(18, 29, 59).expect("time"),
+    )
+    .assume_utc();
+    let clock = Arc::new(TestClock::new(
+        t_kolkata,
+        Duration::ZERO,
+        UtcOffset::from_hms(5, 30, 0).expect("offset +5:30"),
+    ));
+    let temporary = TestDirectory::new("bump-next-day-uncreatable");
+    let data_root = temporary.path().join("data");
+    let stream = derive_component("test.tmux").expect("stream");
+    let day_stream_29 = data_root
+        .join("captures")
+        .join("20260929")
+        .join("test.tmux");
+    std::fs::create_dir_all(day_stream_29.join("235959_300")).expect("plant 235959");
+    // A regular file where the next day's directory would go makes creating it fail.
+    std::fs::write(
+        data_root.join("captures").join("20260930"),
+        b"not a directory",
+    )
+    .expect("plant blocking file");
+
+    let mut manager = SegmentManager::start(
+        data_root.clone(),
+        stream,
+        clock.as_ref(),
+        SyncWake::default(),
+        Box::new(KolkataZoneSource(kolkata_zone)),
+        Arc::new(StderrWarnings),
+    )
+    .expect("an uncreatable next-day directory must not stop capture");
+    let incomplete = manager.segment_mut().incomplete_dir().to_path_buf();
+    assert_eq!(incomplete, day_stream_29.join("235959.incomplete"));
+    assert!(incomplete.is_dir());
+    assert!(day_stream_29.join("235959_300").is_dir());
+}

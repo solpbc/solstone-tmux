@@ -139,6 +139,7 @@ fn open_segment(
         local.second()
     );
 
+    let mut bumped = false;
     let (chosen_stream_dir, chosen_stem) = loop {
         let stem_str = format!("{:02}{:02}{:02}", cur_h, cur_m, cur_s);
         let date_str = format!(
@@ -150,7 +151,14 @@ fn open_segment(
         let stream_dir = stream
             .join_checked(&data_root.join("captures").join(&date_str))
             .map_err(SegmentError::Name)?;
-        ensure_private_directory(&stream_dir).map_err(SegmentError::Path)?;
+        if let Err(error) = ensure_private_directory(&stream_dir) {
+            // A bumped name must never stop capture: fall back to the natural
+            // name and let the finalize backstop behave as it always has.
+            if bumped {
+                break (natural_stream_dir, natural_stem);
+            }
+            return Err(SegmentError::Path(error));
+        }
 
         let entries = match std::fs::read_dir(&stream_dir) {
             Ok(entries) => entries,
@@ -184,6 +192,7 @@ fn open_segment(
             break (stream_dir, stem_str);
         }
 
+        bumped = true;
         if cur_s < 59 {
             cur_s += 1;
         } else {
