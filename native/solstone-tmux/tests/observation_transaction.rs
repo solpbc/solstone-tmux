@@ -234,6 +234,7 @@ async fn failed_transaction_does_not_advance_id_or_digest() {
     let time = Time::from_hms(12, 0, 0).expect("time");
     let mut segment = SegmentState::create(
         &temporary.path().join("stream"),
+        "120000",
         PrimitiveDateTime::new(date, time).assume_utc(),
         Duration::ZERO,
         UtcOffset::UTC,

@@ -149,8 +149,15 @@ fn segment(label: &str) -> (TestDirectory, SegmentState) {
     let date = Date::from_calendar_date(2026, Month::July, 28).expect("date");
     let time = Time::from_hms(12, 0, 0).expect("time");
     let wall = PrimitiveDateTime::new(date, time).assume_utc();
-    let segment = SegmentState::create(&stream, wall, Duration::ZERO, UtcOffset::UTC, None)
-        .expect("create segment");
+    let segment = SegmentState::create(
+        &stream,
+        "120000",
+        wall,
+        Duration::ZERO,
+        UtcOffset::UTC,
+        None,
+    )
+    .expect("create segment");
     (temporary, segment)
 }
 

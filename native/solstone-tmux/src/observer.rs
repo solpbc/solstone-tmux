@@ -12,14 +12,16 @@ use time::{OffsetDateTime, UtcOffset};
 use tokio::sync::{oneshot, watch};
 use tokio::task::{JoinError, JoinSet};
 
-use crate::clock::{Clock, local_date_and_time};
+use crate::clock::{Clock, Zone, ZoneSource, local_date_and_time};
 use crate::command::CommandRunner;
 use crate::health::DiagnosticCode;
 use crate::indicator::{IndicatorIo, IndicatorOwnership};
 use crate::instance_lock::InstanceLock;
 use crate::model::CaptureResult;
 use crate::name::DerivedName;
+use crate::paths::ensure_private_directory;
 use crate::segment::{SegmentClose, SegmentError, SegmentState};
+use crate::storage::FaultPlan;
 use crate::sync::{RetentionFence, SyncActivity, SyncWake};
 use crate::tmux::{TmuxAdapter, WarningSink};
 
@@ -78,32 +80,211 @@ pub trait SegmentLifecycle: Send {
     -> Result<SegmentClose, ObserverOperationError>;
 }
 
+#[allow(clippy::too_many_arguments)]
+fn open_segment(
+    data_root: &Path,
+    stream: &DerivedName,
+    wall_now: OffsetDateTime,
+    monotonic_now: Duration,
+    source: &mut dyn ZoneSource,
+    last_zone: &mut Option<Zone>,
+    zone_failure_warned: &mut bool,
+    warnings: &dyn WarningSink,
+    faults: FaultPlan,
+) -> Result<SegmentState, SegmentError> {
+    let (zone, tz) = match source.read() {
+        Ok(zone) => {
+            *last_zone = Some(zone.clone());
+            *zone_failure_warned = false;
+            let tz = zone.iana_name();
+            (zone, tz)
+        }
+        Err(cause) => {
+            if !*zone_failure_warned {
+                warnings.warn(&format!(
+                    "could not load the local time zone ({cause}); set TZ or repair /etc/localtime"
+                ));
+                *zone_failure_warned = true;
+            }
+            if let Some(prev) = last_zone.as_ref() {
+                let tz = prev.iana_name();
+                (prev.clone(), tz)
+            } else {
+                (Zone::utc(), Some("UTC".to_owned()))
+            }
+        }
+    };
+    let local_offset = zone.offset_at(wall_now);
+    let local = wall_now.to_offset(local_offset);
+    let mut cur_date = local.date();
+    let mut cur_h = local.hour();
+    let mut cur_m = local.minute();
+    let mut cur_s = local.second();
+
+    let natural_date_str = format!(
+        "{:04}{:02}{:02}",
+        cur_date.year(),
+        u8::from(cur_date.month()),
+        cur_date.day()
+    );
+    let natural_stream_dir = stream
+        .join_checked(&data_root.join("captures").join(&natural_date_str))
+        .map_err(SegmentError::Name)?;
+    ensure_private_directory(&natural_stream_dir).map_err(SegmentError::Path)?;
+
+    let natural_stem = format!(
+        "{:02}{:02}{:02}",
+        local.hour(),
+        local.minute(),
+        local.second()
+    );
+
+    let (chosen_stream_dir, chosen_stem) = loop {
+        let stem_str = format!("{:02}{:02}{:02}", cur_h, cur_m, cur_s);
+        let date_str = format!(
+            "{:04}{:02}{:02}",
+            cur_date.year(),
+            u8::from(cur_date.month()),
+            cur_date.day()
+        );
+        let stream_dir = stream
+            .join_checked(&data_root.join("captures").join(&date_str))
+            .map_err(SegmentError::Name)?;
+        ensure_private_directory(&stream_dir).map_err(SegmentError::Path)?;
+
+        let entries = match std::fs::read_dir(&stream_dir) {
+            Ok(entries) => entries,
+            Err(_) => {
+                break (natural_stream_dir, natural_stem);
+            }
+        };
+
+        let mut is_taken = false;
+        let mut scan_error = false;
+        for entry in entries {
+            let Ok(entry) = entry else {
+                scan_error = true;
+                break;
+            };
+            let name = entry.file_name();
+            let Some(name_str) = name.to_str() else {
+                continue;
+            };
+            if name_str.starts_with(&stem_str) {
+                is_taken = true;
+                break;
+            }
+        }
+
+        if scan_error {
+            break (natural_stream_dir, natural_stem);
+        }
+
+        if !is_taken {
+            break (stream_dir, stem_str);
+        }
+
+        if cur_s < 59 {
+            cur_s += 1;
+        } else {
+            cur_s = 0;
+            if cur_m < 59 {
+                cur_m += 1;
+            } else {
+                cur_m = 0;
+                if cur_h < 23 {
+                    cur_h += 1;
+                } else {
+                    cur_h = 0;
+                    cur_date = cur_date.next_day().expect("calendar date next day");
+                }
+            }
+        }
+    };
+
+    SegmentState::create_with_faults(
+        &chosen_stream_dir,
+        &chosen_stem,
+        wall_now,
+        monotonic_now,
+        local_offset,
+        tz.as_deref(),
+        faults,
+    )
+}
+
 pub struct SegmentManager {
     segment: SegmentState,
     data_root: PathBuf,
     stream: DerivedName,
-    clock: Arc<dyn Clock>,
     sync_wake: SyncWake,
-    capture_tz: Option<String>,
+    source: Box<dyn ZoneSource>,
+    warnings: Arc<dyn WarningSink>,
+    last_zone: Option<Zone>,
+    zone_failure_warned: bool,
 }
 
 impl SegmentManager {
+    pub fn start(
+        data_root: PathBuf,
+        stream: DerivedName,
+        clock: &dyn Clock,
+        sync_wake: SyncWake,
+        mut source: Box<dyn ZoneSource>,
+        warnings: Arc<dyn WarningSink>,
+    ) -> Result<Self, SegmentError> {
+        let wall_now = clock.wall_now();
+        let monotonic_now = clock.monotonic_now();
+        let mut last_zone = None;
+        let mut zone_failure_warned = false;
+        let segment = open_segment(
+            &data_root,
+            &stream,
+            wall_now,
+            monotonic_now,
+            &mut *source,
+            &mut last_zone,
+            &mut zone_failure_warned,
+            &*warnings,
+            FaultPlan::default(),
+        )?;
+        Ok(Self {
+            segment,
+            data_root,
+            stream,
+            sync_wake,
+            source,
+            warnings,
+            last_zone,
+            zone_failure_warned,
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         segment: SegmentState,
         data_root: PathBuf,
         stream: DerivedName,
-        clock: Arc<dyn Clock>,
         sync_wake: SyncWake,
-        capture_tz: Option<String>,
+        source: Box<dyn ZoneSource>,
+        warnings: Arc<dyn WarningSink>,
+        last_zone: Option<Zone>,
+        zone_failure_warned: bool,
     ) -> Self {
         Self {
             segment,
             data_root,
             stream,
-            clock,
             sync_wake,
-            capture_tz,
+            source,
+            warnings,
+            last_zone,
+            zone_failure_warned,
         }
+    }
+
+    pub fn segment_mut(&mut self) -> &mut SegmentState {
+        &mut self.segment
     }
 }
 
@@ -121,14 +302,16 @@ impl SegmentLifecycle for SegmentManager {
                 .finalize(monotonic_now)
                 .map_err(operation_error)?;
             self.sync_wake.segment_closed(&close);
-            let offset = self.clock.offset_at(wall_now);
-            let stream_dir = stream_directory(&self.data_root, &self.stream, wall_now, offset)?;
-            self.segment = SegmentState::create(
-                &stream_dir,
+            self.segment = open_segment(
+                &self.data_root,
+                &self.stream,
                 wall_now,
                 monotonic_now,
-                offset,
-                self.capture_tz.as_deref(),
+                &mut *self.source,
+                &mut self.last_zone,
+                &mut self.zone_failure_warned,
+                &*self.warnings,
+                FaultPlan::default(),
             )
             .map_err(operation_error)?;
         }

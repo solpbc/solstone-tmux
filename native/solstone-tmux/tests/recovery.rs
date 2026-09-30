@@ -9,13 +9,20 @@ use std::os::unix::fs::symlink;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use std::sync::Arc;
+
+use solstone_tmux::clock::{TestClock, Zone, ZoneSource};
 use solstone_tmux::instance_lock::InstanceLock;
+use solstone_tmux::name::derive_component;
+use solstone_tmux::observer::{SegmentLifecycle, SegmentManager};
 use solstone_tmux::recovery::{
     RecoveryAction, RecoveryError, RecoveryOptions, recover_capture_streams, recover_stream,
     recover_stream_with_options,
 };
 use solstone_tmux::segment::SegmentState;
 use solstone_tmux::storage::{SegmentMetadata, SessionMetadata};
+use solstone_tmux::sync::SyncWake;
+use solstone_tmux::tmux::StderrWarnings;
 use support::{TestDirectory, golden_capture};
 use time::{Date, Month, PrimitiveDateTime, Time, UtcOffset};
 
@@ -510,8 +517,15 @@ fn startup_recovery_finalizes_a_segment_left_under_a_previous_hostname_stream() 
     let date = Date::from_calendar_date(2026, Month::July, 28).expect("date");
     let time = Time::from_hms(12, 0, 0).expect("time");
     let wall = PrimitiveDateTime::new(date, time).assume_utc();
-    let mut segment = SegmentState::create(&previous, wall, Duration::ZERO, UtcOffset::UTC, None)
-        .expect("segment");
+    let mut segment = SegmentState::create(
+        &previous,
+        "120000",
+        wall,
+        Duration::ZERO,
+        UtcOffset::UTC,
+        None,
+    )
+    .expect("segment");
     segment
         .append_capture(&golden_capture("main"), 0.25, Duration::from_secs(1))
         .expect("append");
@@ -587,8 +601,15 @@ fn incomplete(label: &str, append: bool) -> Incomplete {
     let date = Date::from_calendar_date(2026, Month::July, 28).expect("date");
     let time = Time::from_hms(12, 0, 0).expect("time");
     let wall = PrimitiveDateTime::new(date, time).assume_utc();
-    let mut segment =
-        SegmentState::create(&stream, wall, Duration::ZERO, UtcOffset::UTC, None).expect("segment");
+    let mut segment = SegmentState::create(
+        &stream,
+        "120000",
+        wall,
+        Duration::ZERO,
+        UtcOffset::UTC,
+        None,
+    )
+    .expect("segment");
     if append {
         segment
             .append_capture(&golden_capture("main"), 0.25, Duration::from_secs(1))
@@ -612,5 +633,127 @@ fn incomplete(label: &str, append: bool) -> Incomplete {
         metadata,
         filename,
         finalized,
+    }
+}
+
+struct BerlinZoneSource(Zone);
+
+impl BerlinZoneSource {
+    fn new() -> Self {
+        let bytes = std::fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/europe-berlin.tzif"),
+        )
+        .expect("read berlin tzif");
+        Self(Zone::from_tzif("Europe/Berlin", &bytes).expect("berlin zone"))
+    }
+}
+
+impl ZoneSource for BerlinZoneSource {
+    fn read(&mut self) -> Result<Zone, String> {
+        Ok(self.0.clone())
+    }
+}
+
+#[test]
+fn recovery_finalizes_a_bumped_segment_without_touching_the_taken_stem() {
+    let t = PrimitiveDateTime::new(
+        Date::from_calendar_date(2026, Month::October, 25).expect("date"),
+        Time::from_hms(1, 30, 0).expect("time"),
+    )
+    .assume_utc();
+    let clock = Arc::new(TestClock::new(
+        t,
+        Duration::ZERO,
+        UtcOffset::from_hms(1, 0, 0).expect("offset +1"),
+    ));
+    let temporary = TestDirectory::new("recovery-bumped-segment");
+    let data_root = temporary.path().join("data");
+    let stream = derive_component("test.tmux").expect("stream");
+    let day_stream_dir = data_root
+        .join("captures")
+        .join("20261025")
+        .join("test.tmux");
+
+    std::fs::create_dir_all(day_stream_dir.join("023000_300")).expect("plant taken stem");
+    let taken_file = day_stream_dir.join("023000_300").join("marker.txt");
+    std::fs::write(&taken_file, b"taken").expect("write marker in taken stem");
+
+    let mut manager = SegmentManager::start(
+        data_root.clone(),
+        stream,
+        clock.as_ref(),
+        SyncWake::default(),
+        Box::new(BerlinZoneSource::new()),
+        Arc::new(StderrWarnings),
+    )
+    .expect("start manager");
+
+    assert_eq!(
+        manager
+            .segment_mut()
+            .incomplete_dir()
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        "023001.incomplete"
+    );
+
+    manager
+        .process_poll(
+            &[golden_capture("main")],
+            t,
+            Duration::ZERO,
+            Duration::from_secs(5),
+        )
+        .expect("poll");
+
+    let incomplete_jsonl = day_stream_dir
+        .join("023001.incomplete")
+        .join("tmux_main_screen.jsonl");
+    let incomplete_bytes = std::fs::read(&incomplete_jsonl).expect("read incomplete jsonl");
+
+    drop(manager);
+
+    let lock = InstanceLock::acquire(&data_root).expect("recovery lock");
+    let records = recover_capture_streams(&lock, &data_root).expect("recover");
+
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].action, RecoveryAction::Finalized);
+    assert_eq!(records[0].candidate, day_stream_dir.join("023001_000"));
+
+    assert!(day_stream_dir.join("023001_000").is_dir());
+    assert_eq!(std::fs::read(&taken_file).expect("read marker"), b"taken");
+
+    let finalized_jsonl = day_stream_dir
+        .join("023001_000")
+        .join("tmux_main_screen.jsonl");
+    let finalized_bytes = std::fs::read(&finalized_jsonl).expect("read finalized jsonl");
+    assert_eq!(finalized_bytes, incomplete_bytes);
+
+    let frame_val: serde_json::Value =
+        serde_json::from_slice(&finalized_bytes).expect("parse frame json");
+    let ts = frame_val["timestamp"].as_f64().expect("timestamp f64");
+    assert!(ts >= 0.0);
+    let frame_time = t + Duration::from_secs_f64(ts);
+    assert!(frame_time >= t);
+
+    let zone_path = solstone_tmux::storage::capture_time_path(&day_stream_dir, "023001_000");
+    let zone_info = solstone_tmux::storage::load_capture_time(&zone_path);
+    assert_eq!(
+        zone_info,
+        solstone_tmux::storage::CaptureTimeLoad::Present(solstone_tmux::storage::CaptureTime {
+            tz: Some("Europe/Berlin".to_owned()),
+            utc_offset_seconds: 3600,
+        })
+    );
+
+    assert!(!day_stream_dir.join("023001.failed").exists());
+    assert!(!day_stream_dir.join("023001.failed.meta").exists());
+    for entry in std::fs::read_dir(&day_stream_dir).expect("read day stream dir") {
+        let entry = entry.expect("entry");
+        let name = entry.file_name();
+        let name_str = name.to_str().expect("name str");
+        assert!(!name_str.contains(".failed"));
     }
 }

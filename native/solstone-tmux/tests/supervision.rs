@@ -8,7 +8,7 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
-use solstone_tmux::clock::{Clock, TestClock};
+use solstone_tmux::clock::{Clock, TestClock, Zone, ZoneSource};
 use solstone_tmux::health::DiagnosticCode;
 use solstone_tmux::model::CaptureResult;
 use solstone_tmux::name::derive_component;
@@ -20,6 +20,7 @@ use solstone_tmux::observer::{
 use solstone_tmux::paths::ensure_private_directory;
 use solstone_tmux::segment::SegmentState;
 use solstone_tmux::sync::{RetentionFence, SyncActivity, SyncWake};
+use solstone_tmux::tmux::StderrWarnings;
 use support::{TestDirectory, golden_capture};
 use time::{Date, Month, PrimitiveDateTime, Time, UtcOffset};
 
@@ -213,22 +214,36 @@ fn shutdown_keeps_the_final_segment_for_a_later_scan() {
     let offset = clock.offset_at(clock.wall_now());
     let stream_dir =
         stream_directory(&data_root, &stream, clock.wall_now(), offset).expect("stream directory");
-    let mut segment =
-        SegmentState::create(&stream_dir, clock.wall_now(), Duration::ZERO, offset, None)
-            .expect("segment");
+    let mut segment = SegmentState::create(
+        &stream_dir,
+        "120000",
+        clock.wall_now(),
+        Duration::ZERO,
+        offset,
+        None,
+    )
+    .expect("segment");
     segment
         .append_capture(&golden_capture("main"), 0.25, Duration::from_secs(1))
         .expect("append capture");
     clock.set_monotonic(Duration::from_secs(5));
     let finalized = stream_dir.join("120000_005");
     let wake = SyncWake::default();
+    struct UtcZone;
+    impl ZoneSource for UtcZone {
+        fn read(&mut self) -> Result<Zone, String> {
+            Ok(Zone::utc())
+        }
+    }
     let manager = SegmentManager::new(
         segment,
         data_root.clone(),
         stream,
-        Arc::clone(&clock) as Arc<dyn Clock>,
         wake.clone(),
+        Box::new(UtcZone),
+        Arc::new(StderrWarnings),
         None,
+        false,
     );
     let (observer_barrier, supervisor_barrier) = shutdown_barrier();
     let observer = run_observer(

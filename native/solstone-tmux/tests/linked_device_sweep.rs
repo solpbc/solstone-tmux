@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use serde_json::{Value, json};
-use solstone_tmux::clock::{Clock, TestClock};
+use solstone_tmux::clock::{Clock, TestClock, Zone, ZoneSource, local_date_and_time};
 use solstone_tmux::config::{CONFIG_FILENAME, RuntimeConfig};
 use solstone_tmux::health::{DiagnosticCode, HEALTH_FILENAME, HealthWriter};
 use solstone_tmux::instance_lock::InstanceLock;
@@ -29,6 +29,7 @@ use solstone_tmux::private_link::{
 };
 use solstone_tmux::segment::SegmentState;
 use solstone_tmux::sync::{JournalSession, SyncActivity, SyncScheduler, SyncTask, SyncWake};
+use solstone_tmux::tmux::StderrWarnings;
 use support::private_link_peer::PrivateLinkPeer;
 use support::{TestDirectory, golden_capture};
 use time::{Date, Month, PrimitiveDateTime, Time, UtcOffset};
@@ -905,21 +906,25 @@ async fn run_binding_failure(
     let candidate = fixture.create_candidate(config.stream.as_str());
     let clock = Arc::new(test_clock());
     let lock = InstanceLock::acquire(&fixture.data_root).expect("instance lock");
-    let stream_dir = stream_directory(
-        &fixture.data_root,
-        &config.stream,
-        clock.wall_now(),
-        clock.offset_at(clock.wall_now()),
-    )
-    .expect("active stream directory");
+    let offset = clock.offset_at(clock.wall_now());
+    let (_, stem) = local_date_and_time(clock.wall_now(), offset);
+    let stream_dir = stream_directory(&fixture.data_root, &config.stream, clock.wall_now(), offset)
+        .expect("active stream directory");
     let segment = SegmentState::create(
         &stream_dir,
+        &stem,
         clock.wall_now(),
         Duration::ZERO,
-        clock.offset_at(clock.wall_now()),
+        offset,
         None,
     )
     .expect("active segment");
+    struct UtcZone;
+    impl ZoneSource for UtcZone {
+        fn read(&mut self) -> Result<Zone, String> {
+            Ok(Zone::utc())
+        }
+    }
     let polls = Arc::new(AtomicUsize::new(0));
     let (observer_stop, observer_stopped) = oneshot::channel();
     let (observer_barrier, supervisor_barrier) = shutdown_barrier();
@@ -930,9 +935,11 @@ async fn run_binding_failure(
             segment,
             fixture.data_root.clone(),
             config.stream.clone(),
-            Arc::clone(&clock) as Arc<dyn Clock>,
             SyncWake::default(),
+            Box::new(UtcZone),
+            Arc::new(StderrWarnings),
             None,
+            false,
         )),
         Arc::clone(&clock) as Arc<dyn Clock>,
         Box::pin(async move {

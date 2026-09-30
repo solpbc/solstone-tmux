@@ -15,8 +15,7 @@ use solstone_tmux::instance_lock::InstanceLock;
 use solstone_tmux::journal_version::{JournalVersionStatus, read_journal_version};
 use solstone_tmux::observer::{
     NoopShutdownIndicator, ObserverConfig, SegmentManager, ShutdownIndicator, SupervisionControl,
-    production_shutdown_future, run_observer, shutdown_barrier, stream_directory,
-    supervise_observer,
+    production_shutdown_future, run_observer, shutdown_barrier, supervise_observer,
 };
 use solstone_tmux::paths::{
     ProcessEnvironment, ensure_private_directory, resolve_config_root, resolve_data_root,
@@ -83,11 +82,7 @@ fn run() -> Result<i32, String> {
             }
         }
         cli::CliCommand::Run => {
-            let resolved = solstone_tmux::clock::resolve_system_zone();
-            let (clock, warning) = SystemClock::from_resolved(resolved);
-            if let Some(warning) = warning {
-                eprintln!("solstone-tmux: warning: {warning}");
-            }
+            let clock = SystemClock::utc();
             run_native(platform, &environment, clock)
         }
         command => {
@@ -202,19 +197,15 @@ fn run_native(
     let shutdown = runtime
         .block_on(async { production_shutdown_future() })
         .map_err(|error| error.to_string())?;
-    let capture_tz = clock.iana_name();
     let clock: Arc<dyn Clock> = Arc::new(clock);
-    let wall_now = clock.wall_now();
-    let monotonic_now = clock.monotonic_now();
-    let offset = clock.offset_at(wall_now);
-    let stream_dir = stream_directory(&data_root, &config.stream, wall_now, offset)
-        .map_err(|error| error.to_string())?;
-    let mut segment = SegmentState::create(
-        &stream_dir,
-        wall_now,
-        monotonic_now,
-        offset,
-        capture_tz.as_deref(),
+    let sync_wake = SyncWake::default();
+    let mut manager = SegmentManager::start(
+        data_root.clone(),
+        config.stream.clone(),
+        clock.as_ref(),
+        sync_wake.clone(),
+        Box::new(solstone_tmux::clock::SystemZoneSource),
+        Arc::new(solstone_tmux::tmux::StderrWarnings),
     )
     .map_err(|error| error.to_string())?;
     let indicator: Box<dyn ShutdownIndicator> = if config.status_indicator {
@@ -223,21 +214,12 @@ fn run_native(
         match runtime.block_on(IndicatorOwnership::install_default(indicator_io)) {
             Ok(indicator) => Box::new(indicator),
             Err(error) => {
-                return startup_error(&mut segment, error.to_string());
+                return startup_error(manager.segment_mut(), error.to_string());
             }
         }
     } else {
         Box::new(NoopShutdownIndicator)
     };
-    let sync_wake = SyncWake::default();
-    let manager = SegmentManager::new(
-        segment,
-        data_root.clone(),
-        config.stream.clone(),
-        Arc::clone(&clock),
-        sync_wake.clone(),
-        capture_tz,
-    );
     let health = HealthWriter::new(data_root.clone(), &instance_lock);
     let (activity_sender, activity_receiver) = tokio::sync::watch::channel(SyncActivity::Idle);
     let retention_fence = Arc::new(RetentionFence::new());

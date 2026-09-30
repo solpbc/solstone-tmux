@@ -149,6 +149,7 @@ fn segment_with_faults<const N: usize>(
     let wall = PrimitiveDateTime::new(date, time).assume_utc();
     let segment = SegmentState::create_with_faults(
         &stream,
+        "120000",
         wall,
         Duration::ZERO,
         UtcOffset::UTC,

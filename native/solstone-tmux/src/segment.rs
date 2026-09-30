@@ -47,6 +47,7 @@ pub enum SegmentClose {
 impl SegmentState {
     pub fn create(
         stream_dir: &Path,
+        stem: &str,
         start_wall: OffsetDateTime,
         start_monotonic: Duration,
         local_offset: UtcOffset,
@@ -54,6 +55,7 @@ impl SegmentState {
     ) -> Result<Self, SegmentError> {
         Self::create_with_faults(
             stream_dir,
+            stem,
             start_wall,
             start_monotonic,
             local_offset,
@@ -64,6 +66,7 @@ impl SegmentState {
 
     pub fn create_with_faults(
         stream_dir: &Path,
+        stem: &str,
         start_wall: OffsetDateTime,
         start_monotonic: Duration,
         local_offset: UtcOffset,
@@ -71,13 +74,6 @@ impl SegmentState {
         faults: FaultPlan,
     ) -> Result<Self, SegmentError> {
         ensure_private_directory(stream_dir).map_err(SegmentError::Path)?;
-        let local = start_wall.to_offset(local_offset);
-        let stem = format!(
-            "{:02}{:02}{:02}",
-            local.hour(),
-            local.minute(),
-            local.second()
-        );
         let incomplete_name = format!("{stem}.incomplete");
         let metadata_name = format!("{stem}.incomplete.meta");
         let incomplete_dir = stream_dir.join(&incomplete_name);
@@ -91,7 +87,7 @@ impl SegmentState {
             schema_version: SegmentMetadata::SCHEMA_VERSION,
             lifecycle: MetadataLifecycle::Creating,
             incomplete_dir: incomplete_name,
-            finalized_dir: finalized_name(&stem, Duration::ZERO),
+            finalized_dir: finalized_name(stem, Duration::ZERO),
             start_wall_unix_nanos: start_wall.unix_timestamp_nanos(),
             local_offset_seconds: local_offset.whole_seconds(),
             tz: tz.filter(|name| !name.is_empty()).map(str::to_owned),

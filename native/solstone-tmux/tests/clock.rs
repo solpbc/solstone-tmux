@@ -97,11 +97,14 @@ fn all_changed_sessions_share_one_wall_sample() {
 fn segment_and_clock(label: &str) -> (TestDirectory, SegmentState, TestClock) {
     let clock = clock();
     let temporary = TestDirectory::new(label);
+    let offset = clock.offset_at(clock.wall_now());
+    let (_, stem) = local_date_and_time(clock.wall_now(), offset);
     let segment = SegmentState::create(
         &temporary.path().join("stream"),
+        &stem,
         clock.wall_now(),
         Duration::from_secs(10),
-        clock.offset_at(clock.wall_now()),
+        offset,
         None,
     )
     .expect("segment");

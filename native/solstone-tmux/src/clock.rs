@@ -39,6 +39,33 @@ impl Zone {
     pub fn iana_name(&self) -> Option<String> {
         self.inner.iana_name().map(str::to_owned)
     }
+
+    pub fn offset_at(&self, instant: OffsetDateTime) -> UtcOffset {
+        let timestamp = jiff::Timestamp::from_second(instant.unix_timestamp())
+            .expect("instant seconds fit jiff Timestamp range");
+        let seconds = self.inner.to_offset(timestamp).seconds();
+        UtcOffset::from_whole_seconds(seconds).expect("jiff offset fits time UtcOffset range")
+    }
+
+    pub fn fixed(offset: UtcOffset) -> Self {
+        let jiff_offset = jiff::tz::Offset::from_seconds(offset.whole_seconds())
+            .expect("time UtcOffset seconds fit jiff Offset range");
+        Self {
+            inner: jiff::tz::TimeZone::fixed(jiff_offset),
+        }
+    }
+}
+
+pub trait ZoneSource: Send {
+    fn read(&mut self) -> Result<Zone, String>;
+}
+
+pub struct SystemZoneSource;
+
+impl ZoneSource for SystemZoneSource {
+    fn read(&mut self) -> Result<Zone, String> {
+        resolve_system_zone()
+    }
 }
 
 pub fn resolve_system_zone() -> Result<Zone, String> {
@@ -92,10 +119,7 @@ impl Clock for SystemClock {
     }
 
     fn offset_at(&self, instant: OffsetDateTime) -> UtcOffset {
-        let timestamp = jiff::Timestamp::from_second(instant.unix_timestamp())
-            .expect("instant seconds fit jiff Timestamp range");
-        let seconds = self.zone.inner.to_offset(timestamp).seconds();
-        UtcOffset::from_whole_seconds(seconds).expect("jiff offset fits time UtcOffset range")
+        self.zone.offset_at(instant)
     }
 }
 
