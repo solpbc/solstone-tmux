@@ -6,6 +6,11 @@ Format adapted from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- if you change time zones while solstone-tmux is running, new terminal text goes into your journal under your new local time within a few minutes. before, it kept the time zone it started with until it restarted.
+- when the clocks go back an hour, solstone-tmux keeps going through the repeated hour. before, it could stop until it restarted.
+
 ## [2.0.9] - 2026-09-30
 
 ### Added
