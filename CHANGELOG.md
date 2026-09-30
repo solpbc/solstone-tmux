@@ -6,6 +6,12 @@ Format adapted from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [2.0.9] - 2026-09-30
+
+### Added
+
+- solstone-tmux now includes your computer's time zone with the terminal text that goes into your journal.
+
 ## [2.0.8] - 2026-09-28
 
 ### Fixed
