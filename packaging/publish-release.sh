@@ -404,15 +404,21 @@ verify_remote_assets() {
     local require_complete="$2"
     local -a remote_names=()
     local -A seen_names=()
+    # Membership is checked in-shell. Piping the list into `grep -q` let grep
+    # exit on its first match while printf was still writing, and under
+    # pipefail that SIGPIPE read as a listed asset being unlisted.
+    local -A listed_names=()
     local name asset_count asset_id download
+    for name in "${publishable_names[@]}"; do
+        listed_names["$name"]=1
+    done
     mapfile -t remote_names < <(jq -r '.[0].assets[].name' <<<"$release_json" | sort)
     for name in "${remote_names[@]}"; do
         [[ -z "${seen_names[$name]:-}" ]] ||
             die "release contains duplicate asset names"
         seen_names["$name"]=1
-        if ! printf '%s\n' "${publishable_names[@]}" | grep -Fxq "$name"; then
+        [[ -n "${listed_names[$name]:-}" ]] ||
             die "release contains an unlisted asset"
-        fi
         asset_count="$(
             jq --arg name "$name" '[.[0].assets[] | select(.name == $name)] | length' \
                 <<<"$release_json"
