@@ -4,10 +4,9 @@
 use std::ffi::OsString;
 use std::process::{Command, Output};
 
-use solstone_tmux::cli::{CliCommand, USAGE_EXIT_CODE, parse_args, usage};
+use solstone_tmux::cli::{CliCommand, MarkOption, USAGE_EXIT_CODE, parse_args, usage};
 
-const HELP: &[u8] =
-    b"usage: solstone-tmux [run|setup|status|install-service|uninstall-service|--help|--version]\n";
+const HELP: &[u8] = b"usage: solstone-tmux [run|setup|confirm|status|install-service|uninstall-service|--help|--version]\n       solstone-tmux setup [--mark <words>]\n       solstone-tmux confirm [--mark <words>]\n--mark  the two words of the mark your journal's network app shows. needed when there's no terminal to ask you on.\nexit 0 paired or already confirmed; exit 1 not paired, nothing changed, or no terminal; exit 2 usage; exit 5 held. status still uses exit 3 and 4.\n";
 
 #[test]
 fn help_flags_write_exact_stdout_and_succeed() {
@@ -37,7 +36,8 @@ fn version_flags_write_development_version_to_stdout_and_succeed() {
 fn parser_preserves_five_commands_and_no_argument_default() {
     let cases = [
         ("run", CliCommand::Run),
-        ("setup", CliCommand::Setup),
+        ("setup", CliCommand::Setup(MarkOption::Absent)),
+        ("confirm", CliCommand::Confirm(MarkOption::Absent)),
         ("status", CliCommand::Status),
         ("install-service", CliCommand::InstallService),
         ("uninstall-service", CliCommand::UninstallService),
@@ -84,6 +84,29 @@ fn invalid_arguments_keep_stderr_and_exit_two() {
         output.stderr,
         format!("unexpected argument 'extra'\n{}\n", usage()).as_bytes()
     );
+}
+
+#[test]
+fn parser_parses_mark_options_and_rejects_positional_link() {
+    assert_eq!(
+        parse(&["setup", "--mark", "bramble quokka"]).expect("setup mark"),
+        CliCommand::Setup(MarkOption::Value("bramble quokka".to_owned()))
+    );
+    assert_eq!(
+        parse(&["confirm", "--mark", "bramble quokka"]).expect("confirm mark"),
+        CliCommand::Confirm(MarkOption::Value("bramble quokka".to_owned()))
+    );
+    assert_eq!(
+        parse(&["setup", "--mark"]).expect("setup missing mark"),
+        CliCommand::Setup(MarkOption::MissingValue)
+    );
+    assert_eq!(
+        parse(&["setup", "--mark", "foo", "--mark", "bar"]).expect("setup repeated mark"),
+        CliCommand::Setup(MarkOption::Repeated)
+    );
+    assert!(parse(&["setup", "https://link"]).is_err());
+    assert!(parse(&["run", "--mark", "foo"]).is_err());
+    assert!(parse(&["status", "--mark", "foo"]).is_err());
 }
 
 fn parse(arguments: &[&str]) -> Result<CliCommand, solstone_tmux::cli::CliError> {

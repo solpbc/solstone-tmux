@@ -63,23 +63,27 @@ fn run() -> Result<i32, String> {
     let environment = ProcessEnvironment;
     let platform = current_platform();
     match command {
-        cli::CliCommand::Setup => {
+        cli::CliCommand::Setup(mark) => {
             let runtime = runtime()?;
             let stdin = std::io::stdin();
-            match runtime.block_on(private_link::setup(platform, &environment, stdin.lock())) {
-                Ok(Some(spoken_mark)) => {
-                    println!("paired. your journal's mark: {spoken_mark}");
-                    Ok(0)
-                }
-                Ok(None) => {
-                    println!("paired.");
-                    Ok(0)
-                }
-                Err(code) => {
-                    emit_diagnostic(code);
-                    Ok(1)
-                }
-            }
+            let outcome = runtime.block_on(private_link::setup(
+                platform,
+                &environment,
+                stdin.lock(),
+                solstone_tmux::pairing_answer::TerminalSeat::Production::<std::io::Empty>,
+                mark,
+            ));
+            handle_outcome(outcome)
+        }
+        cli::CliCommand::Confirm(mark) => {
+            let runtime = runtime()?;
+            let outcome = runtime.block_on(private_link::confirm(
+                platform,
+                &environment,
+                solstone_tmux::pairing_answer::TerminalSeat::Production::<std::io::Empty>,
+                mark,
+            ));
+            handle_outcome(outcome)
         }
         cli::CliCommand::Run => {
             let clock = SystemClock::utc();
@@ -113,9 +117,18 @@ fn run() -> Result<i32, String> {
                             Err(_) => "error",
                         };
                         let now_unix_seconds = time::OffsetDateTime::now_utc().unix_timestamp();
-                        let sync_health = resolve_data_root(platform, &environment)
-                            .map(|data_root| read_status_health(&data_root, now_unix_seconds))
-                            .unwrap_or(StatusHealth::Unknown);
+                        let config_root_opt = resolve_config_root(platform, &environment).ok();
+                        let held = config_root_opt.as_ref().is_some_and(|root| {
+                            solstone_tmux::pairing_answer::is_status_held(root)
+                        });
+                        let (sync_health_str, print_held_lines) = if held {
+                            ("held", true)
+                        } else {
+                            let sync_health = resolve_data_root(platform, &environment)
+                                .map(|data_root| read_status_health(&data_root, now_unix_seconds))
+                                .unwrap_or(StatusHealth::Unknown);
+                            (sync_health.as_str(), false)
+                        };
                         let journal_version = match (
                             resolve_config_root(platform, &environment),
                             resolve_data_root(platform, &environment),
@@ -126,20 +139,27 @@ fn run() -> Result<i32, String> {
                             _ => JournalVersionStatus::Unknown,
                         };
                         println!("service: {service_line}");
-                        println!("sync-health: {}", sync_health.as_str());
+                        println!("sync-health: {sync_health_str}");
+                        if print_held_lines {
+                            println!("{}", solstone_tmux::pairing_answer::STATUS_HELD_PAIRING);
+                            println!("{}", solstone_tmux::pairing_answer::STATUS_HELD_CONFIRM);
+                        }
                         println!("journal-version: {}", journal_version.render());
                         println!("get help: {}", solstone_tmux::support::HELP_URL);
                         println!(
                             "report a problem: {}",
-                            solstone_tmux::support::report_url(sync_health.as_str())
+                            solstone_tmux::support::report_url(sync_health_str)
                         );
                         if let Err(error) = &status {
                             eprintln!("solstone-tmux: {error}");
                         }
                         Ok(status_exit_code(status))
                     }
-                    cli::CliCommand::Setup => {
+                    cli::CliCommand::Setup(_) => {
                         unreachable!("setup was dispatched before service setup")
+                    }
+                    cli::CliCommand::Confirm(_) => {
+                        unreachable!("confirm was dispatched before service setup")
                     }
                     cli::CliCommand::Run => unreachable!("run was dispatched before service setup"),
                     cli::CliCommand::Help => {
@@ -150,6 +170,25 @@ fn run() -> Result<i32, String> {
                     }
                 }
             })
+        }
+    }
+}
+
+fn handle_outcome(outcome: solstone_tmux::pairing_answer::Outcome) -> Result<i32, String> {
+    match outcome {
+        solstone_tmux::pairing_answer::Outcome::Owner { code, lines } => {
+            for line in lines {
+                println!("{line}");
+            }
+            Ok(code)
+        }
+        solstone_tmux::pairing_answer::Outcome::Diagnostic(code) => {
+            emit_diagnostic(code);
+            Ok(1)
+        }
+        solstone_tmux::pairing_answer::Outcome::Usage(usage_str) => {
+            eprintln!("{usage_str}");
+            Ok(2)
         }
     }
 }
@@ -264,6 +303,8 @@ fn run_native(
         health,
         retention_fence: Arc::clone(&retention_fence),
         identity: instance_lock.identity().clone(),
+        health_refresh_interval: solstone_tmux::sync::HEALTH_REFRESH_INTERVAL,
+        answer_lock_timeout: solstone_tmux::pairing_answer::ANSWER_LOCK_TIMEOUT,
     }
     .run(sync_shutdown);
     let exit = runtime.block_on(supervise_observer(

@@ -118,6 +118,7 @@ pub fn emit_diagnostic(code: DiagnosticCode) {
 #[serde(rename_all = "snake_case")]
 pub enum HealthState {
     Unpaired,
+    Held,
     Connected,
     Syncing,
     Offline,
@@ -129,6 +130,7 @@ impl HealthState {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Unpaired => "unpaired",
+            Self::Held => "held",
             Self::Connected => "connected",
             Self::Syncing => "syncing",
             Self::Offline => "offline",
@@ -141,6 +143,7 @@ impl HealthState {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct SyncFacts {
     pub paired: bool,
+    pub held: bool,
     pub sync_in_progress: bool,
     pub pending_segments: u64,
     pub last_successful_contact_unix_seconds: Option<i64>,
@@ -182,6 +185,9 @@ impl SyncFacts {
         ) {
             return HealthState::UpdateNeeded;
         }
+        if self.held {
+            return HealthState::Held;
+        }
         if !self.paired {
             return HealthState::Unpaired;
         }
@@ -211,6 +217,7 @@ struct HealthSnapshot {
     last_error_code: Option<DiagnosticCode>,
 }
 
+#[derive(Clone)]
 pub struct HealthWriter {
     data_root: PathBuf,
     identity: RunIdentity,
@@ -316,6 +323,7 @@ fn valid_snapshot(snapshot: &HealthSnapshot) -> bool {
     }
     match snapshot.state {
         HealthState::Unpaired => !snapshot.paired && !snapshot.sync_in_progress,
+        HealthState::Held => snapshot.paired && !snapshot.sync_in_progress,
         HealthState::Syncing => snapshot.paired && snapshot.sync_in_progress,
         HealthState::Connected => {
             snapshot.paired

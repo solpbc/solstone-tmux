@@ -125,8 +125,9 @@ binary, but only the pkg is notarized and stapled.
 
 `setup` and `install-service` are separate steps:
 
-1. `setup` reads one private network pairing link from standard input and stores
-   the new pairing:
+1. `setup` reads one private network pairing link from standard input. Pairing is
+   not complete until you confirm your journal's mark, either interactively or
+   with `--mark "word word"`. If needed, `confirm` can verify the mark later:
 
    ```sh
    solstone-tmux setup < pairing-link.txt

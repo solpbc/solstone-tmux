@@ -16,6 +16,7 @@ pub mod journal_version;
 pub mod model;
 pub mod name;
 pub mod observer;
+pub mod pairing_answer;
 pub mod paths;
 pub mod post_connect;
 pub mod private_link;

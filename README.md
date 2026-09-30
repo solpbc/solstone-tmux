@@ -34,7 +34,9 @@ solstone-tmux install-service
 solstone-tmux status
 ```
 
-`setup` reads one private network pairing link from standard input.
+`setup` reads one private network pairing link from standard input. Pairing is
+not complete until you confirm your journal's mark, either interactively or
+with `--mark "word word"`. If needed, `confirm` can verify the mark later.
 `install-service` activates the current user's systemd or launchd service.
 
 ## Commands
@@ -42,7 +44,8 @@ solstone-tmux status
 | Command | Purpose |
 | --- | --- |
 | `solstone-tmux run` | Run in the foreground; this is the default command |
-| `solstone-tmux setup` | Pair through one private network link on standard input |
+| `solstone-tmux setup` | Pair through one private network link on standard input; pairing is not finished until the journal's mark is confirmed |
+| `solstone-tmux confirm` | Confirm a paired journal's mark, or pass `--mark "word word"` when there is no terminal |
 | `solstone-tmux status` | Report service and sync health |
 | `solstone-tmux install-service` | Install and activate the user service |
 | `solstone-tmux uninstall-service` | Remove the owned user service |

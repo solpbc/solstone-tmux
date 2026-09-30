@@ -7,6 +7,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
+use futures_util::{SinkExt, StreamExt};
 use rcgen::{
     BasicConstraints, CertificateParams, ExtendedKeyUsagePurpose, IsCa, KeyPair, KeyUsagePurpose,
     PKCS_ECDSA_P256_SHA256,
@@ -19,6 +20,7 @@ use rustls::{
     CertificateError, DigitallySignedStruct, DistinguishedName, OtherError, RootCertStore,
     ServerConfig, SignatureScheme,
 };
+use serde_json::json;
 use spl_core::frame::{
     FLAG_CLOSE, FLAG_DATA, FLAG_OPEN, FLAG_RESET, FLAG_WINDOW, Frame, FrameDecoder,
     RECOMMENDED_CHUNK,
@@ -31,6 +33,8 @@ use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 use tokio_rustls::TlsAcceptor;
 use tokio_rustls::server::TlsStream;
+use tokio_tungstenite::WebSocketStream;
+use tokio_tungstenite::tungstenite::Message;
 
 #[derive(Clone)]
 pub struct PeerRequest {
@@ -38,6 +42,7 @@ pub struct PeerRequest {
     path: String,
     headers: Vec<(String, String)>,
     body: Vec<u8>,
+    response_status: Option<u16>,
 }
 
 impl PeerRequest {
@@ -71,6 +76,10 @@ impl PeerRequest {
 
     pub fn body(&self) -> &[u8] {
         &self.body
+    }
+
+    pub fn response_status(&self) -> Option<u16> {
+        self.response_status
     }
 }
 
@@ -187,6 +196,28 @@ struct PeerState {
     current_stream: Arc<AtomicU32>,
     accepted: Arc<AtomicUsize>,
     refusal_alert: Arc<AtomicU8>,
+    expected_client_sha256: Arc<Mutex<Option<String>>>,
+}
+
+pub struct RelayServer {
+    origin: String,
+    task: JoinHandle<()>,
+    refresh_requests: Arc<Mutex<Vec<String>>>,
+}
+
+impl RelayServer {
+    pub fn origin(&self) -> &str {
+        &self.origin
+    }
+
+    pub fn refresh_requests(&self) -> Vec<String> {
+        lock(&self.refresh_requests).clone()
+    }
+
+    pub async fn shutdown(self) {
+        self.task.abort();
+        let _ = self.task.await;
+    }
 }
 
 pub struct PrivateLinkPeer {
@@ -221,7 +252,8 @@ impl PrivateLinkPeer {
         assert!(address.ip().is_loopback(), "peer did not bind loopback");
 
         let refusal_alert = Arc::new(AtomicU8::new(0));
-        let (credential, acceptor) = credential_and_acceptor(address.port(), refusal_alert.clone());
+        let (credential, acceptor, client_sha256) =
+            credential_and_acceptor(address.port(), refusal_alert.clone());
         let state = PeerState {
             responses: Arc::new(Mutex::new(VecDeque::new())),
             system_status_responses: Arc::new(Mutex::new(VecDeque::new())),
@@ -243,6 +275,7 @@ impl PrivateLinkPeer {
             current_stream: Arc::new(AtomicU32::new(0)),
             accepted: Arc::new(AtomicUsize::new(0)),
             refusal_alert,
+            expected_client_sha256: Arc::new(Mutex::new(Some(client_sha256))),
         };
         let (controls, _) = tokio::sync::broadcast::channel(16);
         let task = tokio::spawn(serve(listener, acceptor, state.clone(), controls.clone()));
@@ -252,6 +285,68 @@ impl PrivateLinkPeer {
             state,
             controls,
             task,
+        }
+    }
+
+    pub fn expected_client_sha256(&self) -> String {
+        lock(&self.state.expected_client_sha256)
+            .clone()
+            .unwrap_or_default()
+    }
+
+    pub fn set_expected_client_sha256(&self, sha: Option<String>) {
+        *lock(&self.state.expected_client_sha256) = sha;
+    }
+
+    pub fn relay_credential(&self, relay_origin: &str) -> Credential {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        let iat = now - 81;
+        let exp = now + 19;
+        let token = create_relay_jwt(&self.credential.instance_id, iat, exp);
+        let mut cred = self.credential.clone();
+        cred.endpoints = Vec::new();
+        cred.local_endpoints = None;
+        cred.relay_origin = Some(relay_origin.to_owned());
+        cred.device_token = Some(token);
+        cred.device_token_expires_at = Some(exp);
+        cred
+    }
+
+    pub async fn start_relay_server(&self) -> RelayServer {
+        let listener = TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("bind relay server");
+        let port = listener.local_addr().expect("relay addr").port();
+        let origin = format!("http://127.0.0.1:{port}");
+        let peer_port = self
+            .credential
+            .endpoints
+            .first()
+            .map(|e| e.port)
+            .unwrap_or(0);
+        let instance_id = self.credential.instance_id.clone();
+        let refresh_requests = Arc::new(Mutex::new(Vec::new()));
+        let refresh_requests_for_task = Arc::clone(&refresh_requests);
+        let task = tokio::spawn(async move {
+            loop {
+                let Ok((tcp, _)) = listener.accept().await else {
+                    return;
+                };
+                let instance_id = instance_id.clone();
+                let refresh_requests = Arc::clone(&refresh_requests_for_task);
+                tokio::spawn(async move {
+                    let _ = handle_relay_connection(tcp, peer_port, &instance_id, refresh_requests)
+                        .await;
+                });
+            }
+        });
+        RelayServer {
+            origin,
+            task,
+            refresh_requests,
         }
     }
 
@@ -610,7 +705,7 @@ impl ClientCertVerifier for RefusingVerifier {
     }
 }
 
-fn credential_and_acceptor(port: u16, refusal: Arc<AtomicU8>) -> (Credential, TlsAcceptor) {
+fn credential_and_acceptor(port: u16, refusal: Arc<AtomicU8>) -> (Credential, TlsAcceptor, String) {
     let ca_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("generate peer CA key");
     let mut ca_params =
         CertificateParams::new(Vec::<String>::new()).expect("construct peer CA parameters");
@@ -661,6 +756,7 @@ fn credential_and_acceptor(port: u16, refusal: Arc<AtomicU8>) -> (Credential, Tl
             )
             .expect("build peer TLS server");
     let pin = spl_core::ca::sha256(ca_der.as_ref())[..16].to_vec();
+    let client_sha256 = spl_core::ca::sha256_hex(client.der());
     let credential = Credential {
         client_key_pem: client_key.serialize_pem(),
         client_cert_pem: client.pem(),
@@ -678,7 +774,11 @@ fn credential_and_acceptor(port: u16, refusal: Arc<AtomicU8>) -> (Credential, Tl
         device_token: None,
         device_token_expires_at: None,
     };
-    (credential, TlsAcceptor::from(Arc::new(server_config)))
+    (
+        credential,
+        TlsAcceptor::from(Arc::new(server_config)),
+        client_sha256,
+    )
 }
 
 async fn serve(
@@ -809,9 +909,6 @@ async fn handle_carrier(
                         let is_system_status = path.as_deref() == Some("/api/system/status");
                         let is_clients_self = path.as_deref() == Some("/app/network/api/clients/self");
                         let is_relay_access = path.as_deref() == Some("/app/network/api/relay/access");
-                        if let (Some(request), false) = (&parsed, is_system_status) {
-                            lock(&state.requests).push(request.clone());
-                        }
                         state.request_count.fetch_add(1, Ordering::SeqCst);
                         if is_clients_self {
                             state
@@ -834,6 +931,10 @@ async fn handle_carrier(
                         } else if is_system_status {
                             state.system_status_hold.wait_if_held().await;
                         }
+                        let is_delete = parsed
+                            .as_ref()
+                            .map(|req| req.method() == "DELETE")
+                            .unwrap_or(false);
                         let is_upload = parsed
                             .as_ref()
                             .map(|req| {
@@ -912,7 +1013,7 @@ async fn handle_carrier(
                                     status: 500,
                                     body: Vec::new(),
                                     delay: None,
-                                })
+                                    })
                         } else if is_clients_self {
                             lock(&state.clients_self_responses)
                                 .pop_front()
@@ -929,6 +1030,34 @@ async fn handle_carrier(
                                     body: Vec::new(),
                                     delay: None,
                                 })
+                        } else if is_delete {
+                            if let Some(queued) = lock(&state.responses).pop_front() {
+                                queued
+                            } else {
+                                let matches = match (
+                                    parsed.as_ref(),
+                                    lock(&state.expected_client_sha256).as_deref(),
+                                ) {
+                                    (Some(req), Some(expected)) => {
+                                        req.path_without_query()
+                                            == format!("/app/network/api/clients/sha256:{expected}")
+                                    }
+                                    _ => false,
+                                };
+                                if matches {
+                                    PeerResponse::Structured {
+                                        status: 200,
+                                        body: Vec::new(),
+                                        delay: None,
+                                    }
+                                } else {
+                                    PeerResponse::Structured {
+                                        status: 404,
+                                        body: Vec::new(),
+                                        delay: None,
+                                    }
+                                }
+                            }
                         } else {
                             lock(&state.responses)
                                 .pop_front()
@@ -938,6 +1067,14 @@ async fn handle_carrier(
                                     delay: None,
                                 })
                         };
+                        let response_status = match &response {
+                            PeerResponse::Structured { status, .. } => Some(*status),
+                            PeerResponse::Raw(_) => None,
+                        };
+                        if let (Some(mut request), false) = (parsed, is_system_status) {
+                            request.response_status = response_status;
+                            lock(&state.requests).push(request);
+                        }
                         let deliver_at = match &response {
                             PeerResponse::Structured {
                                 delay: Some(delay), ..
@@ -1084,6 +1221,7 @@ fn parse_request(raw: &[u8]) -> Option<PeerRequest> {
         path,
         headers,
         body: raw[split + 4..].to_vec(),
+        response_status: None,
     })
 }
 
@@ -1175,4 +1313,158 @@ pub fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
                 .position(|window| window == needle)
         })
         .flatten()
+}
+
+fn create_relay_jwt(instance_id: &str, iat: i64, exp: i64) -> String {
+    let header = "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9"; // {"alg":"ES256","typ":"JWT"}
+    let claims = json!({
+        "iss": "solstone",
+        "sub": format!("instance:{instance_id}"),
+        "aud": "spl-relay",
+        "scope": "session.dial",
+        "ver": 2,
+        "instance_id": instance_id,
+        "iat": iat,
+        "exp": exp,
+        "jti": "jwt-id-12345"
+    });
+    let claims_bytes = serde_json::to_vec(&claims).expect("json");
+    let mut claims_b64 = String::new();
+    const B64_CHARS: &[u8; 64] =
+        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    let mut i = 0;
+    while i < claims_bytes.len() {
+        let b0 = claims_bytes[i] as usize;
+        let b1 = if i + 1 < claims_bytes.len() {
+            claims_bytes[i + 1] as usize
+        } else {
+            0
+        };
+        let b2 = if i + 2 < claims_bytes.len() {
+            claims_bytes[i + 2] as usize
+        } else {
+            0
+        };
+
+        claims_b64.push(B64_CHARS[b0 >> 2] as char);
+        claims_b64.push(B64_CHARS[((b0 & 0x03) << 4) | (b1 >> 4)] as char);
+        if i + 1 < claims_bytes.len() {
+            claims_b64.push(B64_CHARS[((b1 & 0x0f) << 2) | (b2 >> 6)] as char);
+        }
+        if i + 2 < claims_bytes.len() {
+            claims_b64.push(B64_CHARS[b2 & 0x3f] as char);
+        }
+        i += 3;
+    }
+    format!("{header}.{claims_b64}.fake_sig")
+}
+
+async fn handle_relay_connection(
+    mut tcp: TcpStream,
+    peer_port: u16,
+    instance_id: &str,
+    refresh_requests: Arc<Mutex<Vec<String>>>,
+) -> io::Result<()> {
+    let mut peek = [0u8; 512];
+    let n = tcp.peek(&mut peek).await?;
+    let peek_str = String::from_utf8_lossy(&peek[..n]);
+    if peek_str.starts_with("GET ") {
+        let ws = tokio_tungstenite::accept_async(tcp)
+            .await
+            .map_err(io::Error::other)?;
+        let peer_tcp = TcpStream::connect(("127.0.0.1", peer_port)).await?;
+        let (relay_side, home_side) = tokio::io::duplex(64 * 1024);
+        tokio::spawn(async move {
+            let _ = pump_ws(ws, relay_side).await;
+        });
+        let (mut home_read, mut home_write) = tokio::io::split(home_side);
+        let (mut peer_read, mut peer_write) = tokio::io::split(peer_tcp);
+        let _ = tokio::join!(
+            tokio::io::copy(&mut home_read, &mut peer_write),
+            tokio::io::copy(&mut peer_read, &mut home_write),
+        );
+        Ok(())
+    } else {
+        let mut buf = [0u8; 4096];
+        let n = tcp.read(&mut buf).await?;
+        let req_str = String::from_utf8_lossy(&buf[..n]);
+        let line = req_str.lines().next().unwrap_or("");
+        let path = line.split_whitespace().nth(1).unwrap_or("/");
+        if path.starts_with("/token/refresh") {
+            lock(&refresh_requests).push(req_str.to_string());
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs() as i64;
+            let fresh_exp = now + 3600;
+            let fresh_token = create_relay_jwt(instance_id, now, fresh_exp);
+            let expires_at_rfc3339 = time::OffsetDateTime::from_unix_timestamp(fresh_exp)
+                .unwrap()
+                .format(&time::format_description::well_known::Rfc3339)
+                .unwrap();
+            let body = json!({
+                "protocol_version": 2,
+                "device_token": fresh_token,
+                "expires_at": expires_at_rfc3339,
+            })
+            .to_string();
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            tcp.write_all(resp.as_bytes()).await?;
+        } else {
+            let resp = "HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: close\r\n\r\n";
+            tcp.write_all(resp.as_bytes()).await?;
+        }
+        Ok(())
+    }
+}
+
+async fn pump_ws(
+    ws: WebSocketStream<TcpStream>,
+    relay_side: tokio::io::DuplexStream,
+) -> io::Result<()> {
+    let (mut ws_sink, mut ws_stream) = ws.split();
+    let (mut relay_read, mut relay_write) = tokio::io::split(relay_side);
+
+    let to_inner = async move {
+        while let Some(message) = ws_stream.next().await {
+            match message.map_err(io::Error::other)? {
+                Message::Binary(bytes) => {
+                    relay_write.write_all(&bytes).await?;
+                    relay_write.flush().await?;
+                }
+                Message::Close(_) => {
+                    let _ = relay_write.shutdown().await;
+                    return Ok(());
+                }
+                Message::Ping(_) | Message::Pong(_) => {}
+                Message::Text(_) | Message::Frame(_) => {
+                    return Err(io::Error::new(io::ErrorKind::InvalidData, "bad ws message"));
+                }
+            }
+        }
+        Ok(())
+    };
+
+    let to_ws = async move {
+        let mut buf = [0u8; 4096];
+        loop {
+            let n = relay_read.read(&mut buf).await?;
+            if n == 0 {
+                let _ = ws_sink.close().await;
+                return Ok(());
+            }
+            ws_sink
+                .send(Message::Binary(buf[..n].to_vec().into()))
+                .await
+                .map_err(io::Error::other)?;
+        }
+    };
+
+    tokio::select! {
+        result = to_inner => result,
+        result = to_ws => result,
+    }
 }

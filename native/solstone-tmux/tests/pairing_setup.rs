@@ -6,9 +6,14 @@ mod support;
 use std::fs;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use serde_json::Value;
+use solstone_tmux::cli::MarkOption;
 use solstone_tmux::config::system_hostname;
+use solstone_tmux::pairing_answer::{
+    ASK_UNAVAILABLE, BODY_UNAVAILABLE, COULDNT_VERIFY, MARK_UNAVAILABLE, PAIRED, STEP,
+};
 use solstone_tmux::paths::{PlatformKind, resolve_config_root, resolve_data_root};
 use solstone_tmux::private_link::{
     CREDENTIALS_FILENAME, format_spoken_mark, load_credential, pairing_ceremony_identity, setup,
@@ -18,6 +23,41 @@ use spl_core::PairRequest;
 use support::FakeEnvironment;
 use support::TestDirectory;
 use support::pairing_peer::{DirectPairingPeer, RelayPairingPeer};
+
+struct TestTerminal {
+    input: Cursor<Vec<u8>>,
+    output: Arc<std::sync::Mutex<Vec<u8>>>,
+}
+
+impl TestTerminal {
+    fn new(input: &str) -> Self {
+        Self {
+            input: Cursor::new(input.as_bytes().to_vec()),
+            output: Arc::new(std::sync::Mutex::new(Vec::new())),
+        }
+    }
+
+    #[allow(dead_code)]
+    fn output_text(&self) -> String {
+        let bytes = self.output.lock().expect("lock").clone();
+        String::from_utf8_lossy(&bytes).into_owned()
+    }
+}
+
+impl std::io::Read for TestTerminal {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.input.read(buf)
+    }
+}
+
+impl std::io::Write for TestTerminal {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.output.lock().expect("lock").write(buf)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.output.lock().expect("lock").flush()
+    }
+}
 
 #[test]
 fn direct_linux_pairing_sends_identity_on_the_wire() {
@@ -75,14 +115,19 @@ fn grammar_invalid_hostname_omits_client_label_on_the_wire() {
         let temporary = TestDirectory::new("pairing-setup-oversize-hostname");
         let (environment, _, config_root) = platform_roots(temporary.path(), PlatformKind::Linux);
         let oversize: Result<String, &'static str> = Ok("é".repeat(127));
-        setup_with_identity(
+        let outcome = setup_with_identity(
             PlatformKind::Linux,
             &environment,
             Cursor::new(peer.pair_link().to_owned()),
             oversize,
+            Some(TestTerminal::new("continue\n")),
+            MarkOption::Absent,
         )
-        .await
-        .expect("oversize hostname pairing");
+        .await;
+        assert!(matches!(
+            outcome,
+            solstone_tmux::pairing_answer::Outcome::Owner { code: 0, .. }
+        ));
         let raw = peer.captured_body();
         let json: Value = serde_json::from_slice(&raw).expect("pairing JSON");
         assert_eq!(json["device_label"], "tmux");
@@ -100,14 +145,19 @@ fn hostname_lookup_failure_omits_client_label_on_the_wire() {
         let peer = DirectPairingPeer::start().await;
         let temporary = TestDirectory::new("pairing-setup-hostname-err");
         let (environment, _, config_root) = platform_roots(temporary.path(), PlatformKind::Macos);
-        setup_with_identity(
+        let outcome = setup_with_identity(
             PlatformKind::Macos,
             &environment,
             Cursor::new(peer.pair_link().to_owned()),
             Err("uname failed"),
+            Some(TestTerminal::new("continue\n")),
+            MarkOption::Absent,
         )
-        .await
-        .expect("hostname failure pairing");
+        .await;
+        assert!(matches!(
+            outcome,
+            solstone_tmux::pairing_answer::Outcome::Owner { code: 0, .. }
+        ));
         let json: Value = serde_json::from_slice(&peer.captured_body()).expect("pairing JSON");
         assert_eq!(json["device_label"], "tmux");
         assert_eq!(json["platform"], "macos");
@@ -132,27 +182,32 @@ fn pairing_rejection_preserves_existing_credential_and_allows_retry() {
             400,
             br#"{"reason_code":"pairing_request_invalid","reason":"pairing_request_invalid","error":"client_label is invalid","detail":"client_label is invalid"}"#,
         );
-        let error = setup(
+        let outcome = setup(
             PlatformKind::Linux,
             &environment,
             Cursor::new(peer.pair_link().to_owned()),
+            Some(TestTerminal::new("continue\n")),
+            MarkOption::Absent,
         )
-        .await
-        .expect_err("rejected pairing succeeded");
-        assert_eq!(
-            error,
-            solstone_tmux::health::DiagnosticCode::PairingFailed
-        );
+        .await;
+        assert!(matches!(
+            outcome,
+            solstone_tmux::pairing_answer::Outcome::Diagnostic(
+                solstone_tmux::health::DiagnosticCode::PairingFailed
+            )
+        ));
         assert_eq!(fs::read(&credential_path).expect("sentinel remains"), sentinel);
 
         peer.enqueue_success();
-        setup(
+        let outcome = setup(
             PlatformKind::Linux,
             &environment,
             Cursor::new(peer.pair_link().to_owned()),
+            Some(TestTerminal::new("continue\n")),
+            MarkOption::Absent,
         )
-        .await
-        .expect("retry pairing");
+        .await;
+        assert!(matches!(outcome, solstone_tmux::pairing_answer::Outcome::Owner { code: 0, .. }));
         let persisted = fs::read(&credential_path).expect("retry credential");
         assert_ne!(persisted, sentinel);
         assert_eq!(peer.captured_bodies().len(), 2);
@@ -178,13 +233,18 @@ async fn capture_direct(platform: PlatformKind) -> PairRequest {
     let peer = DirectPairingPeer::start().await;
     let temporary = TestDirectory::new(&format!("pairing-setup-direct-{platform:?}"));
     let (environment, _, config_root) = platform_roots(temporary.path(), platform);
-    setup(
+    let outcome = setup(
         platform,
         &environment,
         Cursor::new(peer.pair_link().to_owned()),
+        Some(TestTerminal::new("continue\n")),
+        MarkOption::Absent,
     )
-    .await
-    .expect("direct pairing");
+    .await;
+    assert!(matches!(
+        outcome,
+        solstone_tmux::pairing_answer::Outcome::Owner { code: 0, .. }
+    ));
     assert_captured_json(&peer.captured_body(), platform);
     assert!(config_root.join(CREDENTIALS_FILENAME).is_file());
     let request = peer.captured_request();
@@ -196,13 +256,18 @@ async fn capture_relay(platform: PlatformKind) -> PairRequest {
     let peer = RelayPairingPeer::start().await;
     let temporary = TestDirectory::new(&format!("pairing-setup-relay-{platform:?}"));
     let (environment, _, config_root) = platform_roots(temporary.path(), platform);
-    setup(
+    let outcome = setup(
         platform,
         &environment,
         Cursor::new(peer.pair_link().to_owned()),
+        Some(TestTerminal::new("yes\n")),
+        MarkOption::Absent,
     )
-    .await
-    .expect("relay pairing");
+    .await;
+    assert!(matches!(
+        outcome,
+        solstone_tmux::pairing_answer::Outcome::Owner { code: 0, .. }
+    ));
     assert_captured_json(&peer.captured_body(), platform);
     assert!(config_root.join(CREDENTIALS_FILENAME).is_file());
     let request = peer.captured_request();
@@ -241,25 +306,29 @@ fn relay_pairing_returns_the_paired_journals_spoken_mark() {
         let peer = RelayPairingPeer::start().await;
         let temporary = TestDirectory::new("pairing-setup-relay-spoken-mark");
         let (environment, _, config_root) = platform_roots(temporary.path(), PlatformKind::Linux);
-        let spoken_mark = setup(
+        let term = TestTerminal::new("yes\n");
+        let output_ref = term.output.clone();
+        let outcome = setup(
             PlatformKind::Linux,
             &environment,
             Cursor::new(peer.pair_link().to_owned()),
+            Some(term),
+            MarkOption::Absent,
         )
-        .await
-        .expect("relay pairing");
+        .await;
+        match outcome {
+            solstone_tmux::pairing_answer::Outcome::Owner { code, lines } => {
+                assert_eq!(code, 0);
+                assert_eq!(lines, vec![PAIRED.to_string()]);
+            }
+            other => panic!("expected Owner outcome 0, got {other:?}"),
+        }
         let persisted = load_credential(&config_root)
             .expect("load credential")
             .expect("credential exists");
-        assert_eq!(
-            spoken_mark,
-            format_spoken_mark(&persisted.instance_id),
-            "returned spoken mark must match the mark derived from the paired instance ID"
-        );
-        assert!(
-            spoken_mark.is_some(),
-            "relay pairing carries a well-formed journal ID"
-        );
+        let mark = format_spoken_mark(&persisted.instance_id).expect("spoken mark");
+        let output_str = String::from_utf8_lossy(&output_ref.lock().expect("lock")).into_owned();
+        assert!(output_str.contains(&mark));
         peer.shutdown().await;
     });
 }
@@ -270,17 +339,33 @@ fn direct_pairing_without_a_well_formed_journal_id_still_succeeds_with_no_spoken
         let peer = DirectPairingPeer::start().await;
         let temporary = TestDirectory::new("pairing-setup-direct-no-spoken-mark");
         let (environment, _, config_root) = platform_roots(temporary.path(), PlatformKind::Linux);
-        let spoken_mark = setup(
+        let term = TestTerminal::new("continue\n");
+        let output_ref = term.output.clone();
+        let outcome = setup(
             PlatformKind::Linux,
             &environment,
             Cursor::new(peer.pair_link().to_owned()),
+            Some(term),
+            MarkOption::Absent,
         )
-        .await
-        .expect("direct pairing");
-        assert_eq!(
-            spoken_mark, None,
-            "the fixture's direct-pairing instance ID is not a well-formed journal ID"
-        );
+        .await;
+        match outcome {
+            solstone_tmux::pairing_answer::Outcome::Owner { code, lines } => {
+                assert_eq!(code, 0);
+                assert_eq!(lines, vec![PAIRED.to_string()]);
+            }
+            other => panic!("expected Owner outcome 0, got {other:?}"),
+        }
+        let output_str = String::from_utf8_lossy(&output_ref.lock().expect("lock")).into_owned();
+        let step_pos = output_str.find(STEP).expect("step");
+        let mark_pos = output_str.find(MARK_UNAVAILABLE).expect("mark unavailable");
+        let verify_pos = output_str.find(COULDNT_VERIFY).expect("couldn't verify");
+        let body_pos = output_str.find(BODY_UNAVAILABLE).expect("body unavailable");
+        let ask_pos = output_str.find(ASK_UNAVAILABLE).expect("ask unavailable");
+        assert!(step_pos < mark_pos);
+        assert!(mark_pos < verify_pos);
+        assert!(verify_pos < body_pos);
+        assert!(body_pos < ask_pos);
         assert!(config_root.join(CREDENTIALS_FILENAME).is_file());
         peer.shutdown().await;
     });

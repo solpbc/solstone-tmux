@@ -10,7 +10,7 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::Duration;
 
-use solstone_tmux::cli::{CliCommand, parse_args};
+use solstone_tmux::cli::{CliCommand, MarkOption, parse_args};
 use solstone_tmux::health::DiagnosticCode;
 use solstone_tmux::instance_lock::LOCK_FILENAME;
 use solstone_tmux::paths::ensure_private_directory;
@@ -65,7 +65,7 @@ fn private_state_targets_refuse_symlinks_without_changing_referents() {
 fn setup_cli_accepts_no_positional_pair_link() {
     assert_eq!(
         parse_args(["observer".into(), "setup".into()]).expect("parse setup"),
-        CliCommand::Setup
+        CliCommand::Setup(MarkOption::Absent)
     );
     assert!(parse_args(["observer".into(), "setup".into(), "link".into()]).is_err());
 }
@@ -84,12 +84,31 @@ fn invalid_setup_input_creates_no_observer_runtime_state_with_aliased_roots() {
     assert_invalid_setup_input_creates_no_observer_runtime_state(&roots);
 }
 
+fn open_pty() -> (rustix::fd::OwnedFd, std::path::PathBuf) {
+    let master = rustix::pty::openpt(
+        rustix::pty::OpenptFlags::RDWR
+            | rustix::pty::OpenptFlags::NOCTTY
+            | rustix::pty::OpenptFlags::CLOEXEC,
+    )
+    .expect("openpt");
+    rustix::pty::grantpt(&master).expect("grantpt");
+    rustix::pty::unlockpt(&master).expect("unlockpt");
+    let slave_name = rustix::pty::ptsname(&master, Vec::new()).expect("ptsname");
+    (
+        master,
+        std::path::PathBuf::from(slave_name.to_string_lossy().into_owned()),
+    )
+}
+
 fn assert_invalid_setup_input_creates_no_observer_runtime_state(roots: &IsolatedRoots) {
     let input = "sentinel setup input";
     let mut child = Command::new(env!("CARGO_BIN_EXE_solstone-tmux"))
         .arg("setup")
+        .arg("--mark")
+        .arg("test words")
         .env_clear()
         .envs(roots.entries().iter().cloned())
+        .env("SOLSTONE_TMUX_TERMINAL", "-")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -128,10 +147,12 @@ fn setup_serializes_on_the_config_root_before_reading_input_with_aliased_roots()
 }
 
 fn assert_setup_serializes_on_the_config_root_before_reading_input(roots: &IsolatedRoots) {
+    let (_pty_master, slave_path) = open_pty();
     let mut first = Command::new(env!("CARGO_BIN_EXE_solstone-tmux"))
         .arg("setup")
         .env_clear()
         .envs(roots.entries().iter().cloned())
+        .env("SOLSTONE_TMUX_TERMINAL", &slave_path)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -158,6 +179,7 @@ fn assert_setup_serializes_on_the_config_root_before_reading_input(roots: &Isola
         .arg("setup")
         .env_clear()
         .envs(roots.entries().iter().cloned())
+        .env("SOLSTONE_TMUX_TERMINAL", "-")
         .output()
         .expect("run second setup");
     assert_eq!(second.status.code(), Some(1));

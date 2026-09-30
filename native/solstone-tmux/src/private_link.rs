@@ -23,11 +23,11 @@ use spl_transport::pairing::pair_from_link;
 use crate::config::system_hostname;
 use crate::health::DiagnosticCode;
 use crate::instance_lock::InstanceLock;
-use crate::journal_version::VersionRefreshState;
+use crate::journal_version::{VersionRefreshState, hex_encode};
 use crate::paths::{
     Environment, PlatformKind, ensure_private_directory, resolve_config_root, resolve_data_root,
 };
-use crate::post_connect::PostConnectCoordinator;
+use crate::post_connect::{PostConnectCoordinator, compute_pairing_generation};
 use crate::storage::{StorageError, atomic_write_bytes, open_regular_readonly};
 
 pub const CREDENTIALS_FILENAME: &str = "credentials.json";
@@ -300,11 +300,8 @@ pub fn pairing_ceremony_identity(
 }
 
 /// The spoken form of a paired journal's mark: the two chip-tint names and
-/// the two identity words, in the fixed order the mark is always read in
-/// (`vpx/design-system/journal-mark.md` § 2.3, § 8.2's `word·word` naming
-/// convention wherever text runs). `None` when the paired instance ID is not
-/// a well-formed journal ID — this never blocks pairing success, it only
-/// means the confirmation line has no mark to show.
+/// the two identity words, in the fixed order the mark is read in.
+/// `None` when the paired instance ID is not a well-formed journal ID.
 pub fn format_spoken_mark(jid: &str) -> Option<String> {
     let mark = spl_core::mark::mark_from_jid(jid).ok()?;
     let spec = mark.to_render_spec();
@@ -314,25 +311,31 @@ pub fn format_spoken_mark(jid: &str) -> Option<String> {
     ))
 }
 
-pub async fn setup<R>(
+pub async fn setup<R, T>(
     platform: PlatformKind,
     environment: &dyn Environment,
     input: R,
-) -> Result<Option<String>, DiagnosticCode>
+    seat: impl Into<crate::pairing_answer::TerminalSeat<T>>,
+    mark: crate::pairing_answer::MarkOption,
+) -> crate::pairing_answer::Outcome
 where
     R: Read,
+    T: std::io::Read + std::io::Write + Send + 'static,
 {
-    setup_with_identity(platform, environment, input, system_hostname()).await
+    setup_with_identity(platform, environment, input, system_hostname(), seat, mark).await
 }
 
-pub async fn setup_with_identity<R, E>(
+pub async fn setup_with_identity<R, T, E>(
     platform: PlatformKind,
     environment: &dyn Environment,
     input: R,
     hostname: Result<String, E>,
-) -> Result<Option<String>, DiagnosticCode>
+    seat: impl Into<crate::pairing_answer::TerminalSeat<T>>,
+    mark: crate::pairing_answer::MarkOption,
+) -> crate::pairing_answer::Outcome
 where
     R: Read,
+    T: std::io::Read + std::io::Write + Send + 'static,
     E: std::fmt::Debug,
 {
     setup_with_pairer(
@@ -345,38 +348,492 @@ where
                 .await
                 .map_err(|_| DiagnosticCode::PairingFailed)
         },
+        seat,
+        mark,
     )
     .await
 }
 
-async fn setup_with_pairer<R, E, F, Fut>(
+pub async fn setup_with_pairer<R, T, E, F, Fut>(
     platform: PlatformKind,
     environment: &dyn Environment,
     input: R,
     hostname: Result<String, E>,
     pairer: F,
-) -> Result<Option<String>, DiagnosticCode>
+    seat: impl Into<crate::pairing_answer::TerminalSeat<T>>,
+    mark: crate::pairing_answer::MarkOption,
+) -> crate::pairing_answer::Outcome
 where
     R: Read,
+    T: std::io::Read + std::io::Write + Send + 'static,
     E: std::fmt::Debug,
     F: FnOnce(String, String, Map<String, Value>) -> Fut,
     Fut: Future<Output = Result<Credential, DiagnosticCode>>,
 {
-    let data_root =
-        resolve_data_root(platform, environment).map_err(|_| DiagnosticCode::SetupUnavailable)?;
-    let _instance_lock =
-        InstanceLock::acquire_existing(&data_root).map_err(|_| DiagnosticCode::SetupUnavailable)?;
-    let config_root =
-        resolve_config_root(platform, environment).map_err(|_| DiagnosticCode::SetupUnavailable)?;
-    ensure_private_directory(&config_root).map_err(|_| DiagnosticCode::SetupUnavailable)?;
-    let _private_state_lock = acquire_private_state_lock(&config_root)?;
+    use crate::pairing_answer::*;
+    let seat = seat.into();
+
+    let data_root = match resolve_data_root(platform, environment) {
+        Ok(root) => root,
+        Err(_) => return Outcome::Diagnostic(DiagnosticCode::SetupUnavailable),
+    };
+    let _instance_lock = match InstanceLock::acquire_existing(&data_root) {
+        Ok(lock) => lock,
+        Err(_) => return Outcome::Diagnostic(DiagnosticCode::SetupUnavailable),
+    };
+    let config_root = match resolve_config_root(platform, environment) {
+        Ok(root) => root,
+        Err(_) => return Outcome::Diagnostic(DiagnosticCode::SetupUnavailable),
+    };
+    if ensure_private_directory(&config_root).is_err() {
+        return Outcome::Diagnostic(DiagnosticCode::SetupUnavailable);
+    }
+    let _private_state_lock = match acquire_private_state_lock(&config_root) {
+        Ok(lock) => lock,
+        Err(code) => return Outcome::Diagnostic(code),
+    };
+
+    enum TerminalQuestionReader<T> {
+        Production(File),
+        Scripted(T),
+    }
+
+    let mut terminal_reader = match &mark {
+        MarkOption::MissingValue | MarkOption::Repeated => return Outcome::Usage(MARK_USAGE),
+        MarkOption::Value(val) => {
+            let words = split_mark_words(val);
+            if words.is_empty() || words.len() >= 3 {
+                return Outcome::Usage(MARK_USAGE);
+            }
+            None
+        }
+        MarkOption::Absent => match seat {
+            TerminalSeat::Production => {
+                let Some(file) = open_owner_terminal() else {
+                    return Outcome::Owner {
+                        code: 1,
+                        lines: vec![SETUP_NO_TERMINAL.to_owned()],
+                    };
+                };
+                Some(TerminalQuestionReader::Production(file))
+            }
+            TerminalSeat::Scripted(Some(term)) => Some(TerminalQuestionReader::Scripted(term)),
+            TerminalSeat::Scripted(None) => {
+                return Outcome::Owner {
+                    code: 1,
+                    lines: vec![SETUP_NO_TERMINAL.to_owned()],
+                };
+            }
+        },
+    };
+
+    // Grandfather or settle
+    let answer_lock = match acquire_answer_lock(&config_root).await {
+        Ok(lock) => lock,
+        Err(code) => return Outcome::Diagnostic(code),
+    };
+    let grandfather_res = grandfather_or_settle(&config_root);
+    drop(answer_lock);
+    if let Err(code) = grandfather_res {
+        return Outcome::Diagnostic(code);
+    }
+
     let (device_label, additional_fields) = pairing_ceremony_identity(platform, hostname);
-    let link = read_pair_link(input)?;
-    let credential = pairer(link, device_label, additional_fields).await?;
+    let link = match read_pair_link(input) {
+        Ok(link) => link,
+        Err(code) => return Outcome::Diagnostic(code),
+    };
+
+    let credential = match pairer(link, device_label, additional_fields).await {
+        Ok(cred) => cred,
+        Err(code) => return Outcome::Diagnostic(code),
+    };
+
     let spoken_mark = format_spoken_mark(&credential.instance_id);
-    persist_credential(&config_root, &credential)?;
-    crate::journal_version::clear_cached_version(&config_root);
-    Ok(spoken_mark)
+    let is_identified = spoken_mark.is_some();
+    let generation_hex = hex_encode(&compute_pairing_generation(&credential.client_cert_pem));
+
+    match mark {
+        MarkOption::Value(val) => {
+            let eval = evaluate_mark_words(&val, &credential.instance_id);
+            match eval {
+                MarkMatch::Usage => {
+                    retire_credential(&credential, &config_root).await;
+                    Outcome::Usage(MARK_USAGE)
+                }
+                MarkMatch::Match => {
+                    let answer_lock = match acquire_answer_lock(&config_root).await {
+                        Ok(lock) => lock,
+                        Err(code) => return Outcome::Diagnostic(code),
+                    };
+                    if let Err(code) = persist_credential(&config_root, &credential) {
+                        drop(answer_lock);
+                        return Outcome::Diagnostic(code);
+                    }
+                    crate::journal_version::clear_cached_version(&config_root);
+                    let write_ans = write_answer_file(&config_root, &generation_hex);
+                    drop(answer_lock);
+                    if write_ans.is_err() {
+                        Outcome::Owner {
+                            code: 5,
+                            lines: vec![HELD.to_owned(), RUN_LINE.to_owned()],
+                        }
+                    } else {
+                        Outcome::Owner {
+                            code: 0,
+                            lines: vec![PAIRED.to_owned()],
+                        }
+                    }
+                }
+                MarkMatch::ConcatenationMismatch | MarkMatch::Mismatch => {
+                    retire_credential(&credential, &config_root).await;
+                    if !is_identified {
+                        Outcome::Owner {
+                            code: 1,
+                            lines: vec![
+                                COULDNT_VERIFY.to_owned(),
+                                MARK_UNVERIFIABLE_SETUP.to_owned(),
+                            ],
+                        }
+                    } else {
+                        Outcome::Owner {
+                            code: 1,
+                            lines: vec![NOT_PAIRED.to_owned(), MARK_MISMATCH.to_owned()],
+                        }
+                    }
+                }
+            }
+        }
+        MarkOption::Absent => {
+            let decision = match terminal_reader.take().unwrap() {
+                TerminalQuestionReader::Production(file) => {
+                    ask_terminal_question_production(file, &credential.instance_id).await
+                }
+                TerminalQuestionReader::Scripted(mut term) => {
+                    ask_terminal_question_scripted(&mut term, &credential.instance_id).await
+                }
+            };
+            match decision {
+                TerminalDecision::Yes => {
+                    let answer_lock = match acquire_answer_lock(&config_root).await {
+                        Ok(lock) => lock,
+                        Err(code) => return Outcome::Diagnostic(code),
+                    };
+                    if let Err(code) = persist_credential(&config_root, &credential) {
+                        drop(answer_lock);
+                        return Outcome::Diagnostic(code);
+                    }
+                    crate::journal_version::clear_cached_version(&config_root);
+                    let write_ans = write_answer_file(&config_root, &generation_hex);
+                    drop(answer_lock);
+                    if write_ans.is_err() {
+                        Outcome::Owner {
+                            code: 5,
+                            lines: vec![HELD.to_owned(), RUN_LINE.to_owned()],
+                        }
+                    } else {
+                        Outcome::Owner {
+                            code: 0,
+                            lines: vec![PAIRED.to_owned()],
+                        }
+                    }
+                }
+                TerminalDecision::No => {
+                    retire_credential(&credential, &config_root).await;
+                    if is_identified {
+                        Outcome::Owner {
+                            code: 1,
+                            lines: vec![NOT_PAIRED.to_owned(), MISMATCH_BODY.to_owned()],
+                        }
+                    } else {
+                        Outcome::Owner {
+                            code: 1,
+                            lines: vec![CANCEL.to_owned()],
+                        }
+                    }
+                }
+                TerminalDecision::WalkedAway => {
+                    let answer_lock = match acquire_answer_lock(&config_root).await {
+                        Ok(lock) => lock,
+                        Err(code) => return Outcome::Diagnostic(code),
+                    };
+                    let existing_confirmed = match load_credential(&config_root) {
+                        Ok(Some(existing)) => is_pairing_confirmed(&config_root, &existing),
+                        _ => false,
+                    };
+                    if existing_confirmed {
+                        drop(answer_lock);
+                        retire_credential(&credential, &config_root).await;
+                        Outcome::Owner {
+                            code: 1,
+                            lines: vec![CANCEL.to_owned()],
+                        }
+                    } else {
+                        let persist_res = persist_credential(&config_root, &credential);
+                        drop(answer_lock);
+                        if let Err(code) = persist_res {
+                            return Outcome::Diagnostic(code);
+                        }
+                        crate::journal_version::clear_cached_version(&config_root);
+                        Outcome::Owner {
+                            code: 5,
+                            lines: vec![HELD.to_owned(), RUN_LINE.to_owned()],
+                        }
+                    }
+                }
+            }
+        }
+        _ => unreachable!(),
+    }
+}
+
+pub async fn confirm<T>(
+    platform: PlatformKind,
+    environment: &dyn Environment,
+    seat: impl Into<crate::pairing_answer::TerminalSeat<T>>,
+    mark: crate::pairing_answer::MarkOption,
+) -> crate::pairing_answer::Outcome
+where
+    T: std::io::Read + std::io::Write + Send + 'static,
+{
+    use crate::pairing_answer::*;
+    let seat = seat.into();
+
+    match &mark {
+        MarkOption::MissingValue | MarkOption::Repeated => return Outcome::Usage(MARK_USAGE),
+        MarkOption::Value(val) => {
+            let words = split_mark_words(val);
+            if words.is_empty() || words.len() >= 3 {
+                return Outcome::Usage(MARK_USAGE);
+            }
+        }
+        MarkOption::Absent => {}
+    }
+
+    let config_root = match resolve_config_root(platform, environment) {
+        Ok(root) => root,
+        Err(_) => return Outcome::Diagnostic(DiagnosticCode::PrivateStateIo),
+    };
+
+    let _ = ensure_private_directory(&config_root);
+
+    let answer_lock = match acquire_answer_lock(&config_root).await {
+        Ok(lock) => lock,
+        Err(code) => return Outcome::Diagnostic(code),
+    };
+    let grandfather_res = grandfather_or_settle(&config_root);
+    drop(answer_lock);
+    if let Err(code) = grandfather_res {
+        return Outcome::Diagnostic(code);
+    }
+
+    let saved_cred = match load_credential(&config_root) {
+        Ok(Some(cred)) => cred,
+        Ok(None) => {
+            return Outcome::Owner {
+                code: 1,
+                lines: vec![CONFIRM_UNPAIRED.to_owned()],
+            };
+        }
+        Err(DiagnosticCode::PrivateStateInvalid) => {
+            return Outcome::Diagnostic(DiagnosticCode::PrivateStateInvalid);
+        }
+        Err(err) => return Outcome::Diagnostic(err),
+    };
+
+    if is_pairing_confirmed(&config_root, &saved_cred) {
+        return Outcome::Owner {
+            code: 0,
+            lines: vec![CONFIRM_DONE.to_owned()],
+        };
+    }
+
+    enum TerminalQuestionReader<T> {
+        Production(File),
+        Scripted(T),
+    }
+
+    let mut terminal_reader = match &mark {
+        MarkOption::Value(_) => None,
+        MarkOption::Absent => match seat {
+            TerminalSeat::Production => {
+                let Some(file) = open_owner_terminal() else {
+                    return Outcome::Owner {
+                        code: 1,
+                        lines: vec![CONFIRM_NO_TERMINAL.to_owned()],
+                    };
+                };
+                Some(TerminalQuestionReader::Production(file))
+            }
+            TerminalSeat::Scripted(Some(term)) => Some(TerminalQuestionReader::Scripted(term)),
+            TerminalSeat::Scripted(None) => {
+                return Outcome::Owner {
+                    code: 1,
+                    lines: vec![CONFIRM_NO_TERMINAL.to_owned()],
+                };
+            }
+        },
+        _ => unreachable!(),
+    };
+
+    let displayed_gen = hex_encode(&compute_pairing_generation(&saved_cred.client_cert_pem));
+    let is_identified = format_spoken_mark(&saved_cred.instance_id).is_some();
+
+    match mark {
+        MarkOption::Value(val) => {
+            let eval = evaluate_mark_words(&val, &saved_cred.instance_id);
+            match eval {
+                MarkMatch::Usage => Outcome::Usage(MARK_USAGE),
+                MarkMatch::Match => {
+                    let answer_lock = match acquire_answer_lock(&config_root).await {
+                        Ok(lock) => lock,
+                        Err(code) => return Outcome::Diagnostic(code),
+                    };
+                    let current_cred = match load_credential(&config_root) {
+                        Ok(Some(cred)) => cred,
+                        _ => {
+                            drop(answer_lock);
+                            return Outcome::Diagnostic(DiagnosticCode::PrivateStateIo);
+                        }
+                    };
+                    let current_gen =
+                        hex_encode(&compute_pairing_generation(&current_cred.client_cert_pem));
+                    if current_gen != displayed_gen {
+                        drop(answer_lock);
+                        return Outcome::Diagnostic(DiagnosticCode::PrivateStateIo);
+                    }
+                    let write_ans = write_answer_file(&config_root, &displayed_gen);
+                    drop(answer_lock);
+                    if let Err(code) = write_ans {
+                        Outcome::Diagnostic(code)
+                    } else {
+                        Outcome::Owner {
+                            code: 0,
+                            lines: vec![PAIRED.to_owned()],
+                        }
+                    }
+                }
+                MarkMatch::ConcatenationMismatch | MarkMatch::Mismatch => {
+                    if !is_identified {
+                        Outcome::Owner {
+                            code: 5,
+                            lines: vec![MARK_UNVERIFIABLE_CONFIRM.to_owned()],
+                        }
+                    } else {
+                        retire_credential(&saved_cred, &config_root).await;
+                        let answer_lock = match acquire_answer_lock(&config_root).await {
+                            Ok(lock) => lock,
+                            Err(code) => return Outcome::Diagnostic(code),
+                        };
+                        let current_cred = match load_credential(&config_root) {
+                            Ok(Some(cred)) => cred,
+                            _ => {
+                                drop(answer_lock);
+                                return Outcome::Diagnostic(DiagnosticCode::PrivateStateIo);
+                            }
+                        };
+                        let current_gen =
+                            hex_encode(&compute_pairing_generation(&current_cred.client_cert_pem));
+                        if current_gen != displayed_gen {
+                            drop(answer_lock);
+                            return Outcome::Diagnostic(DiagnosticCode::PrivateStateIo);
+                        }
+                        let del_res = delete_credential_file(&config_root);
+                        drop(answer_lock);
+                        if let Err(code) = del_res {
+                            Outcome::Diagnostic(code)
+                        } else {
+                            Outcome::Owner {
+                                code: 1,
+                                lines: vec![NOT_PAIRED.to_owned(), MARK_MISMATCH.to_owned()],
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        MarkOption::Absent => {
+            let decision = match terminal_reader.take().unwrap() {
+                TerminalQuestionReader::Production(file) => {
+                    ask_terminal_question_production(file, &saved_cred.instance_id).await
+                }
+                TerminalQuestionReader::Scripted(mut term) => {
+                    ask_terminal_question_scripted(&mut term, &saved_cred.instance_id).await
+                }
+            };
+            match decision {
+                TerminalDecision::Yes => {
+                    let answer_lock = match acquire_answer_lock(&config_root).await {
+                        Ok(lock) => lock,
+                        Err(code) => return Outcome::Diagnostic(code),
+                    };
+                    let current_cred = match load_credential(&config_root) {
+                        Ok(Some(cred)) => cred,
+                        _ => {
+                            drop(answer_lock);
+                            return Outcome::Diagnostic(DiagnosticCode::PrivateStateIo);
+                        }
+                    };
+                    let current_gen =
+                        hex_encode(&compute_pairing_generation(&current_cred.client_cert_pem));
+                    if current_gen != displayed_gen {
+                        drop(answer_lock);
+                        return Outcome::Diagnostic(DiagnosticCode::PrivateStateIo);
+                    }
+                    let write_ans = write_answer_file(&config_root, &displayed_gen);
+                    drop(answer_lock);
+                    if let Err(code) = write_ans {
+                        Outcome::Diagnostic(code)
+                    } else {
+                        Outcome::Owner {
+                            code: 0,
+                            lines: vec![PAIRED.to_owned()],
+                        }
+                    }
+                }
+                TerminalDecision::No => {
+                    retire_credential(&saved_cred, &config_root).await;
+                    let answer_lock = match acquire_answer_lock(&config_root).await {
+                        Ok(lock) => lock,
+                        Err(code) => return Outcome::Diagnostic(code),
+                    };
+                    let current_cred = match load_credential(&config_root) {
+                        Ok(Some(cred)) => cred,
+                        _ => {
+                            drop(answer_lock);
+                            return Outcome::Diagnostic(DiagnosticCode::PrivateStateIo);
+                        }
+                    };
+                    let current_gen =
+                        hex_encode(&compute_pairing_generation(&current_cred.client_cert_pem));
+                    if current_gen != displayed_gen {
+                        drop(answer_lock);
+                        return Outcome::Diagnostic(DiagnosticCode::PrivateStateIo);
+                    }
+                    let del_res = delete_credential_file(&config_root);
+                    drop(answer_lock);
+                    if let Err(code) = del_res {
+                        Outcome::Diagnostic(code)
+                    } else if is_identified {
+                        Outcome::Owner {
+                            code: 1,
+                            lines: vec![NOT_PAIRED.to_owned(), MISMATCH_BODY.to_owned()],
+                        }
+                    } else {
+                        Outcome::Owner {
+                            code: 1,
+                            lines: vec![CANCEL.to_owned()],
+                        }
+                    }
+                }
+                TerminalDecision::WalkedAway => Outcome::Owner {
+                    code: 5,
+                    lines: vec![HELD.to_owned(), RUN_LINE.to_owned()],
+                },
+            }
+        }
+        _ => unreachable!(),
+    }
 }
 
 pub fn acquire_private_state_lock(config_root: &Path) -> Result<File, DiagnosticCode> {

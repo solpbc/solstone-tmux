@@ -51,7 +51,7 @@ const RETRY_DELAYS: [Duration; 4] = [
 ];
 const PERIODIC_SYNC_INTERVAL: Duration = Duration::from_secs(60);
 const CANDIDATES_PER_BATCH: usize = 8;
-const HEALTH_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
+pub const HEALTH_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SyncActivity {
@@ -2248,6 +2248,8 @@ pub struct SyncTask {
     pub health: HealthWriter,
     pub retention_fence: Arc<RetentionFence>,
     pub identity: RunIdentity,
+    pub health_refresh_interval: Duration,
+    pub answer_lock_timeout: Duration,
 }
 
 impl SyncTask {
@@ -2263,25 +2265,76 @@ impl SyncTask {
             health,
             retention_fence,
             identity,
+            health_refresh_interval,
+            answer_lock_timeout,
         } = self;
-        let load_root = config_root.clone();
-        let loaded = tokio::task::spawn_blocking(move || load_credential(&load_root))
-            .await
-            .map_err(|_| DiagnosticCode::PrivateStateIo)?;
-        let credential = match loaded {
-            Ok(Some(credential)) => credential,
-            Ok(None) => {
-                let facts = SyncFacts::default();
-                refresh_waiting_health(&health, &facts, clock.as_ref(), &mut shutdown).await;
-                return Ok(());
-            }
-            Err(code) => {
-                let mut facts = SyncFacts::default();
-                facts.failed(code);
-                refresh_waiting_health(&health, &facts, clock.as_ref(), &mut shutdown).await;
-                return Ok(());
+
+        let lock_root = config_root.clone();
+        let timeout = answer_lock_timeout;
+        let _ = tokio::task::spawn_blocking(move || {
+            let _lock = crate::pairing_answer::acquire_answer_lock_blocking(&lock_root, timeout)?;
+            crate::pairing_answer::grandfather_or_settle(&lock_root)
+        })
+        .await;
+
+        let credential = loop {
+            let load_root = config_root.clone();
+            let loaded = tokio::task::spawn_blocking(move || load_credential(&load_root))
+                .await
+                .map_err(|_| DiagnosticCode::PrivateStateIo)?;
+            match loaded {
+                Ok(Some(cred)) => {
+                    let ans_root = config_root.clone();
+                    let check_cred = cred.clone();
+                    let confirmed = tokio::task::spawn_blocking(move || {
+                        crate::pairing_answer::is_pairing_confirmed(&ans_root, &check_cred)
+                    })
+                    .await
+                    .unwrap_or(false);
+                    if confirmed {
+                        break cred;
+                    }
+                    let facts = SyncFacts {
+                        paired: true,
+                        held: true,
+                        ..SyncFacts::default()
+                    };
+                    let _ = health
+                        .write(&facts, clock.wall_now().unix_timestamp())
+                        .await;
+                    tokio::select! {
+                        biased;
+                        () = wait_for_shutdown(&mut shutdown) => return Ok(()),
+                        () = tokio::time::sleep(health_refresh_interval) => {},
+                    }
+                }
+                Ok(None) => {
+                    let facts = SyncFacts::default();
+                    let _ = health
+                        .write(&facts, clock.wall_now().unix_timestamp())
+                        .await;
+                    tokio::select! {
+                        biased;
+                        () = wait_for_shutdown(&mut shutdown) => return Ok(()),
+                        () = tokio::time::sleep(health_refresh_interval) => {},
+                    }
+                }
+                Err(code) => {
+                    let mut facts = SyncFacts::default();
+                    facts.failed(code);
+                    refresh_waiting_health(
+                        &health,
+                        &facts,
+                        clock.as_ref(),
+                        &mut shutdown,
+                        health_refresh_interval,
+                    )
+                    .await;
+                    return Ok(());
+                }
             }
         };
+
         let expected_stream = default_stream(&hostname)
             .ok()
             .and_then(|stream| derive_component(&stream).ok())
@@ -2289,7 +2342,14 @@ impl SyncTask {
         if config.stream != expected_stream {
             let mut facts = SyncFacts::default();
             facts.failed(DiagnosticCode::ConfiguredStreamMismatch);
-            refresh_waiting_health(&health, &facts, clock.as_ref(), &mut shutdown).await;
+            refresh_waiting_health(
+                &health,
+                &facts,
+                clock.as_ref(),
+                &mut shutdown,
+                health_refresh_interval,
+            )
+            .await;
             return Ok(());
         }
         let refresh = VersionRefreshState::new(
@@ -2342,12 +2402,12 @@ impl SyncTask {
             let mut scheduler = SyncScheduler::new(
                 data_root.clone(),
                 config.source,
-                clock,
-                wake,
+                clock.clone(),
+                wake.clone(),
                 journal_identity.clone(),
             )
-            .with_observability(activity, health)
-            .with_retention_fence(retention_fence);
+            .with_observability(activity.clone(), health.clone())
+            .with_retention_fence(retention_fence.clone());
             scheduler.facts.paired = true;
             scheduler
                 .run_with_shutdown(&mut journal, shutdown.clone())
@@ -2401,9 +2461,11 @@ async fn refresh_waiting_health(
     facts: &SyncFacts,
     clock: &dyn Clock,
     shutdown: &mut watch::Receiver<bool>,
+    interval: Duration,
 ) {
-    let mut heartbeat = tokio::time::interval(HEALTH_REFRESH_INTERVAL);
+    let mut heartbeat = tokio::time::interval(interval);
     heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let _ = health.write(facts, clock.wall_now().unix_timestamp()).await;
     loop {
         tokio::select! {
             biased;

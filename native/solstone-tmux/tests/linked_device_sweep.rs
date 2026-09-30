@@ -602,6 +602,8 @@ fn ignored_retention_setting_still_removes_a_confirmed_segment_in_the_same_sweep
                 health: HealthWriter::new(fixture.data_root.clone(), &lock),
                 retention_fence: Arc::new(solstone_tmux::sync::RetentionFence::new()),
                 identity: lock.identity().clone(),
+                health_refresh_interval: Duration::from_secs(60),
+                answer_lock_timeout: Duration::from_secs(5),
             }
             .run(shutdown),
         );
@@ -967,6 +969,8 @@ async fn run_binding_failure(
             health: HealthWriter::new(fixture.data_root.clone(), &lock),
             retention_fence: Arc::new(solstone_tmux::sync::RetentionFence::new()),
             identity: lock.identity().clone(),
+            health_refresh_interval: Duration::from_secs(60),
+            answer_lock_timeout: Duration::from_secs(5),
         }
         .run(sync_shutdown),
     );
@@ -1027,6 +1031,8 @@ fn unavailable_bridge_at_start_stays_supervised_with_bounded_retry() {
                 health: HealthWriter::new(fixture.data_root.clone(), &lock),
                 retention_fence: Arc::new(solstone_tmux::sync::RetentionFence::new()),
                 identity: lock.identity().clone(),
+                health_refresh_interval: Duration::from_secs(60),
+                answer_lock_timeout: Duration::from_secs(5),
             }
             .run(shutdown),
         );

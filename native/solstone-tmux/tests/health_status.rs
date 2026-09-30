@@ -141,8 +141,11 @@ fn production_failure_paths_redact_secrets_and_owner_content() {
     let mut command = Command::new(env!("CARGO_BIN_EXE_solstone-tmux"));
     command
         .arg("setup")
+        .arg("--mark")
+        .arg("test words")
         .env_clear()
         .envs(setup_roots.entries().iter().cloned())
+        .env("SOLSTONE_TMUX_TERMINAL", "-")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -156,6 +159,8 @@ fn production_failure_paths_redact_secrets_and_owner_content() {
     let setup_output = setup.wait_with_output().expect("wait for failing setup");
     assert_eq!(setup_output.status.code(), Some(1));
     let setup_stderr = String::from_utf8(setup_output.stderr).expect("setup stderr");
+    assert!(setup_stderr.contains(solstone_tmux::health::DiagnosticCode::PairingFailed.message()));
+    assert!(!setup_stderr.contains(PAIR_LINK_SENTINEL));
 
     runtime().block_on(async {
         let temporary = TestDirectory::new("health-redaction-network");

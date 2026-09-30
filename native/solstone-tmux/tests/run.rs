@@ -146,6 +146,7 @@ fn assert_setup_checks_existing_run_lock_before_pairing_or_private_state_creatio
     let pair_input = "sentinel-pair-input";
     let mut command = fixture.command_for("setup");
     command
+        .env("SOLSTONE_TMUX_TERMINAL", "-")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
