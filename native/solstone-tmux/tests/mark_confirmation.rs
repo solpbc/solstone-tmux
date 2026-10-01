@@ -2694,6 +2694,13 @@ fn retire_through_setup_and_confirm() {
                     }
                 );
                 assert!(!ctx.roots.config_root().join(CREDENTIALS_FILENAME).exists());
+                // The peer's handler task sees the closed carrier a few milliseconds after
+                // setup returns, so give it a bounded moment. A carrier the client left
+                // open keeps its handler alive well past this window.
+                let closed_by = Instant::now() + Duration::from_secs(2);
+                while ctx.peer.active_carrier_handlers() != 0 && Instant::now() < closed_by {
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
                 assert_eq!(ctx.peer.active_carrier_handlers(), 0);
                 assert_journal_retire(&ctx.peer, &expected_sha, 200, 0);
                 if relay {
