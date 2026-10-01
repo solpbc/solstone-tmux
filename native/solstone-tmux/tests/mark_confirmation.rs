@@ -2306,6 +2306,40 @@ fn pairing_gate_uploads_after_confirm() {
 fn retire_through_setup_and_confirm() {
     runtime().block_on(async {
         for relay in [false, true] {
+            // Relay pairing responses can carry stale direct addresses. Even a
+            // reachable TCP listener that never completes TLS must not prevent
+            // the rejection from removing this device over the relay.
+            if relay {
+                let mut ctx = RefusalContext::new(true, "retire-stale-lan", test_jid()).await;
+                let stale_lan = TcpListener::bind("127.0.0.1:0").expect("stale LAN listener");
+                stale_lan.set_nonblocking(true).expect("nonblocking");
+                ctx.cred
+                    .endpoints
+                    .push(spl_transport::credential::EndpointAddr {
+                        host: "127.0.0.1".to_string(),
+                        port: stale_lan.local_addr().expect("address").port(),
+                    });
+                let expected_sha = ctx.peer.expected_client_sha256();
+                let cred_call = ctx.cred.clone();
+                let outcome = setup_with_pairer(
+                    current_platform(),
+                    &ctx.env,
+                    Cursor::new(b"link"),
+                    Ok::<String, &'static str>("test-host".to_string()),
+                    |_link, _dev, _fields| async move { Ok(cred_call) },
+                    TerminalSeat::Scripted(Some(TestTerminal::new("no\n"))),
+                    MarkOption::Absent,
+                )
+                .await;
+                assert!(matches!(outcome, Outcome::Owner { code: 1, .. }));
+                assert_journal_retire(&ctx.peer, &expected_sha, 200, 0);
+                assert!(
+                    stale_lan.accept().is_err(),
+                    "retirement dialed a stale LAN address"
+                );
+                ctx.shutdown().await;
+            }
+
             // 1. Setup No -> exactly 1 DELETE, exit 1
             {
                 let ctx = RefusalContext::new(relay, "retire-setup-no", test_jid()).await;

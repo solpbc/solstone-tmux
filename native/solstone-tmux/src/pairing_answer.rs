@@ -525,7 +525,19 @@ pub async fn retire_credential(credential: &Credential, config_root: &Path) {
                 lock_inode: 0,
             },
         );
-        let Ok(bridge) = PrivateLinkBridge::start(credential.clone(), None, refresh).await else {
+        // A relay pairing may also advertise LAN addresses that are no longer
+        // reachable. Use its relay for this bounded rejection cleanup so those
+        // addresses cannot consume the entire retirement deadline.
+        let mut retirement_credential = credential.clone();
+        if matches!(
+            (credential.relay_origin.as_deref(), credential.device_token.as_deref()),
+            (Some(origin), Some(token)) if !origin.is_empty() && !token.is_empty()
+        ) {
+            retirement_credential.endpoints.clear();
+            retirement_credential.local_endpoints = None;
+        }
+        let Ok(bridge) = PrivateLinkBridge::start(retirement_credential, None, refresh).await
+        else {
             return;
         };
         let Ok(client) = JournalClient::bootstrap(&bridge).await else {
