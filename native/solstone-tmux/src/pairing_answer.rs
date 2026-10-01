@@ -533,7 +533,39 @@ pub async fn retire_credential(credential: &Credential, config_root: &Path) {
             return;
         };
         if let Ok(request) = client.request(reqwest::Method::DELETE, &path) {
-            let _ = request.send().await;
+            let mut status = bridge.subscribe_status();
+            let mut carrier_live = status.initial().carrier_live;
+            let send = request.send();
+            tokio::pin!(send);
+            let mut send_finished = false;
+            loop {
+                if carrier_live {
+                    break;
+                }
+                tokio::select! {
+                    biased;
+                    _ = &mut send => {
+                        send_finished = true;
+                        break;
+                    }
+                    update = status.recv() => {
+                        carrier_live = match update {
+                            Ok(snapshot) => snapshot.carrier_live,
+                            Err(_) => bridge.status().carrier_live,
+                        };
+                    }
+                }
+            }
+            if !send_finished {
+                // The bridge marks the carrier live when the dial finishes, before the
+                // DELETE frames are written. Shutdown aborts the carrier writer. Wait
+                // until those frames can be flushed, then close.
+                tokio::select! {
+                    biased;
+                    _ = &mut send => {}
+                    _ = tokio::time::sleep(Duration::from_millis(50)) => {}
+                }
+            }
         }
         bridge.shutdown().await;
     })

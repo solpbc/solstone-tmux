@@ -16,7 +16,7 @@ use spl_transport::client::{DialedCarrier, TokenPersistHook, TransportClient};
 use spl_transport::credential::Credential;
 use spl_transport::journal_bridge::{
     BridgePolicy, CapabilityGate, CarrierOpener, JournalBridgeConfig, JournalBridgeHandle,
-    JournalBridgeTerminalReason,
+    JournalBridgeStatus, JournalBridgeStatusSubscription, JournalBridgeTerminalReason,
 };
 use spl_transport::pairing::pair_from_link;
 
@@ -261,6 +261,14 @@ impl PrivateLinkBridge {
 
     pub fn opener(&self) -> &Arc<PrivateLinkOpener> {
         &self.opener
+    }
+
+    pub fn status(&self) -> JournalBridgeStatus {
+        self.handle.status()
+    }
+
+    pub fn subscribe_status(&self) -> JournalBridgeStatusSubscription {
+        self.handle.subscribe_status()
     }
 
     /// Why the bridge stopped dialing, if it has: the journal refused this device

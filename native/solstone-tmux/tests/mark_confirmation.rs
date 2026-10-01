@@ -2663,6 +2663,47 @@ fn retire_through_setup_and_confirm() {
                 }
                 ctx.shutdown().await;
             }
+
+            // 10. Journal accepts the carrier and does not answer: setup no finishes within 10s and the carrier handler is gone
+            {
+                let ctx = RefusalContext::new(relay, "retire-unanswered", test_jid()).await;
+                let expected_sha = ctx.peer.expected_client_sha256();
+                ctx.peer
+                    .enqueue_delayed_response(Duration::from_secs(60), 200, vec![]);
+                let cred_call = ctx.cred.clone();
+
+                let start = Instant::now();
+                let outcome = setup_with_pairer(
+                    PlatformKind::Linux,
+                    &ctx.env,
+                    Cursor::new(b"link"),
+                    Ok::<String, &'static str>("test-host".to_string()),
+                    |_link, _dev, _fields| async move { Ok(cred_call) },
+                    TerminalSeat::Scripted(Some(TestTerminal::new("no\n"))),
+                    MarkOption::Absent,
+                )
+                .await;
+
+                assert!(start.elapsed() < Duration::from_secs(10));
+                assert!(start.elapsed() < Duration::from_secs(60));
+                assert_eq!(
+                    outcome,
+                    Outcome::Owner {
+                        code: 1,
+                        lines: vec![NOT_PAIRED.to_string(), MISMATCH_BODY.to_string()],
+                    }
+                );
+                assert!(!ctx.roots.config_root().join(CREDENTIALS_FILENAME).exists());
+                assert_eq!(ctx.peer.active_carrier_handlers(), 0);
+                assert_journal_retire(&ctx.peer, &expected_sha, 200, 0);
+                if relay {
+                    assert_eq!(
+                        ctx.relay_server.as_ref().unwrap().refresh_requests().len(),
+                        1
+                    );
+                }
+                ctx.shutdown().await;
+            }
         }
     });
 }

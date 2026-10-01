@@ -195,6 +195,7 @@ struct PeerState {
     upload_stalled: Arc<Notify>,
     current_stream: Arc<AtomicU32>,
     accepted: Arc<AtomicUsize>,
+    active_carrier_handlers: Arc<AtomicUsize>,
     refusal_alert: Arc<AtomicU8>,
     expected_client_sha256: Arc<Mutex<Option<String>>>,
 }
@@ -274,6 +275,7 @@ impl PrivateLinkPeer {
             upload_stalled: Arc::new(Notify::new()),
             current_stream: Arc::new(AtomicU32::new(0)),
             accepted: Arc::new(AtomicUsize::new(0)),
+            active_carrier_handlers: Arc::new(AtomicUsize::new(0)),
             refusal_alert,
             expected_client_sha256: Arc::new(Mutex::new(Some(client_sha256))),
         };
@@ -643,6 +645,10 @@ impl PrivateLinkPeer {
         self.state.accepted.load(Ordering::SeqCst)
     }
 
+    pub fn active_carrier_handlers(&self) -> usize {
+        self.state.active_carrier_handlers.load(Ordering::SeqCst)
+    }
+
     pub async fn shutdown(self) {
         self.task.abort();
         let _ = self.task.await;
@@ -781,6 +787,25 @@ fn credential_and_acceptor(port: u16, refusal: Arc<AtomicU8>) -> (Credential, Tl
     )
 }
 
+struct ActiveHandler {
+    counter: Arc<AtomicUsize>,
+}
+
+impl ActiveHandler {
+    fn enter(state: &PeerState) -> Self {
+        state.active_carrier_handlers.fetch_add(1, Ordering::SeqCst);
+        Self {
+            counter: Arc::clone(&state.active_carrier_handlers),
+        }
+    }
+}
+
+impl Drop for ActiveHandler {
+    fn drop(&mut self) {
+        self.counter.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 async fn serve(
     listener: TcpListener,
     acceptor: TlsAcceptor,
@@ -799,6 +824,7 @@ async fn serve(
         let state = state.clone();
         let control_rx = controls.subscribe();
         tokio::spawn(async move {
+            let _guard = ActiveHandler::enter(&state);
             let _ = handle_carrier(tls, state, control_rx).await;
         });
     }
@@ -1372,17 +1398,15 @@ async fn handle_relay_connection(
         let ws = tokio_tungstenite::accept_async(tcp)
             .await
             .map_err(io::Error::other)?;
-        let peer_tcp = TcpStream::connect(("127.0.0.1", peer_port)).await?;
-        let (relay_side, home_side) = tokio::io::duplex(64 * 1024);
+        let mut peer_tcp = TcpStream::connect(("127.0.0.1", peer_port)).await?;
+        let (relay_side, mut home_side) = tokio::io::duplex(64 * 1024);
         tokio::spawn(async move {
             let _ = pump_ws(ws, relay_side).await;
         });
-        let (mut home_read, mut home_write) = tokio::io::split(home_side);
-        let (mut peer_read, mut peer_write) = tokio::io::split(peer_tcp);
-        let _ = tokio::join!(
-            tokio::io::copy(&mut home_read, &mut peer_write),
-            tokio::io::copy(&mut peer_read, &mut home_write),
-        );
+        // A client disconnect has to half-close the journal socket. Leaving
+        // that socket open until the journal writes keeps the carrier handler
+        // running when the DELETE is never answered.
+        let _ = tokio::io::copy_bidirectional(&mut home_side, &mut peer_tcp).await;
         Ok(())
     } else {
         let mut buf = [0u8; 4096];
