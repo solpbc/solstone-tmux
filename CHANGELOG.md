@@ -8,7 +8,6 @@ Format adapted from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
-- if your journal accepts the connection and then doesn't answer when setup or confirm is removing this computer from it, that step now finishes and the connection closes. before, setup and confirm kept waiting on that answer.
 - this is a security fix: setup now asks you to confirm your journal's mark, and nothing waiting on this computer goes to the journal until you confirm it's your journal. before, setup finished pairing first and only printed the mark, so anything waiting could go before you had checked it, even to a journal that wasn't yours. if setup can't ask you (run from a script, say), it now needs the mark's two words, shown in your journal's network app, with --mark. if you paired before this update, you won't be asked.
 - if you change time zones while solstone-tmux is running, new terminal text goes into your journal under your new local time within a few minutes. before, it kept the time zone it started with until it restarted.
 - when the clocks go back an hour, solstone-tmux keeps going through the repeated hour. before, it could stop until it restarted.
