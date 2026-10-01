@@ -85,12 +85,11 @@ fn invalid_setup_input_creates_no_observer_runtime_state_with_aliased_roots() {
 }
 
 fn open_pty() -> (rustix::fd::OwnedFd, std::path::PathBuf) {
-    let master = rustix::pty::openpt(
-        rustix::pty::OpenptFlags::RDWR
-            | rustix::pty::OpenptFlags::NOCTTY
-            | rustix::pty::OpenptFlags::CLOEXEC,
-    )
-    .expect("openpt");
+    // OpenptFlags has no CLOEXEC on macOS, so set close-on-exec after opening.
+    let master =
+        rustix::pty::openpt(rustix::pty::OpenptFlags::RDWR | rustix::pty::OpenptFlags::NOCTTY)
+            .expect("openpt");
+    rustix::io::fcntl_setfd(&master, rustix::io::FdFlags::CLOEXEC).expect("set close-on-exec");
     rustix::pty::grantpt(&master).expect("grantpt");
     rustix::pty::unlockpt(&master).expect("unlockpt");
     let slave_name = rustix::pty::ptsname(&master, Vec::new()).expect("ptsname");

@@ -19,12 +19,13 @@ use solstone_tmux::health::{DiagnosticCode, HealthWriter};
 use solstone_tmux::instance_lock::InstanceLock;
 use solstone_tmux::journal_version::hex_encode;
 use solstone_tmux::pairing_answer::*;
-use solstone_tmux::paths::{PlatformKind, ensure_private_directory};
+use solstone_tmux::paths::ensure_private_directory;
 use solstone_tmux::post_connect::compute_pairing_generation;
 use solstone_tmux::private_link::{
     CREDENTIALS_FILENAME, acquire_private_state_lock, confirm, format_spoken_mark, load_credential,
     persist_credential, setup_with_pairer,
 };
+use solstone_tmux::service::current_platform;
 use solstone_tmux::storage::{AtomicWriteFault, set_atomic_write_fault_for_path};
 use solstone_tmux::sync::{RetentionFence, SyncTask, SyncWake};
 use spl_core::ca::extract_spki_der;
@@ -434,7 +435,7 @@ fn mark_argument_before_stdin() {
             let pairer_flag = Arc::clone(&pairer_called);
 
             let outcome = setup_with_pairer(
-                PlatformKind::Linux,
+                current_platform(),
                 &env,
                 reader,
                 Ok::<String, &'static str>("test-host".to_string()),
@@ -461,7 +462,7 @@ fn mark_argument_before_stdin() {
         };
         let pairer_flag = Arc::clone(&pairer_called);
         let outcome = setup_with_pairer(
-            PlatformKind::Linux,
+            current_platform(),
             &env,
             reader,
             Ok::<String, &'static str>("test-host".to_string()),
@@ -499,7 +500,7 @@ fn mark_argument_before_stdin() {
         let outcome = ANSWER_LOCK_TIMEOUT_OVERRIDE
             .scope(Duration::from_millis(200), async {
                 setup_with_pairer(
-                    PlatformKind::Linux,
+                    current_platform(),
                     &env,
                     reader,
                     Ok::<String, &'static str>("test-host".to_string()),
@@ -602,7 +603,7 @@ fn setup_answers_and_reread() {
             let cred_call = mut_cred.clone();
 
             let outcome = setup_with_pairer(
-                PlatformKind::Linux,
+                current_platform(),
                 &env,
                 Cursor::new(b"link"),
                 Ok::<String, &'static str>("test-host".to_string()),
@@ -633,7 +634,7 @@ fn setup_answers_and_reread() {
             let cred_call = mut_cred.clone();
 
             let outcome = setup_with_pairer(
-                PlatformKind::Linux,
+                current_platform(),
                 &env,
                 Cursor::new(b"link"),
                 Ok::<String, &'static str>("test-host".to_string()),
@@ -664,7 +665,7 @@ fn setup_answers_and_reread() {
             let cred_call = mut_cred.clone();
 
             let outcome = setup_with_pairer(
-                PlatformKind::Linux,
+                current_platform(),
                 &env,
                 Cursor::new(b"link"),
                 Ok::<String, &'static str>("test-host".to_string()),
@@ -695,7 +696,7 @@ fn setup_answers_and_reread() {
             let cred_call = mut_cred.clone();
 
             let outcome = setup_with_pairer(
-                PlatformKind::Linux,
+                current_platform(),
                 &env,
                 Cursor::new(b"link"),
                 Ok::<String, &'static str>("test-host".to_string()),
@@ -726,7 +727,7 @@ fn setup_answers_and_reread() {
             let cred_call = mut_cred.clone();
 
             let outcome = setup_with_pairer(
-                PlatformKind::Linux,
+                current_platform(),
                 &env,
                 Cursor::new(b"link"),
                 Ok::<String, &'static str>("test-host".to_string()),
@@ -757,7 +758,7 @@ fn setup_answers_and_reread() {
             let cred_call = mut_cred.clone();
 
             let outcome = setup_with_pairer(
-                PlatformKind::Linux,
+                current_platform(),
                 &env,
                 Cursor::new(b"link"),
                 Ok::<String, &'static str>("test-host".to_string()),
@@ -790,7 +791,7 @@ fn setup_answers_and_reread() {
             let out_ref = Arc::clone(&term.output);
 
             let outcome = setup_with_pairer(
-                PlatformKind::Linux,
+                current_platform(),
                 &env,
                 Cursor::new(b"link"),
                 Ok::<String, &'static str>("test-host".to_string()),
@@ -824,7 +825,7 @@ fn setup_answers_and_reread() {
             let out_ref = Arc::clone(&term.output);
 
             let outcome = setup_with_pairer(
-                PlatformKind::Linux,
+                current_platform(),
                 &env,
                 Cursor::new(b"link"),
                 Ok::<String, &'static str>("test-host".to_string()),
@@ -862,7 +863,7 @@ fn setup_answers_and_reread() {
             set_atomic_write_fault_for_path(&ans_path, Some(AtomicWriteFault::FailBeforeRename));
 
             let outcome = setup_with_pairer(
-                PlatformKind::Linux,
+                current_platform(),
                 &env,
                 Cursor::new(b"link"),
                 Ok::<String, &'static str>("test-host".to_string()),
@@ -1018,7 +1019,7 @@ fn mark_argument_words() {
             let cred_call = mut_cred.clone();
 
             let outcome = setup_with_pairer(
-                PlatformKind::Linux,
+                current_platform(),
                 &env,
                 Cursor::new(b"link"),
                 Ok::<String, &'static str>("test-host".to_string()),
@@ -1061,7 +1062,7 @@ fn mark_argument_words() {
             let cred_call = mut_cred.clone();
 
             let outcome = setup_with_pairer(
-                PlatformKind::Linux,
+                current_platform(),
                 &env,
                 Cursor::new(b"link"),
                 Ok::<String, &'static str>("test-host".to_string()),
@@ -1092,7 +1093,7 @@ fn mark_argument_words() {
             let cred_call = mut_cred.clone();
 
             let outcome = setup_with_pairer(
-                PlatformKind::Linux,
+                current_platform(),
                 &env,
                 Cursor::new(b"link"),
                 Ok::<String, &'static str>("test-host".to_string()),
@@ -1134,7 +1135,7 @@ fn mark_argument_words() {
 
             for bad_mark in ["word", "one two three", "", &format!("{w1}{w2}")] {
                 let outcome = confirm(
-                    PlatformKind::Linux,
+                    current_platform(),
                     &env,
                     TerminalSeat::Scripted(None::<Cursor<Vec<u8>>>),
                     MarkOption::Value(bad_mark.to_string()),
@@ -1168,7 +1169,7 @@ fn mark_argument_words() {
             ensure_private_directory(&roots.config_root()).expect("config");
 
             let outcome = confirm(
-                PlatformKind::Linux,
+                current_platform(),
                 &env,
                 TerminalSeat::Scripted(None::<Cursor<Vec<u8>>>),
                 MarkOption::Value("word".to_string()),
@@ -1197,7 +1198,7 @@ fn mark_argument_words() {
             let before_ans = fs::read(roots.config_root().join(ANSWER_FILENAME)).unwrap();
 
             let outcome = confirm(
-                PlatformKind::Linux,
+                current_platform(),
                 &env,
                 TerminalSeat::Scripted(None::<Cursor<Vec<u8>>>),
                 MarkOption::Value("word".to_string()),
@@ -1232,7 +1233,7 @@ fn mark_argument_words() {
             write_answer_file(&roots.config_root(), "").expect("write answer");
 
             let outcome = confirm(
-                PlatformKind::Linux,
+                current_platform(),
                 &env,
                 TerminalSeat::Scripted(None::<Cursor<Vec<u8>>>),
                 MarkOption::Value("some words".to_string()),
@@ -1283,7 +1284,7 @@ fn repair_keeps_confirmed_credential() {
             let initial_bytes = fs::read(roots.config_root().join(CREDENTIALS_FILENAME)).unwrap();
 
             let outcome = setup_with_pairer(
-                PlatformKind::Linux,
+                current_platform(),
                 &env,
                 Cursor::new(b"link"),
                 Ok::<String, &'static str>("test-host".to_string()),
@@ -1327,7 +1328,7 @@ fn repair_keeps_confirmed_credential() {
             let initial_bytes = fs::read(roots.config_root().join(CREDENTIALS_FILENAME)).unwrap();
 
             let outcome = setup_with_pairer(
-                PlatformKind::Linux,
+                current_platform(),
                 &env,
                 Cursor::new(b"link"),
                 Ok::<String, &'static str>("test-host".to_string()),
@@ -1372,7 +1373,7 @@ fn repair_keeps_confirmed_credential() {
             let initial_bytes = fs::read(roots.config_root().join(CREDENTIALS_FILENAME)).unwrap();
 
             let outcome = setup_with_pairer(
-                PlatformKind::Linux,
+                current_platform(),
                 &env,
                 Cursor::new(b"link"),
                 Ok::<String, &'static str>("test-host".to_string()),
@@ -1416,7 +1417,7 @@ fn repair_keeps_confirmed_credential() {
             let initial_bytes = fs::read(roots.config_root().join(CREDENTIALS_FILENAME)).unwrap();
 
             let outcome = setup_with_pairer(
-                PlatformKind::Linux,
+                current_platform(),
                 &env,
                 Cursor::new(b"link"),
                 Ok::<String, &'static str>("test-host".to_string()),
@@ -1460,7 +1461,7 @@ fn repair_keeps_confirmed_credential() {
             let initial_bytes = fs::read(roots.config_root().join(CREDENTIALS_FILENAME)).unwrap();
 
             let outcome = setup_with_pairer(
-                PlatformKind::Linux,
+                current_platform(),
                 &env,
                 Cursor::new(b"link"),
                 Ok::<String, &'static str>("test-host".to_string()),
@@ -1494,7 +1495,7 @@ fn repair_keeps_confirmed_credential() {
             let initial_bytes = fs::read(roots.config_root().join(CREDENTIALS_FILENAME)).unwrap();
 
             let outcome = setup_with_pairer(
-                PlatformKind::Linux,
+                current_platform(),
                 &env,
                 Cursor::new(b"link"),
                 Ok::<String, &'static str>("test-host".to_string()),
@@ -1539,7 +1540,7 @@ fn repair_keeps_confirmed_credential() {
             let initial_bytes = fs::read(roots.config_root().join(CREDENTIALS_FILENAME)).unwrap();
 
             let outcome = setup_with_pairer(
-                PlatformKind::Linux,
+                current_platform(),
                 &env,
                 Cursor::new(b"link"),
                 Ok::<String, &'static str>("test-host".to_string()),
@@ -1593,7 +1594,7 @@ fn repair_keeps_confirmed_credential() {
             write_answer_file(&roots.config_root(), "").expect("held answer");
 
             let outcome = setup_with_pairer(
-                PlatformKind::Linux,
+                current_platform(),
                 &env,
                 Cursor::new(b"link"),
                 Ok::<String, &'static str>("test-host".to_string()),
@@ -1714,7 +1715,7 @@ fn confirm_binds_the_displayed_generation() {
             write_answer_file(&roots.config_root(), "").expect("write answer");
 
             let outcome = confirm(
-                PlatformKind::Linux,
+                current_platform(),
                 &env,
                 TerminalSeat::Scripted(Some(TestTerminal::new("yes\n"))),
                 MarkOption::Absent,
@@ -1741,7 +1742,7 @@ fn confirm_binds_the_displayed_generation() {
             write_answer_file(&roots.config_root(), "").expect("write answer");
 
             let outcome = confirm(
-                PlatformKind::Linux,
+                current_platform(),
                 &env,
                 TerminalSeat::Scripted(Some(TestTerminal::new("no\n"))),
                 MarkOption::Absent,
@@ -1775,7 +1776,7 @@ fn confirm_binds_the_displayed_generation() {
             write_answer_file(&roots.config_root(), "").expect("write answer");
 
             let outcome = confirm(
-                PlatformKind::Linux,
+                current_platform(),
                 &env,
                 TerminalSeat::Scripted(None::<Cursor<Vec<u8>>>),
                 MarkOption::Absent,
@@ -1799,7 +1800,7 @@ fn confirm_binds_the_displayed_generation() {
             let env = FakeEnvironment::from_paths(roots.entries().iter().cloned());
 
             let outcome = confirm(
-                PlatformKind::Linux,
+                current_platform(),
                 &env,
                 TerminalSeat::Scripted(None::<Cursor<Vec<u8>>>),
                 MarkOption::Absent,
@@ -1865,7 +1866,7 @@ fn confirm_binds_the_displayed_generation() {
                 fs::read(roots.config_root().join(CREDENTIALS_FILENAME)).expect("read cred");
 
             let outcome = confirm(
-                PlatformKind::Linux,
+                current_platform(),
                 &env,
                 TerminalSeat::Scripted(None::<Cursor<Vec<u8>>>),
                 MarkOption::Absent,
@@ -1912,7 +1913,7 @@ fn confirm_binds_the_displayed_generation() {
             let term = SwappingTerminal::new("yes\n", roots.config_root(), cred_z.clone());
 
             let outcome = confirm(
-                PlatformKind::Linux,
+                current_platform(),
                 &env,
                 TerminalSeat::Scripted(Some(term)),
                 MarkOption::Absent,
@@ -1954,7 +1955,7 @@ fn confirm_binds_the_displayed_generation() {
             let term = SwappingTerminal::new("no\n", roots.config_root(), cred_z.clone());
 
             let outcome = confirm(
-                PlatformKind::Linux,
+                current_platform(),
                 &env,
                 TerminalSeat::Scripted(Some(term)),
                 MarkOption::Absent,
@@ -2085,7 +2086,7 @@ fn grandfather_bytes_and_malformed_credential() {
 
             let read_called = Arc::new(AtomicBool::new(false));
             let outcome = setup_with_pairer(
-                PlatformKind::Linux,
+                current_platform(),
                 &env,
                 TrackingReader {
                     read_called: Arc::clone(&read_called),
@@ -2119,7 +2120,7 @@ fn grandfather_bytes_and_malformed_credential() {
             let cred_call = valid_cred.clone();
 
             let outcome = setup_with_pairer(
-                PlatformKind::Linux,
+                current_platform(),
                 &env,
                 Cursor::new(b"link"),
                 Ok::<String, &'static str>("test-host".to_string()),
@@ -2312,7 +2313,7 @@ fn retire_through_setup_and_confirm() {
                 let cred_call = ctx.cred.clone();
 
                 let outcome = setup_with_pairer(
-                    PlatformKind::Linux,
+                    current_platform(),
                     &ctx.env,
                     Cursor::new(b"link"),
                     Ok::<String, &'static str>("test-host".to_string()),
@@ -2352,7 +2353,7 @@ fn retire_through_setup_and_confirm() {
                 let cred_call = ctx.cred.clone();
 
                 let outcome = setup_with_pairer(
-                    PlatformKind::Linux,
+                    current_platform(),
                     &ctx.env,
                     Cursor::new(b"link"),
                     Ok::<String, &'static str>("test-host".to_string()),
@@ -2387,7 +2388,7 @@ fn retire_through_setup_and_confirm() {
                 let cred_call = ctx.cred.clone();
 
                 let outcome = setup_with_pairer(
-                    PlatformKind::Linux,
+                    current_platform(),
                     &ctx.env,
                     Cursor::new(b"link"),
                     Ok::<String, &'static str>("test-host".to_string()),
@@ -2427,7 +2428,7 @@ fn retire_through_setup_and_confirm() {
                 let cred_call = ctx.cred.clone();
 
                 let outcome = setup_with_pairer(
-                    PlatformKind::Linux,
+                    current_platform(),
                     &ctx.env,
                     Cursor::new(b"link"),
                     Ok::<String, &'static str>("test-host".to_string()),
@@ -2476,7 +2477,7 @@ fn retire_through_setup_and_confirm() {
                 let cred_y_call = ctx_y.cred.clone();
 
                 let outcome = setup_with_pairer(
-                    PlatformKind::Linux,
+                    current_platform(),
                     &ctx_y.env,
                     Cursor::new(b"link"),
                     Ok::<String, &'static str>("test-host".to_string()),
@@ -2528,7 +2529,7 @@ fn retire_through_setup_and_confirm() {
                 write_answer_file(&ctx.roots.config_root(), "").expect("write answer");
 
                 let outcome = confirm(
-                    PlatformKind::Linux,
+                    current_platform(),
                     &ctx.env,
                     TerminalSeat::Scripted(Some(TestTerminal::new("no\n"))),
                     MarkOption::Absent,
@@ -2563,7 +2564,7 @@ fn retire_through_setup_and_confirm() {
                 write_answer_file(&ctx.roots.config_root(), "").expect("write answer");
 
                 let outcome = confirm(
-                    PlatformKind::Linux,
+                    current_platform(),
                     &ctx.env,
                     TerminalSeat::Scripted(None::<Cursor<Vec<u8>>>),
                     MarkOption::Value("wrong mark".to_string()),
@@ -2599,7 +2600,7 @@ fn retire_through_setup_and_confirm() {
 
                 let start = Instant::now();
                 let outcome = setup_with_pairer(
-                    PlatformKind::Linux,
+                    current_platform(),
                     &ctx.env,
                     Cursor::new(b"link"),
                     Ok::<String, &'static str>("test-host".to_string()),
@@ -2639,7 +2640,7 @@ fn retire_through_setup_and_confirm() {
                 write_answer_file(&ctx.roots.config_root(), "").expect("write answer");
 
                 let outcome = confirm(
-                    PlatformKind::Linux,
+                    current_platform(),
                     &ctx.env,
                     TerminalSeat::Scripted(Some(TestTerminal::new("no\n"))),
                     MarkOption::Absent,
@@ -2674,7 +2675,7 @@ fn retire_through_setup_and_confirm() {
 
                 let start = Instant::now();
                 let outcome = setup_with_pairer(
-                    PlatformKind::Linux,
+                    current_platform(),
                     &ctx.env,
                     Cursor::new(b"link"),
                     Ok::<String, &'static str>("test-host".to_string()),
