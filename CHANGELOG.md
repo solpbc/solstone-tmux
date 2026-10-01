@@ -6,6 +6,8 @@ Format adapted from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [2.0.10] - 2026-10-01
+
 ### Fixed
 
 - this is a security fix: setup now asks you to confirm your journal's mark, and nothing waiting on this computer goes to the journal until you confirm it's your journal. before, setup finished pairing first and only printed the mark, so anything waiting could go before you had checked it, even to a journal that wasn't yours. if setup can't ask you (run from a script, say), it now needs the mark's two words, shown in your journal's network app, with --mark. if you paired before this update, you won't be asked.
