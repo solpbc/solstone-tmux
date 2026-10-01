@@ -31,8 +31,80 @@ use spl_core::ca::extract_spki_der;
 use spl_core::relay_window::jid_from_spki;
 use spl_transport::credential::Credential;
 use support::pairing_peer::DirectPairingPeer;
-use support::private_link_peer::PrivateLinkPeer;
+use support::private_link_peer::{PrivateLinkPeer, RelayServer};
 use support::{FakeEnvironment, IsolatedRoots, TestDirectory};
+
+fn assert_journal_retire(
+    peer: &PrivateLinkPeer,
+    expected_sha: &str,
+    expected_status: u16,
+    index: usize,
+) {
+    assert_eq!(peer.requests().len(), index + 1);
+    assert_eq!(peer.requests()[index].method(), "DELETE");
+    assert_eq!(
+        peer.requests()[index].path(),
+        format!("/app/network/api/clients/sha256:{expected_sha}")
+    );
+    assert_eq!(
+        peer.requests()[index].response_status(),
+        Some(expected_status)
+    );
+    assert_eq!(peer.system_status_request_count(), 0);
+    assert_eq!(peer.clients_self_request_count(), 0);
+    assert_eq!(peer.relay_access_request_count(), 0);
+    assert_eq!(peer.accepted_carriers(), index + 1);
+}
+
+fn hung_up_stdio() -> Stdio {
+    let (reader, writer) = std::io::pipe().expect("pipe");
+    drop(reader);
+    Stdio::from(writer)
+}
+
+struct RefusalContext {
+    _temp: TestDirectory,
+    roots: IsolatedRoots,
+    env: FakeEnvironment,
+    peer: PrivateLinkPeer,
+    relay_server: Option<RelayServer>,
+    cred: Credential,
+}
+
+impl RefusalContext {
+    async fn new(relay: bool, name: &str, instance_id: String) -> Self {
+        let temp = TestDirectory::new(name);
+        let roots = IsolatedRoots::new(temp.path());
+        let env = FakeEnvironment::from_paths(roots.entries().iter().cloned());
+        ensure_private_directory(&roots.config_root()).expect("config");
+
+        let peer = PrivateLinkPeer::start().await;
+        let (relay_server, mut cred) = if relay {
+            let server = peer.start_relay_server().await;
+            let cred = peer.relay_credential(server.origin());
+            (Some(server), cred)
+        } else {
+            (None, peer.credential())
+        };
+        cred.instance_id = instance_id;
+
+        Self {
+            _temp: temp,
+            roots,
+            env,
+            peer,
+            relay_server,
+            cred,
+        }
+    }
+
+    async fn shutdown(self) {
+        if let Some(server) = self.relay_server {
+            server.shutdown().await;
+        }
+        self.peer.shutdown().await;
+    }
+}
 
 fn runtime() -> tokio::runtime::Runtime {
     tokio::runtime::Builder::new_multi_thread()
@@ -341,9 +413,14 @@ fn mark_argument_before_stdin() {
         let env = FakeEnvironment::from_paths(roots.entries().iter().cloned());
         ensure_private_directory(&roots.config_root()).expect("config root");
 
+        let jid = test_jid();
+        let (w1, w2) = extract_journal_mark_words(&jid).expect("words");
         let bad_options = vec![
-            MarkOption::Value("".to_string()),
+            MarkOption::Value(w1.clone()),
             MarkOption::Value("one two three".to_string()),
+            MarkOption::Value("bramblequokka".to_string()),
+            MarkOption::Value(format!("{w1}{w2}")),
+            MarkOption::Value("".to_string()),
             MarkOption::Repeated,
             MarkOption::MissingValue,
         ];
@@ -605,9 +682,7 @@ fn setup_answers_and_reread() {
                 }
             );
             assert!(!roots.config_root().join(CREDENTIALS_FILENAME).exists());
-            let reqs = peer.requests();
-            assert!(reqs.iter().any(|r| r.method() == "DELETE"
-                && r.path() == format!("/app/network/api/clients/sha256:{expected_sha}")));
+            assert_journal_retire(&peer, &expected_sha, 200, 0);
         }
 
         // 4. "cancel" with malformed jid ("test-pairing-instance") -> code 1 [CANCEL], saves nothing
@@ -638,6 +713,7 @@ fn setup_answers_and_reread() {
                 }
             );
             assert!(!roots.config_root().join(CREDENTIALS_FILENAME).exists());
+            assert_journal_retire(&peer, &expected_sha, 200, 1);
         }
 
         // 5. EOF -> code 5 [HELD, RUN_LINE], credential saved, unconfirmed
@@ -831,8 +907,8 @@ fn setup_signal_at_the_prompt() {
             .envs(roots.entries().iter().cloned())
             .env("SOLSTONE_TMUX_TERMINAL", &slave_path)
             .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stdout(hung_up_stdio())
+            .stderr(hung_up_stdio())
             .spawn()
             .expect("spawn setup");
 
@@ -962,13 +1038,21 @@ fn mark_argument_words() {
             assert!(is_pairing_confirmed(&roots.config_root(), &mut_cred));
         }
 
-        // Swapped words, bram blequokka split, concatenation retire and exit 1
+        // Swapped words, bram blequokka split, boundary split retire and exit 1
+        let boundary = format!("{} {}{}", &w1[..1], &w1[1..], w2);
+        let split_boundary = split_mark_words(&boundary);
+        assert_eq!(split_boundary.len(), 2);
+        assert!(
+            !split_boundary[0].eq_ignore_ascii_case(&w1)
+                || !split_boundary[1].eq_ignore_ascii_case(&w2)
+        );
+
         let mismatch_variations = vec![
             format!("{w2} {w1}"),
             format!("{} {}", &w1[..1], &w1[1..]),
-            format!("{w1}{w2}"),
+            boundary,
         ];
-        for val in mismatch_variations {
+        for (index, val) in mismatch_variations.into_iter().enumerate() {
             let temp = TestDirectory::new("mark-words-mismatch");
             let roots = IsolatedRoots::new(temp.path());
             let env = FakeEnvironment::from_paths(roots.entries().iter().cloned());
@@ -995,6 +1079,7 @@ fn mark_argument_words() {
                 }
             );
             assert!(!roots.config_root().join(CREDENTIALS_FILENAME).exists());
+            assert_journal_retire(&peer, &expected_sha, 200, index);
         }
 
         // Two words when format_spoken_mark is None: setup saves nothing, exit 1, [COULDNT_VERIFY, MARK_UNVERIFIABLE_SETUP], and DELETE happened
@@ -1028,48 +1113,26 @@ fn mark_argument_words() {
                 }
             );
             assert!(!roots.config_root().join(CREDENTIALS_FILENAME).exists());
-        }
-
-        // Single word on setup: exit 2 MARK_USAGE, and DELETE still happened
-        {
-            let temp = TestDirectory::new("mark-words-single-setup");
-            let roots = IsolatedRoots::new(temp.path());
-            let env = FakeEnvironment::from_paths(roots.entries().iter().cloned());
-            let mut mut_cred = cred.clone();
-            mut_cred.instance_id = jid.clone();
-            let cred_call = mut_cred.clone();
-
-            let outcome = setup_with_pairer(
-                PlatformKind::Linux,
-                &env,
-                Cursor::new(b"link"),
-                Ok::<String, &'static str>("test-host".to_string()),
-                |_link, _dev, _fields| async move { Ok(cred_call) },
-                TerminalSeat::Scripted(None::<Cursor<Vec<u8>>>),
-                MarkOption::Value("oneword".to_string()),
-            )
-            .await;
-
-            assert_eq!(outcome, Outcome::Usage(MARK_USAGE));
-            assert!(!roots.config_root().join(CREDENTIALS_FILENAME).exists());
-            let reqs = peer.requests();
-            assert!(reqs.iter().any(|r| r.method() == "DELETE"
-                && r.path() == format!("/app/network/api/clients/sha256:{expected_sha}")));
+            assert_journal_retire(&peer, &expected_sha, 200, 3);
         }
 
         // Confirm, with credential already held:
-        // one word, three words, empty -> exit 2 with nothing changed and no DELETE
+        // one word, three words, empty, concatenation -> exit 2 with nothing changed and no DELETE (fresh peer)
         {
+            let fresh_peer = PrivateLinkPeer::start().await;
+            let mut fresh_cred = fresh_peer.credential();
+            fresh_cred.instance_id = jid.clone();
+
             let temp = TestDirectory::new("mark-words-confirm-held");
             let roots = IsolatedRoots::new(temp.path());
             let env = FakeEnvironment::from_paths(roots.entries().iter().cloned());
             ensure_private_directory(&roots.config_root()).expect("config");
-            let mut mut_cred = cred.clone();
-            mut_cred.instance_id = jid.clone();
-            persist_credential(&roots.config_root(), &mut_cred).expect("persist");
+            persist_credential(&roots.config_root(), &fresh_cred).expect("persist");
             write_answer_file(&roots.config_root(), "").expect("write answer");
+            let before_cred = fs::read(roots.config_root().join(CREDENTIALS_FILENAME)).unwrap();
+            let before_ans = fs::read(roots.config_root().join(ANSWER_FILENAME)).unwrap();
 
-            for bad_mark in ["word", "one two three", ""] {
+            for bad_mark in ["word", "one two three", "", &format!("{w1}{w2}")] {
                 let outcome = confirm(
                     PlatformKind::Linux,
                     &env,
@@ -1078,26 +1141,83 @@ fn mark_argument_words() {
                 )
                 .await;
                 assert_eq!(outcome, Outcome::Usage(MARK_USAGE));
-                assert!(roots.config_root().join(CREDENTIALS_FILENAME).exists());
-                assert!(roots.config_root().join(ANSWER_FILENAME).exists());
+                assert_eq!(
+                    fs::read(roots.config_root().join(CREDENTIALS_FILENAME)).unwrap(),
+                    before_cred
+                );
+                assert_eq!(
+                    fs::read(roots.config_root().join(ANSWER_FILENAME)).unwrap(),
+                    before_ans
+                );
+                assert_eq!(fresh_peer.requests().len(), 0);
+                assert_eq!(fresh_peer.system_status_request_count(), 0);
+                assert_eq!(fresh_peer.clients_self_request_count(), 0);
+                assert_eq!(fresh_peer.relay_access_request_count(), 0);
+                assert_eq!(fresh_peer.accepted_carriers(), 0);
             }
 
-            // Concatenation on confirm deletes
+            fresh_peer.shutdown().await;
+        }
+
+        // Confirm of one word with no credentials.json (config dir exists):
+        // Outcome::Usage(MARK_USAGE), and neither credentials.json nor pairing-answer.json appears
+        {
+            let temp = TestDirectory::new("mark-words-confirm-no-cred");
+            let roots = IsolatedRoots::new(temp.path());
+            let env = FakeEnvironment::from_paths(roots.entries().iter().cloned());
+            ensure_private_directory(&roots.config_root()).expect("config");
+
             let outcome = confirm(
                 PlatformKind::Linux,
                 &env,
                 TerminalSeat::Scripted(None::<Cursor<Vec<u8>>>),
-                MarkOption::Value(format!("{w1}{w2}")),
+                MarkOption::Value("word".to_string()),
             )
             .await;
-            assert_eq!(
-                outcome,
-                Outcome::Owner {
-                    code: 1,
-                    lines: vec![NOT_PAIRED.to_string(), MARK_MISMATCH.to_string()],
-                }
-            );
+            assert_eq!(outcome, Outcome::Usage(MARK_USAGE));
             assert!(!roots.config_root().join(CREDENTIALS_FILENAME).exists());
+            assert!(!roots.config_root().join(ANSWER_FILENAME).exists());
+        }
+
+        // Confirm of one word against an already-confirmed pairing:
+        // Outcome::Usage(MARK_USAGE), both files byte-identical, zero requests on a fresh peer
+        {
+            let fresh_peer = PrivateLinkPeer::start().await;
+            let mut fresh_cred = fresh_peer.credential();
+            fresh_cred.instance_id = jid.clone();
+            let generation = hex_encode(&compute_pairing_generation(&fresh_cred.client_cert_pem));
+
+            let temp = TestDirectory::new("mark-words-confirm-confirmed");
+            let roots = IsolatedRoots::new(temp.path());
+            let env = FakeEnvironment::from_paths(roots.entries().iter().cloned());
+            ensure_private_directory(&roots.config_root()).expect("config");
+            persist_credential(&roots.config_root(), &fresh_cred).expect("persist");
+            write_answer_file(&roots.config_root(), &generation).expect("write answer");
+            let before_cred = fs::read(roots.config_root().join(CREDENTIALS_FILENAME)).unwrap();
+            let before_ans = fs::read(roots.config_root().join(ANSWER_FILENAME)).unwrap();
+
+            let outcome = confirm(
+                PlatformKind::Linux,
+                &env,
+                TerminalSeat::Scripted(None::<Cursor<Vec<u8>>>),
+                MarkOption::Value("word".to_string()),
+            )
+            .await;
+            assert_eq!(outcome, Outcome::Usage(MARK_USAGE));
+            assert_eq!(
+                fs::read(roots.config_root().join(CREDENTIALS_FILENAME)).unwrap(),
+                before_cred
+            );
+            assert_eq!(
+                fs::read(roots.config_root().join(ANSWER_FILENAME)).unwrap(),
+                before_ans
+            );
+            assert_eq!(fresh_peer.requests().len(), 0);
+            assert_eq!(fresh_peer.system_status_request_count(), 0);
+            assert_eq!(fresh_peer.clients_self_request_count(), 0);
+            assert_eq!(fresh_peer.relay_access_request_count(), 0);
+            assert_eq!(fresh_peer.accepted_carriers(), 0);
+            fresh_peer.shutdown().await;
         }
 
         // Confirm two words when mark unavailable: files unchanged, exit 5, [MARK_UNVERIFIABLE_CONFIRM]
@@ -1188,6 +1308,12 @@ fn repair_keeps_confirmed_credential() {
                 initial_bytes
             );
             assert!(is_pairing_confirmed(&roots.config_root(), &cred_x));
+            assert_journal_retire(&peer_new, &expected_sha_new, 200, 0);
+            assert_eq!(peer_x.requests().len(), 0);
+            assert_eq!(peer_x.accepted_carriers(), 0);
+            assert_eq!(peer_x.system_status_request_count(), 0);
+            assert_eq!(peer_x.clients_self_request_count(), 0);
+            assert_eq!(peer_x.relay_access_request_count(), 0);
         }
 
         // 2. Re-pairing with confirmed cred X: "cancel" leaves X bytes identical and confirmed
@@ -1227,6 +1353,12 @@ fn repair_keeps_confirmed_credential() {
                 initial_bytes
             );
             assert!(is_pairing_confirmed(&roots.config_root(), &cred_x));
+            assert_journal_retire(&peer_new, &expected_sha_new, 200, 1);
+            assert_eq!(peer_x.requests().len(), 0);
+            assert_eq!(peer_x.accepted_carriers(), 0);
+            assert_eq!(peer_x.system_status_request_count(), 0);
+            assert_eq!(peer_x.clients_self_request_count(), 0);
+            assert_eq!(peer_x.relay_access_request_count(), 0);
         }
 
         // 3. Re-pairing with confirmed cred X: mismatch --mark leaves X bytes identical and confirmed
@@ -1265,6 +1397,12 @@ fn repair_keeps_confirmed_credential() {
                 initial_bytes
             );
             assert!(is_pairing_confirmed(&roots.config_root(), &cred_x));
+            assert_journal_retire(&peer_new, &expected_sha_new, 200, 2);
+            assert_eq!(peer_x.requests().len(), 0);
+            assert_eq!(peer_x.accepted_carriers(), 0);
+            assert_eq!(peer_x.system_status_request_count(), 0);
+            assert_eq!(peer_x.clients_self_request_count(), 0);
+            assert_eq!(peer_x.relay_access_request_count(), 0);
         }
 
         // 4. Re-pairing with confirmed cred X: EOF (walk away) leaves X confirmed and prints CANCEL, exit 1
@@ -1303,6 +1441,12 @@ fn repair_keeps_confirmed_credential() {
                 initial_bytes
             );
             assert!(is_pairing_confirmed(&roots.config_root(), &cred_x));
+            assert_journal_retire(&peer_new, &expected_sha_new, 200, 3);
+            assert_eq!(peer_x.requests().len(), 0);
+            assert_eq!(peer_x.accepted_carriers(), 0);
+            assert_eq!(peer_x.system_status_request_count(), 0);
+            assert_eq!(peer_x.clients_self_request_count(), 0);
+            assert_eq!(peer_x.relay_access_request_count(), 0);
         }
 
         // 5. Re-pairing with confirmed cred X: ceremony Err leaves X bytes identical and confirmed
@@ -1332,6 +1476,12 @@ fn repair_keeps_confirmed_credential() {
                 initial_bytes
             );
             assert!(is_pairing_confirmed(&roots.config_root(), &cred_x));
+            assert_eq!(peer_new.requests().len(), 4);
+            assert_eq!(peer_x.requests().len(), 0);
+            assert_eq!(peer_x.accepted_carriers(), 0);
+            assert_eq!(peer_x.system_status_request_count(), 0);
+            assert_eq!(peer_x.clients_self_request_count(), 0);
+            assert_eq!(peer_x.relay_access_request_count(), 0);
         }
 
         // 5b. Absent answer file + EOF: grandfathering writes X's generation, X confirmed & byte-identical, DELETE sent for new cert to peer_new, 0 to peer_x
@@ -1371,10 +1521,12 @@ fn repair_keeps_confirmed_credential() {
             assert!(is_pairing_confirmed(&roots.config_root(), &cred_x));
             let ans = read_answer_file(&roots.config_root()).unwrap().unwrap();
             assert_eq!(ans.confirmed, gen_x);
-            let reqs_new = peer_new.requests();
-            assert!(reqs_new.iter().any(|r| r.method() == "DELETE"
-                && r.path() == format!("/app/network/api/clients/sha256:{expected_sha_new}")));
+            assert_journal_retire(&peer_new, &expected_sha_new, 200, 4);
             assert_eq!(peer_x.requests().len(), 0);
+            assert_eq!(peer_x.accepted_carriers(), 0);
+            assert_eq!(peer_x.system_status_request_count(), 0);
+            assert_eq!(peer_x.clients_self_request_count(), 0);
+            assert_eq!(peer_x.relay_access_request_count(), 0);
         }
 
         // 5c. Absent answer file + "no": grandfathering writes X's generation, X confirmed & byte-identical, DELETE sent for new cert to peer_new, 0 to peer_x
@@ -1414,10 +1566,62 @@ fn repair_keeps_confirmed_credential() {
             assert!(is_pairing_confirmed(&roots.config_root(), &cred_x));
             let ans = read_answer_file(&roots.config_root()).unwrap().unwrap();
             assert_eq!(ans.confirmed, gen_x);
-            let reqs_new = peer_new.requests();
-            assert!(reqs_new.iter().any(|r| r.method() == "DELETE"
-                && r.path() == format!("/app/network/api/clients/sha256:{expected_sha_new}")));
+            assert_journal_retire(&peer_new, &expected_sha_new, 200, 5);
             assert_eq!(peer_x.requests().len(), 0);
+            assert_eq!(peer_x.accepted_carriers(), 0);
+            assert_eq!(peer_x.system_status_request_count(), 0);
+            assert_eq!(peer_x.clients_self_request_count(), 0);
+            assert_eq!(peer_x.relay_access_request_count(), 0);
+        }
+
+        // 5d. Held-only walk-away with two fresh peers: credential H stored, answer file "", pairer returns N -> exit 5 HELD, RUN_LINE, N stored, is_status_held true, no DELETE
+        {
+            let peer_h = PrivateLinkPeer::start().await;
+            let mut cred_h = peer_h.credential();
+            cred_h.instance_id = test_jid();
+
+            let peer_n = PrivateLinkPeer::start().await;
+            let mut cred_n = peer_n.credential();
+            cred_n.instance_id = test_jid();
+            let cred_n_call = cred_n.clone();
+
+            let temp = TestDirectory::new("repair-ans-held-walkaway");
+            let roots = IsolatedRoots::new(temp.path());
+            let env = FakeEnvironment::from_paths(roots.entries().iter().cloned());
+            ensure_private_directory(&roots.config_root()).expect("config");
+            persist_credential(&roots.config_root(), &cred_h).expect("persist H");
+            write_answer_file(&roots.config_root(), "").expect("held answer");
+
+            let outcome = setup_with_pairer(
+                PlatformKind::Linux,
+                &env,
+                Cursor::new(b"link"),
+                Ok::<String, &'static str>("test-host".to_string()),
+                |_link, _dev, _fields| async move { Ok(cred_n_call) },
+                TerminalSeat::Scripted(Some(TestTerminal::new(""))),
+                MarkOption::Absent,
+            )
+            .await;
+
+            assert_eq!(
+                outcome,
+                Outcome::Owner {
+                    code: 5,
+                    lines: vec![HELD.to_string(), RUN_LINE.to_string()],
+                }
+            );
+            let stored_bytes = fs::read(roots.config_root().join(CREDENTIALS_FILENAME)).unwrap();
+            let n_bytes = serde_json::to_vec(&cred_n).unwrap();
+            let h_bytes = serde_json::to_vec(&cred_h).unwrap();
+            assert_eq!(stored_bytes, n_bytes);
+            assert_ne!(stored_bytes, h_bytes);
+            assert!(!is_pairing_confirmed(&roots.config_root(), &cred_n));
+            assert!(is_status_held(&roots.config_root()));
+            assert_eq!(peer_h.requests().len(), 0);
+            assert_eq!(peer_n.requests().len(), 0);
+
+            peer_h.shutdown().await;
+            peer_n.shutdown().await;
         }
 
         peer_x.shutdown().await;
@@ -1449,8 +1653,8 @@ fn repair_keeps_confirmed_credential() {
             .envs(roots.entries().iter().cloned())
             .env("SOLSTONE_TMUX_TERMINAL", &slave_path)
             .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stdout(hung_up_stdio())
+            .stderr(hung_up_stdio())
             .spawn()
             .expect("spawn setup");
 
@@ -1553,9 +1757,12 @@ fn confirm_binds_the_displayed_generation() {
             );
             assert!(!roots.config_root().join(CREDENTIALS_FILENAME).exists());
             assert!(roots.config_root().join(ANSWER_FILENAME).exists());
-            let reqs = peer.requests();
-            assert!(reqs.iter().any(|r| r.method() == "DELETE"
-                && r.path() == format!("/app/network/api/clients/sha256:{expected_sha}")));
+            assert_journal_retire(&peer, &expected_sha, 200, 0);
+
+            // Persist credential again with leftover confirmed == "" -> reads held
+            persist_credential(&roots.config_root(), &cred).expect("persist after drop");
+            assert!(is_status_held(&roots.config_root()));
+            assert!(!is_pairing_confirmed(&roots.config_root(), &cred));
         }
 
         // 3. No terminal and no --mark on a held file changes nothing, exit 1, CONFIRM_NO_TERMINAL
@@ -1760,16 +1967,9 @@ fn confirm_binds_the_displayed_generation() {
             assert_eq!(cred_bytes, z_expected_bytes);
             let ans_record = read_answer_file(&roots.config_root()).unwrap().unwrap();
             assert_eq!(ans_record.confirmed, "");
-            let y_certs = spl_transport::tls::parse_certs(&cred_y.client_cert_pem).unwrap();
-            let y_der_sha = spl_core::ca::sha256_hex(y_certs[0].as_ref());
-            let reqs_y = peer_y.requests();
-            assert_eq!(reqs_y.len(), 1);
-            assert_eq!(reqs_y[0].method(), "DELETE");
-            assert_eq!(
-                reqs_y[0].path(),
-                format!("/app/network/api/clients/sha256:{y_der_sha}")
-            );
+            assert_journal_retire(&peer_y, &peer_y.expected_client_sha256(), 200, 0);
             assert_eq!(peer_z.requests().len(), 0);
+            assert_eq!(peer_z.accepted_carriers(), 0);
 
             peer_y.shutdown().await;
             peer_z.shutdown().await;
@@ -1854,8 +2054,24 @@ fn grandfather_bytes_and_malformed_credential() {
 
                 let mut perms = fs::metadata(&ans_path).expect("metadata").permissions();
                 perms.set_mode(0o600);
-                let _ = fs::set_permissions(&ans_path, perms);
+                fs::set_permissions(&ans_path, perms).expect("restore 0600");
+                assert_eq!(fs::read(&ans_path).unwrap(), bad_bytes);
             }
+        }
+
+        // Valid 64 lowercase hex confirmed value different from credential generation: is_status_held true, is_pairing_confirmed false
+        {
+            let temp = TestDirectory::new("gf-held-hex");
+            let config_root = temp.path().join("config");
+            ensure_private_directory(&config_root).expect("config");
+            persist_credential(&config_root, &cred).expect("persist");
+            let mut hex_val = "0".repeat(64);
+            if hex_val == generation {
+                hex_val = format!("1{}", &hex_val[1..]);
+            }
+            write_answer_file(&config_root, &hex_val).expect("write valid held hex");
+            assert!(is_status_held(&config_root));
+            assert!(!is_pairing_confirmed(&config_root, &cred));
         }
 
         // Fault the settle write: setup exits 1 before stdin
@@ -1944,7 +2160,13 @@ fn pairing_gate_uploads_after_confirm() {
         let mut cred = peer.credential();
         cred.instance_id = test_jid();
         persist_credential(&roots.config_root(), &cred).expect("persist");
-        write_answer_file(&roots.config_root(), "wrong_generation").expect("write held answer");
+
+        let generation = hex_encode(&compute_pairing_generation(&cred.client_cert_pem));
+        let mut held_hex = "0".repeat(64);
+        if held_hex == generation {
+            held_hex = format!("1{}", &held_hex[1..]);
+        }
+        write_answer_file(&roots.config_root(), &held_hex).expect("write held answer");
 
         let cand1 = roots
             .data_root()
@@ -2082,389 +2304,365 @@ fn pairing_gate_uploads_after_confirm() {
 #[test]
 fn retire_through_setup_and_confirm() {
     runtime().block_on(async {
-        // 1. Setup No: direct peer -> exactly 1 DELETE, exit 1
-        {
-            let peer = PrivateLinkPeer::start().await;
-            let temp = TestDirectory::new("retire-setup-no");
-            let roots = IsolatedRoots::new(temp.path());
-            let env = FakeEnvironment::from_paths(roots.entries().iter().cloned());
-            ensure_private_directory(&roots.config_root()).expect("config");
+        for relay in [false, true] {
+            // 1. Setup No -> exactly 1 DELETE, exit 1
+            {
+                let ctx = RefusalContext::new(relay, "retire-setup-no", test_jid()).await;
+                let expected_sha = ctx.peer.expected_client_sha256();
+                let cred_call = ctx.cred.clone();
 
-            let mut cred = peer.credential();
-            cred.instance_id = test_jid();
-            let cred_call = cred.clone();
-            let certs = spl_transport::tls::parse_certs(&cred.client_cert_pem).expect("parse");
-            let cert_der = certs.first().expect("der");
-            let expected_sha = spl_core::ca::sha256_hex(cert_der.as_ref());
+                let outcome = setup_with_pairer(
+                    PlatformKind::Linux,
+                    &ctx.env,
+                    Cursor::new(b"link"),
+                    Ok::<String, &'static str>("test-host".to_string()),
+                    |_link, _dev, _fields| async move { Ok(cred_call) },
+                    TerminalSeat::Scripted(Some(TestTerminal::new("no\n"))),
+                    MarkOption::Absent,
+                )
+                .await;
 
-            let outcome = setup_with_pairer(
-                PlatformKind::Linux,
-                &env,
-                Cursor::new(b"link"),
-                Ok::<String, &'static str>("test-host".to_string()),
-                |_link, _dev, _fields| async move { Ok(cred_call) },
-                TerminalSeat::Scripted(Some(TestTerminal::new("no\n"))),
-                MarkOption::Absent,
-            )
-            .await;
-
-            assert_eq!(
-                outcome,
-                Outcome::Owner {
-                    code: 1,
-                    lines: vec![NOT_PAIRED.to_string(), MISMATCH_BODY.to_string()],
+                assert_eq!(
+                    outcome,
+                    Outcome::Owner {
+                        code: 1,
+                        lines: vec![NOT_PAIRED.to_string(), MISMATCH_BODY.to_string()],
+                    }
+                );
+                assert!(!ctx.roots.config_root().join(CREDENTIALS_FILENAME).exists());
+                assert_journal_retire(&ctx.peer, &expected_sha, 200, 0);
+                if relay {
+                    assert_eq!(
+                        ctx.relay_server.as_ref().unwrap().refresh_requests().len(),
+                        1
+                    );
                 }
-            );
-            assert_eq!(peer.requests().len(), 1);
-            assert_eq!(peer.requests()[0].method(), "DELETE");
-            assert_eq!(
-                peer.requests()[0].path(),
-                format!("/app/network/api/clients/sha256:{expected_sha}")
-            );
-            assert!(!roots.config_root().join(CREDENTIALS_FILENAME).exists());
-            peer.shutdown().await;
-        }
+                ctx.shutdown().await;
+            }
 
-        // 2. Setup Cancel (malformed instance ID) -> exactly 1 DELETE, exit 1, CANCEL
-        {
-            let peer = PrivateLinkPeer::start().await;
-            let temp = TestDirectory::new("retire-setup-cancel");
-            let roots = IsolatedRoots::new(temp.path());
-            let env = FakeEnvironment::from_paths(roots.entries().iter().cloned());
-            ensure_private_directory(&roots.config_root()).expect("config");
+            // 2. Setup Cancel (malformed instance ID) -> exactly 1 DELETE, exit 1, CANCEL
+            {
+                let ctx = RefusalContext::new(
+                    relay,
+                    "retire-setup-cancel",
+                    "malformed-instance".to_string(),
+                )
+                .await;
+                let expected_sha = ctx.peer.expected_client_sha256();
+                let cred_call = ctx.cred.clone();
 
-            let mut cred = peer.credential();
-            cred.instance_id = "malformed-instance".to_string();
-            let cred_call = cred.clone();
-            let certs = spl_transport::tls::parse_certs(&cred.client_cert_pem).expect("parse");
-            let cert_der = certs.first().expect("der");
-            let expected_sha = spl_core::ca::sha256_hex(cert_der.as_ref());
+                let outcome = setup_with_pairer(
+                    PlatformKind::Linux,
+                    &ctx.env,
+                    Cursor::new(b"link"),
+                    Ok::<String, &'static str>("test-host".to_string()),
+                    |_link, _dev, _fields| async move { Ok(cred_call) },
+                    TerminalSeat::Scripted(Some(TestTerminal::new("cancel\n"))),
+                    MarkOption::Absent,
+                )
+                .await;
 
-            let outcome = setup_with_pairer(
-                PlatformKind::Linux,
-                &env,
-                Cursor::new(b"link"),
-                Ok::<String, &'static str>("test-host".to_string()),
-                |_link, _dev, _fields| async move { Ok(cred_call) },
-                TerminalSeat::Scripted(Some(TestTerminal::new("cancel\n"))),
-                MarkOption::Absent,
-            )
-            .await;
-
-            assert_eq!(
-                outcome,
-                Outcome::Owner {
-                    code: 1,
-                    lines: vec![CANCEL.to_string()],
+                assert_eq!(
+                    outcome,
+                    Outcome::Owner {
+                        code: 1,
+                        lines: vec![CANCEL.to_string()],
+                    }
+                );
+                assert!(!ctx.roots.config_root().join(CREDENTIALS_FILENAME).exists());
+                assert_journal_retire(&ctx.peer, &expected_sha, 200, 0);
+                if relay {
+                    assert_eq!(
+                        ctx.relay_server.as_ref().unwrap().refresh_requests().len(),
+                        1
+                    );
                 }
-            );
-            assert_eq!(peer.requests().len(), 1);
-            assert_eq!(peer.requests()[0].method(), "DELETE");
-            assert_eq!(
-                peer.requests()[0].path(),
-                format!("/app/network/api/clients/sha256:{expected_sha}")
-            );
-            peer.shutdown().await;
-        }
+                ctx.shutdown().await;
+            }
 
-        // 3. Setup --mark mismatch -> exactly 1 DELETE, exit 1
-        {
-            let peer = PrivateLinkPeer::start().await;
-            let temp = TestDirectory::new("retire-setup-mismatch");
-            let roots = IsolatedRoots::new(temp.path());
-            let env = FakeEnvironment::from_paths(roots.entries().iter().cloned());
-            ensure_private_directory(&roots.config_root()).expect("config");
+            // 3. Setup --mark mismatch -> exactly 1 DELETE, exit 1
+            {
+                let ctx = RefusalContext::new(relay, "retire-setup-mismatch", test_jid()).await;
+                let expected_sha = ctx.peer.expected_client_sha256();
+                let cred_call = ctx.cred.clone();
 
-            let mut cred = peer.credential();
-            cred.instance_id = test_jid();
-            let cred_call = cred.clone();
-            let certs = spl_transport::tls::parse_certs(&cred.client_cert_pem).expect("parse");
-            let cert_der = certs.first().expect("der");
-            let expected_sha = spl_core::ca::sha256_hex(cert_der.as_ref());
+                let outcome = setup_with_pairer(
+                    PlatformKind::Linux,
+                    &ctx.env,
+                    Cursor::new(b"link"),
+                    Ok::<String, &'static str>("test-host".to_string()),
+                    |_link, _dev, _fields| async move { Ok(cred_call) },
+                    TerminalSeat::Scripted(None::<Cursor<Vec<u8>>>),
+                    MarkOption::Value("wrong mark".to_string()),
+                )
+                .await;
 
-            let outcome = setup_with_pairer(
-                PlatformKind::Linux,
-                &env,
-                Cursor::new(b"link"),
-                Ok::<String, &'static str>("test-host".to_string()),
-                |_link, _dev, _fields| async move { Ok(cred_call) },
-                TerminalSeat::Scripted(None::<Cursor<Vec<u8>>>),
-                MarkOption::Value("wrong mark".to_string()),
-            )
-            .await;
-
-            assert_eq!(
-                outcome,
-                Outcome::Owner {
-                    code: 1,
-                    lines: vec![NOT_PAIRED.to_string(), MARK_MISMATCH.to_string()],
+                assert_eq!(
+                    outcome,
+                    Outcome::Owner {
+                        code: 1,
+                        lines: vec![NOT_PAIRED.to_string(), MARK_MISMATCH.to_string()],
+                    }
+                );
+                assert!(!ctx.roots.config_root().join(CREDENTIALS_FILENAME).exists());
+                assert_journal_retire(&ctx.peer, &expected_sha, 200, 0);
+                if relay {
+                    assert_eq!(
+                        ctx.relay_server.as_ref().unwrap().refresh_requests().len(),
+                        1
+                    );
                 }
-            );
-            assert_eq!(peer.requests().len(), 1);
-            assert_eq!(
-                peer.requests()[0].path(),
-                format!("/app/network/api/clients/sha256:{expected_sha}")
-            );
-            peer.shutdown().await;
-        }
+                ctx.shutdown().await;
+            }
 
-        // 4. Setup two-word --mark when mark unavailable -> exactly 1 DELETE, exit 1
-        {
-            let peer = PrivateLinkPeer::start().await;
-            let temp = TestDirectory::new("retire-setup-unverifiable");
-            let roots = IsolatedRoots::new(temp.path());
-            let env = FakeEnvironment::from_paths(roots.entries().iter().cloned());
-            ensure_private_directory(&roots.config_root()).expect("config");
+            // 4. Setup two-word --mark when mark unavailable -> exactly 1 DELETE, exit 1
+            {
+                let ctx = RefusalContext::new(
+                    relay,
+                    "retire-setup-unverifiable",
+                    "test-pairing-instance".to_string(),
+                )
+                .await;
+                let expected_sha = ctx.peer.expected_client_sha256();
+                let cred_call = ctx.cred.clone();
 
-            let mut cred = peer.credential();
-            cred.instance_id = "test-pairing-instance".to_string();
-            let cred_call = cred.clone();
-            let certs = spl_transport::tls::parse_certs(&cred.client_cert_pem).expect("parse");
-            let cert_der = certs.first().expect("der");
-            let expected_sha = spl_core::ca::sha256_hex(cert_der.as_ref());
+                let outcome = setup_with_pairer(
+                    PlatformKind::Linux,
+                    &ctx.env,
+                    Cursor::new(b"link"),
+                    Ok::<String, &'static str>("test-host".to_string()),
+                    |_link, _dev, _fields| async move { Ok(cred_call) },
+                    TerminalSeat::Scripted(None::<Cursor<Vec<u8>>>),
+                    MarkOption::Value("two words".to_string()),
+                )
+                .await;
 
-            let outcome = setup_with_pairer(
-                PlatformKind::Linux,
-                &env,
-                Cursor::new(b"link"),
-                Ok::<String, &'static str>("test-host".to_string()),
-                |_link, _dev, _fields| async move { Ok(cred_call) },
-                TerminalSeat::Scripted(None::<Cursor<Vec<u8>>>),
-                MarkOption::Value("two words".to_string()),
-            )
-            .await;
-
-            assert_eq!(
-                outcome,
-                Outcome::Owner {
-                    code: 1,
-                    lines: vec![
-                        COULDNT_VERIFY.to_string(),
-                        MARK_UNVERIFIABLE_SETUP.to_string()
-                    ],
+                assert_eq!(
+                    outcome,
+                    Outcome::Owner {
+                        code: 1,
+                        lines: vec![
+                            COULDNT_VERIFY.to_string(),
+                            MARK_UNVERIFIABLE_SETUP.to_string(),
+                        ],
+                    }
+                );
+                assert!(!ctx.roots.config_root().join(CREDENTIALS_FILENAME).exists());
+                assert_journal_retire(&ctx.peer, &expected_sha, 200, 0);
+                if relay {
+                    assert_eq!(
+                        ctx.relay_server.as_ref().unwrap().refresh_requests().len(),
+                        1
+                    );
                 }
-            );
-            assert_eq!(peer.requests().len(), 1);
-            assert_eq!(
-                peer.requests()[0].path(),
-                format!("/app/network/api/clients/sha256:{expected_sha}")
-            );
-            peer.shutdown().await;
-        }
+                ctx.shutdown().await;
+            }
 
-        // 5. Relay peer: Setup No with token refresh -> refresh in refresh_requests(), DELETE in peer.requests()
-        {
-            let relay_peer = PrivateLinkPeer::start().await;
-            let relay_server = relay_peer.start_relay_server().await;
-            let mut relay_cred = relay_peer.relay_credential(relay_server.origin());
-            relay_cred.instance_id = test_jid();
-            let cred_call = relay_cred.clone();
-            let certs =
-                spl_transport::tls::parse_certs(&relay_cred.client_cert_pem).expect("parse");
-            let cert_der = certs.first().expect("der");
-            let expected_sha = spl_core::ca::sha256_hex(cert_der.as_ref());
+            // 5. Setup refusal with existing credentials.json leaves bytes unchanged
+            {
+                let peer_x = PrivateLinkPeer::start().await;
+                let mut cred_x = peer_x.credential();
+                cred_x.instance_id = test_jid();
+                let generation_x = hex_encode(&compute_pairing_generation(&cred_x.client_cert_pem));
 
-            let temp = TestDirectory::new("retire-relay-no");
-            let roots = IsolatedRoots::new(temp.path());
-            let env = FakeEnvironment::from_paths(roots.entries().iter().cloned());
-            ensure_private_directory(&roots.config_root()).expect("config");
+                let ctx_y = RefusalContext::new(relay, "retire-existing-cred", test_jid()).await;
+                let expected_sha_y = ctx_y.peer.expected_client_sha256();
 
-            let outcome = setup_with_pairer(
-                PlatformKind::Linux,
-                &env,
-                Cursor::new(b"link"),
-                Ok::<String, &'static str>("test-host".to_string()),
-                |_link, _dev, _fields| async move { Ok(cred_call) },
-                TerminalSeat::Scripted(Some(TestTerminal::new("no\n"))),
-                MarkOption::Absent,
-            )
-            .await;
+                persist_credential(&ctx_y.roots.config_root(), &cred_x).expect("persist");
+                write_answer_file(&ctx_y.roots.config_root(), &generation_x).expect("confirm");
+                let initial_bytes =
+                    fs::read(ctx_y.roots.config_root().join(CREDENTIALS_FILENAME)).unwrap();
 
-            assert_eq!(
-                outcome,
-                Outcome::Owner {
-                    code: 1,
-                    lines: vec![NOT_PAIRED.to_string(), MISMATCH_BODY.to_string()],
+                let cred_y_call = ctx_y.cred.clone();
+
+                let outcome = setup_with_pairer(
+                    PlatformKind::Linux,
+                    &ctx_y.env,
+                    Cursor::new(b"link"),
+                    Ok::<String, &'static str>("test-host".to_string()),
+                    |_link, _dev, _fields| async move { Ok(cred_y_call) },
+                    TerminalSeat::Scripted(Some(TestTerminal::new("no\n"))),
+                    MarkOption::Absent,
+                )
+                .await;
+
+                assert_eq!(
+                    outcome,
+                    Outcome::Owner {
+                        code: 1,
+                        lines: vec![NOT_PAIRED.to_string(), MISMATCH_BODY.to_string()],
+                    }
+                );
+                assert_eq!(
+                    fs::read(ctx_y.roots.config_root().join(CREDENTIALS_FILENAME)).unwrap(),
+                    initial_bytes
+                );
+                assert!(is_pairing_confirmed(&ctx_y.roots.config_root(), &cred_x));
+                assert_eq!(peer_x.requests().len(), 0);
+                assert_eq!(peer_x.accepted_carriers(), 0);
+                assert_eq!(peer_x.system_status_request_count(), 0);
+                assert_eq!(peer_x.clients_self_request_count(), 0);
+                assert_eq!(peer_x.relay_access_request_count(), 0);
+                assert_journal_retire(&ctx_y.peer, &expected_sha_y, 200, 0);
+                if relay {
+                    assert_eq!(
+                        ctx_y
+                            .relay_server
+                            .as_ref()
+                            .unwrap()
+                            .refresh_requests()
+                            .len(),
+                        1
+                    );
                 }
-            );
-            assert_eq!(relay_server.refresh_requests().len(), 1);
-            assert_eq!(relay_peer.requests().len(), 1);
-            assert_eq!(relay_peer.requests()[0].method(), "DELETE");
-            assert_eq!(
-                relay_peer.requests()[0].path(),
-                format!("/app/network/api/clients/sha256:{expected_sha}")
-            );
-            relay_server.shutdown().await;
-            relay_peer.shutdown().await;
-        }
+                peer_x.shutdown().await;
+                ctx_y.shutdown().await;
+            }
 
-        // 6. Setup refusal with existing credentials.json leaves bytes unchanged
-        {
-            let peer = PrivateLinkPeer::start().await;
-            let temp = TestDirectory::new("retire-existing-cred");
-            let roots = IsolatedRoots::new(temp.path());
-            let env = FakeEnvironment::from_paths(roots.entries().iter().cloned());
-            ensure_private_directory(&roots.config_root()).expect("config");
+            // 6. Confirm no: DELETE, credential gone, answer file remains
+            {
+                let ctx = RefusalContext::new(relay, "retire-confirm-no", test_jid()).await;
+                let expected_sha = ctx.peer.expected_client_sha256();
 
-            let mut existing_cred = peer.credential();
-            existing_cred.instance_id = test_jid();
-            let generation =
-                hex_encode(&compute_pairing_generation(&existing_cred.client_cert_pem));
-            persist_credential(&roots.config_root(), &existing_cred).expect("persist");
-            write_answer_file(&roots.config_root(), &generation).expect("confirm");
-            let initial_bytes = fs::read(roots.config_root().join(CREDENTIALS_FILENAME)).unwrap();
+                persist_credential(&ctx.roots.config_root(), &ctx.cred).expect("persist");
+                write_answer_file(&ctx.roots.config_root(), "").expect("write answer");
 
-            let mut new_cred = peer.credential();
-            new_cred.instance_id = test_jid();
-            let cred_call = new_cred.clone();
+                let outcome = confirm(
+                    PlatformKind::Linux,
+                    &ctx.env,
+                    TerminalSeat::Scripted(Some(TestTerminal::new("no\n"))),
+                    MarkOption::Absent,
+                )
+                .await;
 
-            let _ = setup_with_pairer(
-                PlatformKind::Linux,
-                &env,
-                Cursor::new(b"link"),
-                Ok::<String, &'static str>("test-host".to_string()),
-                |_link, _dev, _fields| async move { Ok(cred_call) },
-                TerminalSeat::Scripted(Some(TestTerminal::new("no\n"))),
-                MarkOption::Absent,
-            )
-            .await;
-
-            assert_eq!(
-                fs::read(roots.config_root().join(CREDENTIALS_FILENAME)).unwrap(),
-                initial_bytes
-            );
-            peer.shutdown().await;
-        }
-
-        // 7. Confirm no and confirm --mark mismatch: DELETE, credential gone, answer file remains
-        {
-            let peer = PrivateLinkPeer::start().await;
-            let temp = TestDirectory::new("retire-confirm-no");
-            let roots = IsolatedRoots::new(temp.path());
-            let env = FakeEnvironment::from_paths(roots.entries().iter().cloned());
-            ensure_private_directory(&roots.config_root()).expect("config");
-
-            let mut cred = peer.credential();
-            cred.instance_id = test_jid();
-            let certs = spl_transport::tls::parse_certs(&cred.client_cert_pem).expect("parse");
-            let cert_der = certs.first().expect("der");
-            let expected_sha = spl_core::ca::sha256_hex(cert_der.as_ref());
-
-            persist_credential(&roots.config_root(), &cred).expect("persist");
-            write_answer_file(&roots.config_root(), "").expect("write answer");
-
-            let outcome = confirm(
-                PlatformKind::Linux,
-                &env,
-                TerminalSeat::Scripted(Some(TestTerminal::new("no\n"))),
-                MarkOption::Absent,
-            )
-            .await;
-
-            assert_eq!(
-                outcome,
-                Outcome::Owner {
-                    code: 1,
-                    lines: vec![NOT_PAIRED.to_string(), MISMATCH_BODY.to_string()],
+                assert_eq!(
+                    outcome,
+                    Outcome::Owner {
+                        code: 1,
+                        lines: vec![NOT_PAIRED.to_string(), MISMATCH_BODY.to_string()],
+                    }
+                );
+                assert!(!ctx.roots.config_root().join(CREDENTIALS_FILENAME).exists());
+                assert!(ctx.roots.config_root().join(ANSWER_FILENAME).exists());
+                assert_journal_retire(&ctx.peer, &expected_sha, 200, 0);
+                if relay {
+                    assert_eq!(
+                        ctx.relay_server.as_ref().unwrap().refresh_requests().len(),
+                        1
+                    );
                 }
-            );
-            assert!(!roots.config_root().join(CREDENTIALS_FILENAME).exists());
-            assert!(roots.config_root().join(ANSWER_FILENAME).exists());
-            assert_eq!(
-                peer.requests()[0].path(),
-                format!("/app/network/api/clients/sha256:{expected_sha}")
-            );
+                ctx.shutdown().await;
+            }
 
-            // Re-setup for confirm --mark mismatch
-            persist_credential(&roots.config_root(), &cred).expect("persist");
-            let outcome = confirm(
-                PlatformKind::Linux,
-                &env,
-                TerminalSeat::Scripted(None::<Cursor<Vec<u8>>>),
-                MarkOption::Value("wrong mark".to_string()),
-            )
-            .await;
-            assert_eq!(
-                outcome,
-                Outcome::Owner {
-                    code: 1,
-                    lines: vec![NOT_PAIRED.to_string(), MARK_MISMATCH.to_string()],
+            // 7. Confirm --mark mismatch: DELETE, credential gone, answer file remains
+            {
+                let ctx = RefusalContext::new(relay, "retire-confirm-mismatch", test_jid()).await;
+                let expected_sha = ctx.peer.expected_client_sha256();
+
+                persist_credential(&ctx.roots.config_root(), &ctx.cred).expect("persist");
+                write_answer_file(&ctx.roots.config_root(), "").expect("write answer");
+
+                let outcome = confirm(
+                    PlatformKind::Linux,
+                    &ctx.env,
+                    TerminalSeat::Scripted(None::<Cursor<Vec<u8>>>),
+                    MarkOption::Value("wrong mark".to_string()),
+                )
+                .await;
+
+                assert_eq!(
+                    outcome,
+                    Outcome::Owner {
+                        code: 1,
+                        lines: vec![NOT_PAIRED.to_string(), MARK_MISMATCH.to_string()],
+                    }
+                );
+                assert!(!ctx.roots.config_root().join(CREDENTIALS_FILENAME).exists());
+                assert!(ctx.roots.config_root().join(ANSWER_FILENAME).exists());
+                assert_journal_retire(&ctx.peer, &expected_sha, 200, 0);
+                if relay {
+                    assert_eq!(
+                        ctx.relay_server.as_ref().unwrap().refresh_requests().len(),
+                        1
+                    );
                 }
-            );
-            assert!(!roots.config_root().join(CREDENTIALS_FILENAME).exists());
-            assert!(roots.config_root().join(ANSWER_FILENAME).exists());
-            peer.shutdown().await;
-        }
+                ctx.shutdown().await;
+            }
 
-        // 8. Delayed DELETE (15s): setup no finishes in under 12s
-        {
-            let peer = PrivateLinkPeer::start().await;
-            peer.enqueue_delayed_response(Duration::from_secs(15), 200, vec![]);
-            let temp = TestDirectory::new("retire-delayed");
-            let roots = IsolatedRoots::new(temp.path());
-            let env = FakeEnvironment::from_paths(roots.entries().iter().cloned());
-            ensure_private_directory(&roots.config_root()).expect("config");
+            // 8. Delayed DELETE (15s): setup no finishes in under 10s
+            {
+                let ctx = RefusalContext::new(relay, "retire-delayed", test_jid()).await;
+                let expected_sha = ctx.peer.expected_client_sha256();
+                ctx.peer
+                    .enqueue_delayed_response(Duration::from_secs(15), 200, vec![]);
+                let cred_call = ctx.cred.clone();
 
-            let mut cred = peer.credential();
-            cred.instance_id = test_jid();
-            let cred_call = cred.clone();
+                let start = Instant::now();
+                let outcome = setup_with_pairer(
+                    PlatformKind::Linux,
+                    &ctx.env,
+                    Cursor::new(b"link"),
+                    Ok::<String, &'static str>("test-host".to_string()),
+                    |_link, _dev, _fields| async move { Ok(cred_call) },
+                    TerminalSeat::Scripted(Some(TestTerminal::new("no\n"))),
+                    MarkOption::Absent,
+                )
+                .await;
 
-            let start = std::time::Instant::now();
-            let outcome = setup_with_pairer(
-                PlatformKind::Linux,
-                &env,
-                Cursor::new(b"link"),
-                Ok::<String, &'static str>("test-host".to_string()),
-                |_link, _dev, _fields| async move { Ok(cred_call) },
-                TerminalSeat::Scripted(Some(TestTerminal::new("no\n"))),
-                MarkOption::Absent,
-            )
-            .await;
-
-            assert!(start.elapsed() < Duration::from_secs(12));
-            assert_eq!(
-                outcome,
-                Outcome::Owner {
-                    code: 1,
-                    lines: vec![NOT_PAIRED.to_string(), MISMATCH_BODY.to_string()],
+                assert!(start.elapsed() < Duration::from_secs(10));
+                assert_eq!(
+                    outcome,
+                    Outcome::Owner {
+                        code: 1,
+                        lines: vec![NOT_PAIRED.to_string(), MISMATCH_BODY.to_string()],
+                    }
+                );
+                assert!(!ctx.roots.config_root().join(CREDENTIALS_FILENAME).exists());
+                assert_journal_retire(&ctx.peer, &expected_sha, 200, 0);
+                if relay {
+                    assert_eq!(
+                        ctx.relay_server.as_ref().unwrap().refresh_requests().len(),
+                        1
+                    );
                 }
-            );
-            peer.shutdown().await;
-        }
+                ctx.shutdown().await;
+            }
 
-        // 9. DELETE for any other ID is 404, still drops locally
-        {
-            let peer = PrivateLinkPeer::start().await;
-            peer.set_expected_client_sha256(Some("different_sha".to_string()));
-            let temp = TestDirectory::new("retire-404");
-            let roots = IsolatedRoots::new(temp.path());
-            let env = FakeEnvironment::from_paths(roots.entries().iter().cloned());
-            ensure_private_directory(&roots.config_root()).expect("config");
+            // 9. DELETE for any other ID is 404, still drops locally
+            {
+                let ctx = RefusalContext::new(relay, "retire-404", test_jid()).await;
+                let expected_sha = ctx.peer.expected_client_sha256();
+                ctx.peer
+                    .set_expected_client_sha256(Some("different_sha".to_string()));
 
-            let mut cred = peer.credential();
-            cred.instance_id = test_jid();
-            persist_credential(&roots.config_root(), &cred).expect("persist");
-            write_answer_file(&roots.config_root(), "").expect("write answer");
+                persist_credential(&ctx.roots.config_root(), &ctx.cred).expect("persist");
+                write_answer_file(&ctx.roots.config_root(), "").expect("write answer");
 
-            let outcome = confirm(
-                PlatformKind::Linux,
-                &env,
-                TerminalSeat::Scripted(Some(TestTerminal::new("no\n"))),
-                MarkOption::Absent,
-            )
-            .await;
+                let outcome = confirm(
+                    PlatformKind::Linux,
+                    &ctx.env,
+                    TerminalSeat::Scripted(Some(TestTerminal::new("no\n"))),
+                    MarkOption::Absent,
+                )
+                .await;
 
-            assert_eq!(
-                outcome,
-                Outcome::Owner {
-                    code: 1,
-                    lines: vec![NOT_PAIRED.to_string(), MISMATCH_BODY.to_string()],
+                assert_eq!(
+                    outcome,
+                    Outcome::Owner {
+                        code: 1,
+                        lines: vec![NOT_PAIRED.to_string(), MISMATCH_BODY.to_string()],
+                    }
+                );
+                assert!(!ctx.roots.config_root().join(CREDENTIALS_FILENAME).exists());
+                assert_journal_retire(&ctx.peer, &expected_sha, 404, 0);
+                if relay {
+                    assert_eq!(
+                        ctx.relay_server.as_ref().unwrap().refresh_requests().len(),
+                        1
+                    );
                 }
-            );
-            assert!(!roots.config_root().join(CREDENTIALS_FILENAME).exists());
-            assert_eq!(peer.requests().len(), 1);
-            assert_eq!(peer.requests()[0].response_status(), Some(404));
-            peer.shutdown().await;
+                ctx.shutdown().await;
+            }
         }
     });
 }
@@ -2634,20 +2832,7 @@ fn held_status_without_a_daemon() {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
 
-        let reqs = peer.requests();
-        assert_eq!(reqs.len(), 1);
-        assert_eq!(reqs[0].method(), "DELETE");
-        assert_eq!(
-            reqs[0].path(),
-            format!("/app/network/api/clients/sha256:{expected_sha}")
-        );
-        assert!(reqs.iter().all(|request| {
-            let path = request.path_without_query();
-            path != "/app/network/api/clients/self"
-                && path != "/app/network/api/relay/access"
-                && path != "/api/system/status"
-                && path != "/app/devices/ingest"
-        }));
+        assert_journal_retire(&peer, &expected_sha, 200, 0);
 
         let start = Instant::now();
         let _ = stop_tx.send(true);

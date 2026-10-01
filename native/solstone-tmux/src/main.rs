@@ -4,6 +4,7 @@
 #![forbid(unsafe_code)]
 
 use solstone_tmux::cli;
+use std::io::Write;
 use std::sync::Arc;
 
 use solstone_tmux::clock::{Clock, SystemClock};
@@ -43,7 +44,7 @@ fn run() -> Result<i32, String> {
     let command = match cli::parse_args(std::env::args_os()) {
         Ok(command) => command,
         Err(error) => {
-            eprintln!("{error}");
+            let _ = writeln!(std::io::stderr().lock(), "{error}");
             return Ok(cli::USAGE_EXIT_CODE);
         }
     };
@@ -178,7 +179,7 @@ fn handle_outcome(outcome: solstone_tmux::pairing_answer::Outcome) -> Result<i32
     match outcome {
         solstone_tmux::pairing_answer::Outcome::Owner { code, lines } => {
             for line in lines {
-                println!("{line}");
+                let _ = writeln!(std::io::stdout().lock(), "{line}");
             }
             Ok(code)
         }
@@ -187,7 +188,7 @@ fn handle_outcome(outcome: solstone_tmux::pairing_answer::Outcome) -> Result<i32
             Ok(1)
         }
         solstone_tmux::pairing_answer::Outcome::Usage(usage_str) => {
-            eprintln!("{usage_str}");
+            let _ = writeln!(std::io::stderr().lock(), "{usage_str}");
             Ok(2)
         }
     }

@@ -476,7 +476,6 @@ pub fn extract_journal_mark_words(instance_id: &str) -> Option<(String, String)>
 pub enum MarkMatch {
     Match,
     Mismatch,
-    ConcatenationMismatch,
     Usage,
 }
 
@@ -495,13 +494,6 @@ pub fn evaluate_mark_words(input_value: &str, instance_id: &str) -> MarkMatch {
             MarkMatch::Match
         } else {
             MarkMatch::Mismatch
-        }
-    } else if words.len() == 1 {
-        let concat = format!("{target_w1}{target_w2}");
-        if words[0].eq_ignore_ascii_case(&concat) {
-            MarkMatch::ConcatenationMismatch
-        } else {
-            MarkMatch::Usage
         }
     } else {
         MarkMatch::Usage

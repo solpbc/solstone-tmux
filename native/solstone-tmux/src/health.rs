@@ -3,7 +3,7 @@
 
 use std::fmt;
 use std::fs;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -111,7 +111,11 @@ impl fmt::Display for DiagnosticCode {
 impl std::error::Error for DiagnosticCode {}
 
 pub fn emit_diagnostic(code: DiagnosticCode) {
-    eprintln!("solstone-tmux: {}", code.message());
+    let _ = writeln!(
+        std::io::stderr().lock(),
+        "solstone-tmux: {}",
+        code.message()
+    );
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]

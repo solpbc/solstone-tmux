@@ -402,7 +402,7 @@ where
         MarkOption::MissingValue | MarkOption::Repeated => return Outcome::Usage(MARK_USAGE),
         MarkOption::Value(val) => {
             let words = split_mark_words(val);
-            if words.is_empty() || words.len() >= 3 {
+            if words.len() != 2 {
                 return Outcome::Usage(MARK_USAGE);
             }
             None
@@ -485,7 +485,7 @@ where
                         }
                     }
                 }
-                MarkMatch::ConcatenationMismatch | MarkMatch::Mismatch => {
+                MarkMatch::Mismatch => {
                     retire_credential(&credential, &config_root).await;
                     if !is_identified {
                         Outcome::Owner {
@@ -603,7 +603,7 @@ where
         MarkOption::MissingValue | MarkOption::Repeated => return Outcome::Usage(MARK_USAGE),
         MarkOption::Value(val) => {
             let words = split_mark_words(val);
-            if words.is_empty() || words.len() >= 3 {
+            if words.len() != 2 {
                 return Outcome::Usage(MARK_USAGE);
             }
         }
@@ -713,7 +713,7 @@ where
                         }
                     }
                 }
-                MarkMatch::ConcatenationMismatch | MarkMatch::Mismatch => {
+                MarkMatch::Mismatch => {
                     if !is_identified {
                         Outcome::Owner {
                             code: 5,
