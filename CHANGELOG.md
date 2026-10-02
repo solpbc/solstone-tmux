@@ -6,10 +6,11 @@ Format adapted from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [2.0.11] - 2026-10-02
+
 ### Fixed
 
 - when you pair through your journal's private network and choose "that doesn't match", solstone-tmux now uses that connection to remove this device from your journal. before, removal could time out, leaving the device listed.
-
 
 ## [2.0.10] - 2026-10-01
 

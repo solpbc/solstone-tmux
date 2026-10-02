@@ -1416,7 +1416,7 @@ dependencies = [
 
 [[package]]
 name = "solstone-tmux"
-version = "2.0.10"
+version = "2.0.11"
 dependencies = [
  "ar",
  "flate2",
