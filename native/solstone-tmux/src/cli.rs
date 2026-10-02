@@ -14,6 +14,7 @@ pub enum CliCommand {
     Setup(MarkOption),
     Confirm(MarkOption),
     Status,
+    About,
     InstallService,
     UninstallService,
     Help,
@@ -45,6 +46,7 @@ where
         Some(value) if value == "setup" => (CliCommand::Setup(MarkOption::Absent), true),
         Some(value) if value == "confirm" => (CliCommand::Confirm(MarkOption::Absent), true),
         Some(value) if value == "status" => (CliCommand::Status, false),
+        Some(value) if value == "about" => (CliCommand::About, false),
         Some(value) if value == "install-service" => (CliCommand::InstallService, false),
         Some(value) if value == "uninstall-service" => (CliCommand::UninstallService, false),
         Some(value) if value == "-h" || value == "--help" => (CliCommand::Help, false),
@@ -106,7 +108,7 @@ where
 
 pub fn usage() -> String {
     format!(
-        "usage: solstone-tmux [run|setup|confirm|status|install-service|uninstall-service|--help|--version]\n       solstone-tmux setup [--mark <words>]\n       solstone-tmux confirm [--mark <words>]\n--mark  {}\nexit 0 paired or already confirmed; exit 1 not paired, nothing changed, or no terminal; exit 2 usage; exit 5 held. status still uses exit 3 and 4.",
+        "usage: solstone-tmux [run|setup|confirm|status|about|install-service|uninstall-service|--help|--version]\n       solstone-tmux setup [--mark <words>]\n       solstone-tmux confirm [--mark <words>]\n--mark  {}\nexit 0 paired or already confirmed; exit 1 not paired, nothing changed, or no terminal; exit 2 usage; exit 5 held. status still uses exit 3 and 4.",
         crate::pairing_answer::MARK_HELP
     )
 }

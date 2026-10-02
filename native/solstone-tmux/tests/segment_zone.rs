@@ -231,7 +231,10 @@ fn segment_zone_table_driven_wire_envelope() {
             let requests = peer
                 .requests()
                 .into_iter()
-                .filter(|r| !r.path_without_query().starts_with("/app/network/api/"))
+                .filter(|r| {
+                    !r.path_without_query().starts_with("/app/network/api/")
+                        && r.path_without_query() != "/api/system/about"
+                })
                 .collect::<Vec<_>>();
             assert_eq!(requests.len(), 1);
 
@@ -495,7 +498,10 @@ fn segment_zone_backlog_uses_stored_zone_not_current_zone() {
         let requests = peer
             .requests()
             .into_iter()
-            .filter(|r| !r.path_without_query().starts_with("/app/network/api/"))
+            .filter(|r| {
+                !r.path_without_query().starts_with("/app/network/api/")
+                    && r.path_without_query() != "/api/system/about"
+            })
             .collect::<Vec<_>>();
         assert_eq!(requests.len(), 1);
 

@@ -90,6 +90,11 @@ enum PeerResponse {
         body: Vec<u8>,
         delay: Option<std::time::Duration>,
     },
+    DelayedBody {
+        status: u16,
+        body: Vec<u8>,
+        delay: std::time::Duration,
+    },
     Raw(Vec<u8>),
 }
 
@@ -179,6 +184,7 @@ struct PeerState {
     responses: Arc<Mutex<VecDeque<PeerResponse>>>,
     system_status_responses: Arc<Mutex<VecDeque<PeerResponse>>>,
     clients_self_responses: Arc<Mutex<VecDeque<PeerResponse>>>,
+    about_responses: Arc<Mutex<VecDeque<PeerResponse>>>,
     relay_access_responses: Arc<Mutex<VecDeque<PeerResponse>>>,
     requests: Arc<Mutex<Vec<PeerRequest>>>,
     request_count: Arc<AtomicUsize>,
@@ -259,6 +265,7 @@ impl PrivateLinkPeer {
             responses: Arc::new(Mutex::new(VecDeque::new())),
             system_status_responses: Arc::new(Mutex::new(VecDeque::new())),
             clients_self_responses: Arc::new(Mutex::new(VecDeque::new())),
+            about_responses: Arc::new(Mutex::new(VecDeque::new())),
             relay_access_responses: Arc::new(Mutex::new(VecDeque::new())),
             requests: Arc::new(Mutex::new(Vec::new())),
             request_count: Arc::new(AtomicUsize::new(0)),
@@ -401,6 +408,22 @@ impl PrivateLinkPeer {
             status,
             body: body.into(),
             delay: Some(delay),
+        });
+    }
+
+    pub fn enqueue_about_response(&self, status: u16, body: impl Into<Vec<u8>>) {
+        lock(&self.state.about_responses).push_back(PeerResponse::Structured {
+            status,
+            body: body.into(),
+            delay: None,
+        });
+    }
+
+    pub fn enqueue_about_pending_body(&self, body: impl Into<Vec<u8>>, delay: std::time::Duration) {
+        lock(&self.state.about_responses).push_back(PeerResponse::DelayedBody {
+            status: 200,
+            body: body.into(),
+            delay,
         });
     }
 
@@ -934,6 +957,7 @@ async fn handle_carrier(
                         let path = parsed.as_ref().map(|req| req.path_without_query().to_string());
                         let is_system_status = path.as_deref() == Some("/api/system/status");
                         let is_clients_self = path.as_deref() == Some("/app/network/api/clients/self");
+                        let is_about = path.as_deref() == Some("/api/system/about");
                         let is_relay_access = path.as_deref() == Some("/app/network/api/relay/access");
                         state.request_count.fetch_add(1, Ordering::SeqCst);
                         if is_clients_self {
@@ -1040,6 +1064,8 @@ async fn handle_carrier(
                                     body: Vec::new(),
                                     delay: None,
                                     })
+                        } else if is_about {
+                            lock(&state.about_responses).pop_front().unwrap_or(PeerResponse::Structured { status: 404, body: Vec::new(), delay: None })
                         } else if is_clients_self {
                             lock(&state.clients_self_responses)
                                 .pop_front()
@@ -1094,14 +1120,16 @@ async fn handle_carrier(
                                 })
                         };
                         let response_status = match &response {
-                            PeerResponse::Structured { status, .. } => Some(*status),
+                            PeerResponse::Structured { status, .. } | PeerResponse::DelayedBody { status, .. } => Some(*status),
                             PeerResponse::Raw(_) => None,
                         };
                         if let (Some(mut request), false) = (parsed, is_system_status) {
                             request.response_status = response_status;
                             lock(&state.requests).push(request);
                         }
+                        let pending_body = matches!(&response, PeerResponse::DelayedBody { .. });
                         let deliver_at = match &response {
+                            PeerResponse::DelayedBody { delay, .. } => Some(tokio::time::Instant::now() + *delay),
                             PeerResponse::Structured {
                                 delay: Some(delay), ..
                             } => Some(tokio::time::Instant::now() + *delay),
@@ -1109,7 +1137,7 @@ async fn handle_carrier(
                         };
                         let mut output = OutboundResponse {
                             bytes: match response {
-                                PeerResponse::Structured { status, body, .. } => {
+                                PeerResponse::Structured { status, body, .. } | PeerResponse::DelayedBody { status, body, .. } => {
                                     encode_response(status, body)
                                 }
                                 PeerResponse::Raw(bytes) => bytes,
@@ -1118,6 +1146,12 @@ async fn handle_carrier(
                             credit: INITIAL_WINDOW,
                             deliver_at,
                         };
+                        if pending_body {
+                            let header_len = output.bytes.windows(4).position(|bytes| bytes == b"\r\n\r\n").unwrap() + 4;
+                            write_frame(&mut writer, Frame::new(stream_id, FLAG_DATA, output.bytes[..header_len].to_vec())).await?;
+                            output.offset = header_len;
+                            output.credit -= header_len;
+                        }
                         if deliver_at.is_none() {
                             flush_response(&mut writer, stream_id, &mut output).await?;
                         }

@@ -107,7 +107,7 @@ impl PostConnectCoordinator {
             journal_client,
             store,
             opener,
-            version_refresh,
+            version_refresh: version_refresh.with_clock(Arc::clone(&clock)),
             hostname_source,
             platform,
             clock,

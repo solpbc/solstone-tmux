@@ -12,6 +12,7 @@ use std::time::Duration;
 pub enum CommandOperation {
     Tmux(TmuxOperation),
     Service(ServiceOperation),
+    HostFact,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

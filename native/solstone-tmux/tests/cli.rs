@@ -6,7 +6,7 @@ use std::process::{Command, Output};
 
 use solstone_tmux::cli::{CliCommand, MarkOption, USAGE_EXIT_CODE, parse_args, usage};
 
-const HELP: &[u8] = b"usage: solstone-tmux [run|setup|confirm|status|install-service|uninstall-service|--help|--version]\n       solstone-tmux setup [--mark <words>]\n       solstone-tmux confirm [--mark <words>]\n--mark  the two words of the mark your journal's network app shows. needed when there's no terminal to ask you on.\nexit 0 paired or already confirmed; exit 1 not paired, nothing changed, or no terminal; exit 2 usage; exit 5 held. status still uses exit 3 and 4.\n";
+const HELP: &[u8] = b"usage: solstone-tmux [run|setup|confirm|status|about|install-service|uninstall-service|--help|--version]\n       solstone-tmux setup [--mark <words>]\n       solstone-tmux confirm [--mark <words>]\n--mark  the two words of the mark your journal's network app shows. needed when there's no terminal to ask you on.\nexit 0 paired or already confirmed; exit 1 not paired, nothing changed, or no terminal; exit 2 usage; exit 5 held. status still uses exit 3 and 4.\n";
 
 #[test]
 fn help_flags_write_exact_stdout_and_succeed() {
@@ -33,12 +33,46 @@ fn version_flags_write_development_version_to_stdout_and_succeed() {
 }
 
 #[test]
+fn about_prints_two_copyable_lines_without_starting_the_observer() {
+    let root = std::env::temp_dir().join(format!(
+        "tmux-about-cli-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let output = Command::new(env!("CARGO_BIN_EXE_solstone-tmux"))
+        .arg("about")
+        .env_clear()
+        .env("HOME", &root)
+        .env("XDG_CONFIG_HOME", root.join("config"))
+        .env("XDG_DATA_HOME", root.join("data"))
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    let text = String::from_utf8(output.stdout).unwrap();
+    let lines = text.lines().collect::<Vec<_>>();
+    assert_eq!(lines.len(), 2);
+    assert!(lines[0].starts_with(&format!("tmux app {} · ", env!("CARGO_PKG_VERSION"))));
+    assert_eq!(lines[1], "journal unknown");
+    assert!(text.ends_with('\n'));
+    assert!(!text.contains("development"));
+    assert!(output.stderr.is_empty());
+    assert!(
+        !root.exists(),
+        "About must not create observer or credential state"
+    );
+}
+
+#[test]
 fn parser_preserves_five_commands_and_no_argument_default() {
     let cases = [
         ("run", CliCommand::Run),
         ("setup", CliCommand::Setup(MarkOption::Absent)),
         ("confirm", CliCommand::Confirm(MarkOption::Absent)),
         ("status", CliCommand::Status),
+        ("about", CliCommand::About),
         ("install-service", CliCommand::InstallService),
         ("uninstall-service", CliCommand::UninstallService),
     ];

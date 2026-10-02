@@ -1209,6 +1209,104 @@ fn legacy_metadata_fallback_uses_optional_body_limit() {
     });
 }
 
+fn about_resource(version: &str) -> Vec<u8> {
+    serde_json::to_vec(&json!({"protocol_version":1,"version":version,"os":"ubuntu","os_version":"24.04","arch":"x86_64","about":format!("journal {version} · ubuntu 24.04 · x86_64")})).unwrap()
+}
+
+#[test]
+fn about_pending_body_does_not_delay_version_or_put_publication() {
+    runtime().block_on(async {
+        let fixture = MetadataFixture::new("about-pending-body").await;
+        fixture.peer.enqueue_clients_self_response(
+            200,
+            metadata_resource(json!("PRIVATE_NAME"), serde_json::Value::Null),
+        );
+        let reported = serde_json::to_value(build_reported_snapshot(
+            || Some("test-host".into()),
+            PlatformKind::Linux,
+        ))
+        .unwrap();
+        fixture
+            .peer
+            .enqueue_clients_self_response(200, metadata_resource(json!("PRIVATE_NAME"), reported));
+        fixture
+            .peer
+            .enqueue_about_pending_body(about_resource("2.0.0"), Duration::from_secs(2));
+        let started = tokio::time::Instant::now();
+        let (result, ()) = tokio::join!(fixture.run(Duration::from_millis(500)), async {
+            tokio::time::timeout(Duration::from_millis(400), async {
+                loop {
+                    let path = fixture.temporary.path().join("config/journal-version.json");
+                    if let Ok(bytes) = std::fs::read(path)
+                        && let Ok(cache) = serde_json::from_slice::<serde_json::Value>(&bytes)
+                        && cache["version"] == "2.0.0"
+                        && fixture.peer.clients_self_request_count() == 2
+                    {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            })
+            .await
+            .expect("version and PUT must complete while About body is pending");
+            assert!(started.elapsed() < Duration::from_millis(400));
+        });
+        assert!(
+            result.is_ok(),
+            "optional host timeout must not change metadata result"
+        );
+        let cache = fixture.cache();
+        assert_eq!(cache["version"], "2.0.0");
+        assert_eq!(cache["confirmed"], true);
+        assert!(cache.get("about").is_none());
+        assert!(cache["version_seen_at"].is_u64());
+        fixture.shutdown().await;
+    });
+}
+
+#[test]
+fn optional_host_read_survives_metadata_failure_but_cannot_promote_or_cross_versions() {
+    runtime().block_on(async {
+        let fixture = MetadataFixture::new("about-coherence").await;
+        let reported = serde_json::to_value(build_reported_snapshot(
+            || Some("test-host".into()),
+            PlatformKind::Linux,
+        ))
+        .unwrap();
+        fixture.peer.enqueue_clients_self_response(
+            200,
+            metadata_resource(json!("PRIVATE_NAME"), reported.clone()),
+        );
+        fixture.run(Duration::from_secs(1)).await.unwrap();
+        let seen = fixture.cache()["version_seen_at"].clone();
+        fixture.peer.enqueue_clients_self_response(503, Vec::new());
+        fixture
+            .peer
+            .enqueue_about_response(200, about_resource("2.0.0"));
+        assert!(fixture.run(Duration::from_secs(1)).await.is_err());
+        let cache = fixture.cache();
+        assert_eq!(cache["version_seen_at"], seen);
+        assert_eq!(cache["confirmed"], true);
+        assert_eq!(
+            cache["about"]["about"],
+            "journal 2.0.0 · ubuntu 24.04 · x86_64"
+        );
+        let mut next: serde_json::Value =
+            serde_json::from_slice(&metadata_resource(json!("PRIVATE_NAME"), reported)).unwrap();
+        next["journal"]["version"] = json!("2.0.1");
+        fixture
+            .peer
+            .enqueue_clients_self_response(200, serde_json::to_vec(&next).unwrap());
+        fixture
+            .peer
+            .enqueue_about_response(200, about_resource("2.0.0"));
+        fixture.run(Duration::from_secs(1)).await.unwrap();
+        assert_eq!(fixture.cache()["version"], "2.0.1");
+        assert!(fixture.cache().get("about").is_none());
+        fixture.shutdown().await;
+    });
+}
+
 fn runtime() -> tokio::runtime::Runtime {
     tokio::runtime::Builder::new_current_thread()
         .enable_io()

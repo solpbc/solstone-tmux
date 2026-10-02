@@ -345,7 +345,10 @@ fn linked_device_session_composes_on_the_production_runtime_shape() {
         let requests = peer
             .requests()
             .into_iter()
-            .filter(|r| !r.path_without_query().starts_with("/app/network/api/"))
+            .filter(|r| {
+                !r.path_without_query().starts_with("/app/network/api/")
+                    && r.path_without_query() != "/api/system/about"
+            })
             .collect::<Vec<_>>();
         assert_eq!(requests[0].path_without_query(), "/app/devices/ingest");
         assert_eq!(requests[0].query_param("source"), Some(DEFAULT_SOURCE));
@@ -404,7 +407,10 @@ fn v3_routes_refuse_unconfined_day_values() {
         let requests = peer
             .requests()
             .into_iter()
-            .filter(|r| !r.path_without_query().starts_with("/app/network/api/"))
+            .filter(|r| {
+                !r.path_without_query().starts_with("/app/network/api/")
+                    && r.path_without_query() != "/api/system/about"
+            })
             .collect::<Vec<_>>();
         assert!(requests.is_empty());
         session.shutdown().await.expect("shutdown");

@@ -8,6 +8,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use serde::{Deserialize, Serialize};
 
+use crate::about::About;
+use crate::clock::{Clock, SystemClock};
 use crate::health::{DiagnosticCode, HealthState, StatusHealth, read_status_health};
 use crate::instance_lock::{ExistingLock, RunIdentity, inspect_existing};
 use crate::private_link::load_credential;
@@ -26,6 +28,18 @@ struct JournalVersionRecord {
     version: String,
     #[serde(default)]
     journal_name: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "decode_optional_about",
+        skip_serializing_if = "Option::is_none"
+    )]
+    about: Option<About>,
+    #[serde(
+        default,
+        deserialize_with = "decode_optional_seen_at",
+        skip_serializing_if = "Option::is_none"
+    )]
+    version_seen_at: Option<u64>,
     confirmed: bool,
     run_id: String,
     lock_inode: u64,
@@ -53,16 +67,24 @@ pub fn read_journal_version(
     data_root: &Path,
     now_unix_seconds: i64,
 ) -> JournalVersionStatus {
+    read_journal_about(config_root, data_root, now_unix_seconds).0
+}
+
+pub fn read_journal_about(
+    config_root: &Path,
+    data_root: &Path,
+    now_unix_seconds: i64,
+) -> (JournalVersionStatus, Option<About>, Option<u64>) {
     let Some(record) = read_record(config_root) else {
-        return JournalVersionStatus::Unknown;
+        return (JournalVersionStatus::Unknown, None, None);
     };
     let Ok(Some(credential)) = load_credential(config_root) else {
-        return JournalVersionStatus::Unknown;
+        return (JournalVersionStatus::Unknown, None, None);
     };
     if record.instance_id != credential.instance_id
         || record.ca_fp_prefix_hex != hex_encode(&credential.ca_fp_prefix)
     {
-        return JournalVersionStatus::Unknown;
+        return (JournalVersionStatus::Unknown, None, None);
     }
     let identity_is_live = matches!(
         inspect_existing(data_root),
@@ -73,11 +95,29 @@ pub fn read_journal_version(
         read_status_health(data_root, now_unix_seconds),
         StatusHealth::Live(HealthState::Connected | HealthState::Syncing)
     );
-    if identity_is_live && record.confirmed && connected {
+    let status = if identity_is_live && record.confirmed && connected {
         JournalVersionStatus::Current(record.version)
     } else {
         JournalVersionStatus::LastKnown(record.version)
-    }
+    };
+    (status, record.about, record.version_seen_at)
+}
+
+fn decode_optional_about<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<About>, D::Error> {
+    let value = serde_json::Value::deserialize(deserializer)?;
+    // A corrupt optional host resource must never invalidate the independently
+    // accepted journal version or make its authority less current.
+    Ok(crate::about::decode_about(
+        &serde_json::to_vec(&value).unwrap_or_default(),
+    ))
+}
+
+fn decode_optional_seen_at<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<u64>, D::Error> {
+    Ok(serde_json::Value::deserialize(deserializer)?.as_u64())
 }
 
 fn sanitize_for_terminal(value: &str) -> String {
@@ -151,6 +191,8 @@ fn record_for_attempt(
             ca_fp_prefix_hex: ca_fp_prefix_hex.to_owned(),
             version,
             journal_name: existing.and_then(|record| record.journal_name),
+            about: None,
+            version_seen_at: None,
             confirmed: true,
             run_id: run_identity.run_id.clone(),
             lock_inode: run_identity.lock_inode,
@@ -180,6 +222,7 @@ pub struct VersionRefreshState {
     run_identity: RunIdentity,
     generation: Arc<AtomicU64>,
     generation_guard: Arc<Mutex<()>>,
+    clock: Arc<dyn Clock>,
 }
 
 impl VersionRefreshState {
@@ -198,7 +241,13 @@ impl VersionRefreshState {
             run_identity,
             generation: Arc::new(AtomicU64::new(0)),
             generation_guard: Arc::new(Mutex::new(())),
+            clock: Arc::new(SystemClock::utc()),
         }
+    }
+
+    pub fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
+        self.clock = clock;
+        self
     }
 
     pub(crate) fn note_session_started(&self) {
@@ -235,7 +284,7 @@ impl VersionRefreshState {
         version: &str,
     ) -> bool {
         let trimmed = version.trim();
-        if trimmed.is_empty() {
+        if trimmed.is_empty() || trimmed.chars().any(char::is_control) {
             return false;
         }
         let _guard = lock(&self.generation_guard);
@@ -255,6 +304,18 @@ impl VersionRefreshState {
                 instance_id: self.instance_id.clone(),
                 ca_fp_prefix_hex: self.ca_fp_prefix_hex.clone(),
                 version: trimmed.to_owned(),
+                // Facts belong to the accepted version as well as its identity.
+                // Clear them before the separate optional read can finish.
+                about: existing
+                    .as_ref()
+                    .filter(|record| {
+                        record.instance_id == self.instance_id
+                            && record.ca_fp_prefix_hex == self.ca_fp_prefix_hex
+                            && record.version.trim_start_matches('v')
+                                == trimmed.trim_start_matches('v')
+                    })
+                    .and_then(|record| record.about.clone()),
+                version_seen_at: u64::try_from(self.clock.wall_now().unix_timestamp()).ok(),
                 journal_name: journal_name
                     .map(|name| name.map(ToOwned::to_owned))
                     .unwrap_or(previous_name),
@@ -262,6 +323,31 @@ impl VersionRefreshState {
                 run_id: self.run_identity.run_id.clone(),
                 lock_inode: self.run_identity.lock_inode,
             };
+            store_record(&self.config_root, &record).is_ok()
+        })
+        .unwrap_or(false)
+    }
+
+    pub(crate) fn apply_about_for_attempt(&self, attempt: u64, about: &About) -> bool {
+        if !about.valid() {
+            return false;
+        }
+        let _guard = lock(&self.generation_guard);
+        with_write_lock(&self.config_root, || {
+            if !self.metadata_attempt_is_current(attempt) || !self.identity_and_credential_live() {
+                return false;
+            }
+            let Some(mut record) = read_record(&self.config_root) else {
+                return false;
+            };
+            if record.instance_id != self.instance_id
+                || record.ca_fp_prefix_hex != self.ca_fp_prefix_hex
+                || record.version.trim_start_matches('v') != about.version.trim_start_matches('v')
+            {
+                return false;
+            }
+            record.about = Some(about.clone());
+            // Host metadata cannot renew version freshness, seenAt, or confirmed.
             store_record(&self.config_root, &record).is_ok()
         })
         .unwrap_or(false)
@@ -329,6 +415,7 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};
+    use std::sync::Arc;
     use std::sync::atomic::Ordering;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -408,6 +495,80 @@ mod tests {
             sanitize_for_terminal("version#1.0#tag"),
             "version##1.0##tag"
         );
+    }
+
+    #[test]
+    fn optional_about_is_version_bound_and_never_renews_version_observation() {
+        let config = test_tempdir("about-cache-config");
+        let data = test_tempdir("about-cache-data");
+        let credential = sample_credential("PRIVATE_INSTANCE", &[0xaa]);
+        persist_credential(&config, &credential).unwrap();
+        let run_lock = InstanceLock::acquire(&data).unwrap();
+        let clock = Arc::new(crate::clock::TestClock::new(
+            time::OffsetDateTime::from_unix_timestamp(100).unwrap(),
+            std::time::Duration::ZERO,
+            time::UtcOffset::UTC,
+        ));
+        let refresh = VersionRefreshState::new(
+            config.clone(),
+            data.clone(),
+            credential.instance_id.clone(),
+            &credential.ca_fp_prefix,
+            run_lock.identity().clone(),
+        )
+        .with_clock(clock.clone());
+        let attempt = refresh.capture_metadata_attempt();
+        assert!(refresh.apply_validated_journal_info_for_attempt(
+            attempt,
+            Some(Some("PRIVATE_JOURNAL_NAME")),
+            "1.2.3"
+        ));
+        let facts = crate::about::decode_about(r#"{"protocol_version":1,"version":"1.2.3","os":"ubuntu","os_version":"24.04","arch":"x86_64","about":"journal 1.2.3 · ubuntu 24.04 · x86_64"}"#.as_bytes()).unwrap();
+        clock.set_wall(time::OffsetDateTime::from_unix_timestamp(200).unwrap());
+        assert!(refresh.apply_about_for_attempt(attempt, &facts));
+        let record = read_record(&config).unwrap();
+        assert_eq!(record.version_seen_at, Some(100));
+        assert!(record.confirmed);
+        assert_eq!(record.about.as_ref(), Some(&facts));
+        assert!(refresh.apply_validated_journal_info_for_attempt(attempt, None, "1.2.3"));
+        assert_eq!(read_record(&config).unwrap().version_seen_at, Some(200));
+        assert_eq!(read_record(&config).unwrap().about.as_ref(), Some(&facts));
+        clock.set_wall(time::OffsetDateTime::from_unix_timestamp(300).unwrap());
+        assert!(refresh.apply_validated_journal_info_for_attempt(attempt, None, "2.0.29"));
+        let record = read_record(&config).unwrap();
+        assert_eq!(record.version_seen_at, Some(300));
+        assert!(record.about.is_none());
+        assert!(!refresh.apply_about_for_attempt(attempt, &facts));
+        refresh.expire_metadata_attempt(attempt);
+        assert!(!refresh.apply_validated_journal_info_for_attempt(attempt, None, "1.2.3"));
+        // A credential switch makes the old identity's facts and age unavailable.
+        persist_credential(&config, &sample_credential("DIFFERENT_INSTANCE", &[0xbb])).unwrap();
+        assert_eq!(
+            super::read_journal_about(&config, &data, 300),
+            (JournalVersionStatus::Unknown, None, None)
+        );
+        drop(run_lock);
+        std::fs::remove_dir_all(config).unwrap();
+        std::fs::remove_dir_all(data).unwrap();
+    }
+
+    #[test]
+    fn malformed_optional_cache_facts_and_legacy_age_do_not_erase_version() {
+        let config = test_tempdir("about-invalid-optional");
+        let mut value = serde_json::json!({"schema_version":1,"instance_id":"instance","ca_fp_prefix_hex":"aa","version":"1.2.3","confirmed":true,"run_id":"run","lock_inode":1,"about":{"arch":64},"version_seen_at":"invalid"});
+        let path = config.join(super::JOURNAL_VERSION_FILENAME);
+        std::fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        let record = read_record(&config).unwrap();
+        assert_eq!(record.version, "1.2.3");
+        assert!(record.confirmed);
+        assert!(record.about.is_none());
+        assert!(record.version_seen_at.is_none());
+        value.as_object_mut().unwrap().remove("about");
+        value.as_object_mut().unwrap().remove("version_seen_at");
+        std::fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        assert_eq!(read_record(&config).unwrap().version, "1.2.3");
+        assert!(read_record(&config).unwrap().version_seen_at.is_none());
+        std::fs::remove_dir_all(config).unwrap();
     }
 
     #[test]
@@ -615,6 +776,8 @@ mod tests {
             ca_fp_prefix_hex: hex_encode(&[0x12, 0x34]),
             version: "2026.8.0".to_owned(),
             journal_name: Some("test-journal".to_owned()),
+            about: None,
+            version_seen_at: None,
             confirmed: true,
             run_id: identity.run_id.clone(),
             lock_inode: identity.lock_inode,
@@ -677,6 +840,8 @@ mod tests {
             ca_fp_prefix_hex: hex_encode(&[0xaa, 0xbb]),
             version: "2026.8.0".to_owned(),
             journal_name: Some("test-journal".to_owned()),
+            about: None,
+            version_seen_at: None,
             confirmed: true,
             run_id: identity.run_id.clone(),
             lock_inode: identity.lock_inode,
@@ -734,6 +899,8 @@ mod tests {
             ca_fp_prefix_hex: hex_encode(&[0xaa, 0xbb]),
             version: "2026.8.0".to_owned(),
             journal_name: Some("test-journal".to_owned()),
+            about: None,
+            version_seen_at: None,
             confirmed: true,
             run_id: identity.run_id.clone(),
             lock_inode: identity.lock_inode,

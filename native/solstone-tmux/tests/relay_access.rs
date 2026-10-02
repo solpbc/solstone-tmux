@@ -224,12 +224,13 @@ fn relay_access_post_connect_job_redial_quiesces_then_external_redial_starts_one
             .dial_carrier()
             .await
             .expect("external reconnect dial");
-        peer.wait_for_request_count(initial_count + 2, Duration::from_secs(5))
+        peer.wait_for_request_count(initial_count + 3, Duration::from_secs(5))
             .await;
         session
             .wait_for_post_connect_quiescence(Duration::from_secs(5))
             .await;
-        assert_eq!(peer.request_count(), initial_count + 2);
+        // One optional About read joins the existing metadata/relay burst.
+        assert_eq!(peer.request_count(), initial_count + 3);
         assert_eq!(peer.clients_self_request_count(), 3);
         assert_eq!(peer.relay_access_request_count(), 2);
 

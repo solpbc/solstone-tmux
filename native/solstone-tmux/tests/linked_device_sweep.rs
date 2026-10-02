@@ -122,7 +122,10 @@ fn linked_device_sweep_uses_exactly_the_v3_upload_operation_without_legacy_heade
         let ingest_requests = peer
             .requests()
             .into_iter()
-            .filter(|req| !req.path_without_query().starts_with("/app/network/api/"))
+            .filter(|req| {
+                !req.path_without_query().starts_with("/app/network/api/")
+                    && req.path_without_query() != "/api/system/about"
+            })
             .collect::<Vec<_>>();
         assert_eq!(
             ingest_requests
@@ -191,7 +194,10 @@ fn linked_device_sweep_sends_the_configured_source_on_every_v3_operation() {
         let requests = peer
             .requests()
             .into_iter()
-            .filter(|req| !req.path_without_query().starts_with("/app/network/api/"))
+            .filter(|req| {
+                !req.path_without_query().starts_with("/app/network/api/")
+                    && req.path_without_query() != "/api/system/about"
+            })
             .collect::<Vec<_>>();
         assert_eq!(
             requests
@@ -268,7 +274,7 @@ fn linked_device_403_and_426_retain_every_candidate_for_each_operation_class() {
                 let requests = peer
                     .requests()
                     .into_iter()
-                    .filter(|req| !req.path_without_query().starts_with("/app/network/api/"))
+                    .filter(|req| !req.path_without_query().starts_with("/app/network/api/") && req.path_without_query() != "/api/system/about")
                     .collect::<Vec<_>>();
                 assert_eq!(
                     requests

@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 sol pbc
 
-use std::process::Command;
+use crate::about::AboutBlock;
 
 pub const HELP_URL: &str = "https://support.solstone.app";
 
-pub fn report_url(last_state: &str) -> String {
-    let os_version = os_version();
+pub fn report_url(last_state: &str, block: &AboutBlock) -> String {
     let mut fields = vec![
         ("report", "v1".to_owned()),
         ("app", "solstone for tmux".to_owned()),
@@ -15,36 +14,22 @@ pub fn report_url(last_state: &str) -> String {
     if !version.is_empty() {
         fields.push(("version", limited(version, 120)));
     }
-    let build = option_env!("SOLSTONE_TMUX_SOURCE_COMMIT").unwrap_or("development");
-    if !build.is_empty() {
-        fields.push(("build", limited(build, 120)));
+    if !block.host.os.is_empty() {
+        fields.push(("os", limited(&block.host.os, 120)));
     }
-    if !std::env::consts::OS.is_empty() {
-        fields.push(("os", limited(std::env::consts::OS, 120)));
-    }
-    if let Some(os_version) = os_version {
-        fields.push(("os_version", limited(&os_version, 120)));
+    if !block.host.os_version.is_empty() {
+        fields.push(("os_version", limited(&block.host.os_version, 120)));
     }
     if !last_state.is_empty() {
         fields.push(("state", limited(last_state, 500)));
     }
+    fields.push(("about", block.text.clone()));
     let fragment = fields
         .into_iter()
         .map(|(key, value)| format!("{}={}", form_encode(key), form_encode(&value)))
         .collect::<Vec<_>>()
         .join("&");
     format!("{HELP_URL}/#{fragment}")
-}
-
-fn os_version() -> Option<String> {
-    Command::new("uname")
-        .arg("-r")
-        .output()
-        .ok()
-        .filter(|output| output.status.success())
-        .and_then(|output| String::from_utf8(output.stdout).ok())
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
 }
 
 fn limited(value: &str, limit: usize) -> String {
@@ -70,15 +55,32 @@ fn form_encode(value: &str) -> String {
 mod tests {
     use super::*;
 
+    fn block() -> AboutBlock {
+        AboutBlock {
+            text: "tmux app 2.0.11 · ubuntu 24.04 · x86_64\njournal 2.0.29 · macos 26.5 · arm64"
+                .into(),
+            host: crate::about::HostFacts {
+                os: "ubuntu".into(),
+                os_version: "24.04".into(),
+                arch: "x86_64".into(),
+            },
+        }
+    }
+
     #[test]
     fn report_stays_in_the_fragment_and_contains_only_owner_safe_context() {
-        let url = report_url("offline");
+        let url = report_url("offline", &block());
         assert!(url.starts_with("https://support.solstone.app/#report=v1&app=solstone+for+tmux"));
         assert!(url.contains("&state=offline"));
         assert!(!url.contains('?'));
         assert!(!url.contains("description="));
         assert!(!url.contains("hostname"));
-        assert!(!url.contains("journal"));
+        assert!(url.contains("%0Ajournal+2.0.29"));
+        assert!(url.contains("%C2%B7"));
+        assert!(url.contains("os_version=24.04"));
+        assert!(!url.contains("build="));
+        assert!(!url.contains("%2Fhome%2F"));
+        assert!(!url.contains("instance_id"));
     }
 
     #[test]
@@ -89,8 +91,8 @@ mod tests {
     #[test]
     fn state_is_bounded_and_empty_state_is_omitted() {
         let long = "é".repeat(501);
-        let url = report_url(&long);
+        let url = report_url(&long, &block());
         assert_eq!(url.matches("%C3%A9").count(), 500);
-        assert!(!report_url("").contains("&state="));
+        assert!(!report_url("", &block()).contains("&state="));
     }
 }

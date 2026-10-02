@@ -612,6 +612,28 @@ impl JournalClient {
         Ok((status, body))
     }
 
+    pub async fn get_about(
+        &self,
+        timeout: Duration,
+    ) -> Result<Option<crate::about::About>, JournalError> {
+        let response = self
+            .request(Method::GET, "/api/system/about")?
+            .timeout(timeout)
+            .send()
+            .await
+            .map_err(|error| {
+                JournalError::local(request_diagnostic(
+                    &error,
+                    DiagnosticCode::JournalUnavailable,
+                ))
+            })?;
+        if response.status() != StatusCode::OK {
+            return Ok(None);
+        }
+        let body = collect_response_body_limited(response, OPTIONAL_RESPONSE_BODY_BYTES).await?;
+        Ok(crate::about::decode_about(&body))
+    }
+
     pub async fn put_clients_self(
         &self,
         body: Vec<u8>,

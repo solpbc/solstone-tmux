@@ -548,6 +548,29 @@ impl CredentialStore {
         .unwrap_or(false)
     }
 
+    pub async fn publish_journal_about(
+        self: &Arc<Self>,
+        refresh: crate::journal_version::VersionRefreshState,
+        metadata_attempt: u64,
+        about: crate::about::About,
+    ) -> bool {
+        let store = Arc::clone(self);
+        self.enqueue_owned(async move {
+            if !refresh.metadata_attempt_is_current(metadata_attempt) { return false; }
+            let worker_store = Arc::clone(&store);
+            let persisted = tokio::task::spawn_blocking(move || {
+                let state = worker_store.state.lock().unwrap_or_else(|e| e.into_inner());
+                if state.shutdown { return false; }
+                let certificate = state.credential.client_cert_pem.clone();
+                drop(state);
+                if !matches!(load_credential(&worker_store.config_root), Ok(Some(credential)) if credential.client_cert_pem == certificate) { return false; }
+                refresh.apply_about_for_attempt(metadata_attempt, &about)
+            }).await.unwrap_or(false);
+            let state = store.state.lock().unwrap_or_else(|e| e.into_inner());
+            !state.shutdown && persisted
+        }).await.unwrap_or(false)
+    }
+
     pub async fn retry_durable_clear_if_pending(self: &Arc<Self>) {
         let _ = self.persist_pending().await;
     }

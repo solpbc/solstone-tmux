@@ -3,6 +3,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod about;
 pub mod cli;
 pub mod client_metadata;
 pub mod clock;

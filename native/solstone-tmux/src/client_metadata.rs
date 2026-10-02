@@ -154,7 +154,7 @@ where
 {
     let attempt = version_refresh.capture_metadata_attempt();
     let deadline = tokio::time::Instant::now() + timeout;
-    let result = tokio::time::timeout_at(deadline, async {
+    let metadata = tokio::time::timeout_at(deadline, async {
         let remaining = || deadline.saturating_duration_since(tokio::time::Instant::now());
         let (status, body) = client.get_clients_self(remaining()).await.map_err(|_| ())?;
         if !version_refresh.metadata_attempt_is_current(attempt) {
@@ -276,9 +276,23 @@ where
         }
 
         Err(())
-    })
-    .await;
+    });
+    // Separate bounded reads share this existing finite pass. Version/cache/PUT
+    // publication proceeds even while the About response headers or body wait.
+    let host = tokio::time::timeout_at(deadline, client.get_about(timeout));
+    let (result, host) = tokio::join!(metadata, host);
     if result.is_err() {
+        version_refresh.expire_metadata_attempt(attempt);
+    }
+    if tokio::time::Instant::now() < deadline
+        && let Ok(Ok(Some(about))) = host
+        && tokio::time::timeout_at(
+            deadline,
+            store.publish_journal_about(version_refresh.clone(), attempt, about),
+        )
+        .await
+        .is_err()
+    {
         version_refresh.expire_metadata_attempt(attempt);
     }
     result.unwrap_or(Err(()))

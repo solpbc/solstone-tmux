@@ -64,6 +64,18 @@ fn run() -> Result<i32, String> {
     let environment = ProcessEnvironment;
     let platform = current_platform();
     match command {
+        cli::CliCommand::About => {
+            let config = resolve_config_root(platform, &environment).ok();
+            let data = resolve_data_root(platform, &environment).ok();
+            let block = runtime()?.block_on(solstone_tmux::about::AboutBlock::snapshot(
+                config.as_deref(),
+                data.as_deref(),
+                time::OffsetDateTime::now_utc().unix_timestamp(),
+                &TokioCommandRunner,
+            ));
+            println!("{}", block.text);
+            Ok(0)
+        }
         cli::CliCommand::Setup(mark) => {
             let runtime = runtime()?;
             let stdin = std::io::stdin();
@@ -146,10 +158,19 @@ fn run() -> Result<i32, String> {
                             println!("{}", solstone_tmux::pairing_answer::STATUS_HELD_CONFIRM);
                         }
                         println!("journal-version: {}", journal_version.render());
+                        let data_root_opt = resolve_data_root(platform, &environment).ok();
+                        let block = solstone_tmux::about::AboutBlock::snapshot(
+                            config_root_opt.as_deref(),
+                            data_root_opt.as_deref(),
+                            now_unix_seconds,
+                            &runner,
+                        )
+                        .await;
+                        println!("{}", block.text);
                         println!("get help: {}", solstone_tmux::support::HELP_URL);
                         println!(
                             "report a problem: {}",
-                            solstone_tmux::support::report_url(sync_health_str)
+                            solstone_tmux::support::report_url(sync_health_str, &block)
                         );
                         if let Err(error) = &status {
                             eprintln!("solstone-tmux: {error}");
@@ -163,6 +184,9 @@ fn run() -> Result<i32, String> {
                         unreachable!("confirm was dispatched before service setup")
                     }
                     cli::CliCommand::Run => unreachable!("run was dispatched before service setup"),
+                    cli::CliCommand::About => {
+                        unreachable!("about was dispatched before service setup")
+                    }
                     cli::CliCommand::Help => {
                         unreachable!("help was dispatched before service setup")
                     }

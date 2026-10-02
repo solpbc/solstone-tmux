@@ -6,6 +6,10 @@ Format adapted from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- `solstone-tmux about` prints a copyable block with your app and journal versions. reports carry the same block.
+
 ## [2.0.11] - 2026-10-02
 
 ### Fixed

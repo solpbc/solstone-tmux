@@ -56,7 +56,10 @@ fn v3_operations_use_projection_examples_and_exact_multipart_envelope() {
         let requests = peer
             .requests()
             .into_iter()
-            .filter(|r| !r.path_without_query().starts_with("/app/network/api/"))
+            .filter(|r| {
+                !r.path_without_query().starts_with("/app/network/api/")
+                    && r.path_without_query() != "/api/system/about"
+            })
             .collect::<Vec<_>>();
         assert_eq!(requests.len(), 1);
         assert_exact_multipart(&requests[0], &["first.jsonl", "second.jsonl"]);
@@ -191,7 +194,10 @@ fn multipart_limits_reject_before_the_peer_and_admit_newly_supported_parts() {
         let ingest_requests = peer
             .requests()
             .into_iter()
-            .filter(|r| !r.path_without_query().starts_with("/app/network/api/"))
+            .filter(|r| {
+                !r.path_without_query().starts_with("/app/network/api/")
+                    && r.path_without_query() != "/api/system/about"
+            })
             .collect::<Vec<_>>();
         assert_eq!(ingest_requests.len(), 2, "rejected bodies reached peer");
         assert!(MAX_REQUEST_BODY_BYTES > MAX_MULTIPART_PART_BYTES as usize);
