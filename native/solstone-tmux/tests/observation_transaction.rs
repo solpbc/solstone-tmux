@@ -239,6 +239,7 @@ async fn failed_transaction_does_not_advance_id_or_digest() {
         Duration::ZERO,
         UtcOffset::UTC,
         None,
+        Duration::from_secs(300),
     )
     .expect("segment");
     for capture in &captures {

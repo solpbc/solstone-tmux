@@ -5,9 +5,18 @@ mod support;
 
 use std::fs;
 use std::os::unix::fs::symlink;
+use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 
-use solstone_tmux::segment::{AppendOutcome, SegmentClose, SegmentError, SegmentState};
+use solstone_tmux::clock::{Zone, ZoneSource};
+use solstone_tmux::name::derive_component;
+use solstone_tmux::observer::{SegmentLifecycle, SegmentManager};
+use solstone_tmux::segment::{
+    AppendOutcome, SegmentClose, SegmentError, SegmentState, segment_length,
+};
+use solstone_tmux::sync::SyncWake;
+use solstone_tmux::tmux::StderrWarnings;
 use support::{TestDirectory, golden_capture};
 use time::{Date, Month, PrimitiveDateTime, Time, UtcOffset};
 
@@ -102,6 +111,110 @@ fn nonempty_segment_finalizes_once() {
 }
 
 #[test]
+fn segment_length_is_always_between_one_second_and_the_interval() {
+    for interval_ms in [500, 1_000, 2_000, 5_000, 300_000, 600_000] {
+        let interval = Duration::from_millis(interval_ms);
+        let ceiling = interval.as_secs().max(1);
+        let mut elapsed_ms = 0;
+        while elapsed_ms <= interval_ms * 4 {
+            let length = segment_length(Duration::from_millis(elapsed_ms), interval);
+            assert!(
+                (1..=ceiling).contains(&length),
+                "elapsed {elapsed_ms} ms, interval {interval_ms} ms gave {length}"
+            );
+            elapsed_ms += 250;
+        }
+        assert_eq!(segment_length(Duration::MAX, interval), ceiling);
+    }
+}
+
+#[test]
+fn segment_length_keeps_in_range_durations_and_bounds_the_rest() {
+    let interval = Duration::from_secs(300);
+    for (elapsed, expected) in [
+        (Duration::ZERO, 1),
+        (Duration::from_millis(999), 1),
+        (Duration::from_secs(1), 1),
+        (Duration::from_millis(5_400), 5),
+        (Duration::from_secs(299), 299),
+        (Duration::from_secs(300), 300),
+        (Duration::from_secs(305), 300),
+        (Duration::from_secs(314), 300),
+        (Duration::from_secs(14_400), 300),
+    ] {
+        assert_eq!(segment_length(elapsed, interval), expected, "{elapsed:?}");
+    }
+}
+
+#[test]
+fn finalize_past_the_interval_names_the_interval() {
+    for elapsed in [Duration::from_secs(305), Duration::from_secs(14_400)] {
+        let (_temporary, mut segment) = segment("finalize-overshoot");
+        segment
+            .append_capture(&golden_capture("main"), 0.25, Duration::from_secs(1))
+            .expect("append");
+        let SegmentClose::Finalized(path) = segment.finalize(elapsed).expect("finalize") else {
+            panic!("nonempty segment was removed");
+        };
+        assert_eq!(key_length(&path), 300, "{elapsed:?}");
+        assert!(path.ends_with("120000_300"));
+        assert!(path.is_dir());
+    }
+}
+
+#[test]
+fn finalize_within_the_first_second_names_one_second() {
+    let (_temporary, mut segment) = segment("finalize-subsecond");
+    segment
+        .append_capture(&golden_capture("main"), 0.0, Duration::ZERO)
+        .expect("append");
+    assert_eq!(segment.metadata().finalized_dir, "120000_001");
+    let SegmentClose::Finalized(path) = segment
+        .finalize(Duration::from_millis(400))
+        .expect("finalize")
+    else {
+        panic!("nonempty segment was removed");
+    };
+    assert_eq!(key_length(&path), 1);
+    assert!(path.is_dir());
+}
+
+#[test]
+fn late_rotation_poll_seals_the_previous_segment_at_the_interval() {
+    let interval = Duration::from_secs(300);
+    for late in [Duration::from_secs(305), Duration::from_secs(14_400)] {
+        let (temporary, segment) = segment("late-rotation");
+        let stream_dir = segment.stream_dir().to_owned();
+        let start = segment_wall();
+        let mut manager = SegmentManager::new(
+            segment,
+            temporary.path().join("data"),
+            derive_component("host.tmux").expect("stream"),
+            SyncWake::default(),
+            Box::new(UtcZone),
+            Arc::new(StderrWarnings),
+            None,
+            false,
+        );
+        manager
+            .process_poll(
+                &[golden_capture("main")],
+                start + time::Duration::seconds(1),
+                Duration::from_secs(1),
+                interval,
+            )
+            .expect("first poll");
+        manager
+            .process_poll(&[golden_capture("main")], start + late, late, interval)
+            .expect("late poll");
+
+        let sealed = stream_dir.join("120000_300");
+        assert!(sealed.is_dir(), "{late:?}");
+        assert_eq!(key_length(&sealed), 300);
+    }
+}
+
+#[test]
 fn dangling_symlink_finalized_target_preserves_source() {
     let (_temporary, mut segment) = segment("dangling-finalized-target");
     segment
@@ -143,19 +256,40 @@ fn confirmed_empty_segment_is_removed() {
     assert!(!metadata.exists());
 }
 
+struct UtcZone;
+
+impl ZoneSource for UtcZone {
+    fn read(&mut self) -> Result<Zone, String> {
+        Ok(Zone::utc())
+    }
+}
+
+fn key_length(path: &Path) -> u64 {
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .expect("name");
+    let (_, length) = name.split_once('_').expect("HHMMSS_LEN");
+    length.parse().expect("LEN digits")
+}
+
+fn segment_wall() -> time::OffsetDateTime {
+    let date = Date::from_calendar_date(2026, Month::July, 28).expect("date");
+    let time = Time::from_hms(12, 0, 0).expect("time");
+    PrimitiveDateTime::new(date, time).assume_utc()
+}
+
 fn segment(label: &str) -> (TestDirectory, SegmentState) {
     let temporary = TestDirectory::new(label);
     let stream = temporary.path().join("stream");
-    let date = Date::from_calendar_date(2026, Month::July, 28).expect("date");
-    let time = Time::from_hms(12, 0, 0).expect("time");
-    let wall = PrimitiveDateTime::new(date, time).assume_utc();
     let segment = SegmentState::create(
         &stream,
         "120000",
-        wall,
+        segment_wall(),
         Duration::ZERO,
         UtcOffset::UTC,
         None,
+        Duration::from_secs(300),
     )
     .expect("create segment");
     (temporary, segment)

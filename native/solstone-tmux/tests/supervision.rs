@@ -221,6 +221,7 @@ fn shutdown_keeps_the_final_segment_for_a_later_scan() {
         Duration::ZERO,
         offset,
         None,
+        Duration::from_secs(300),
     )
     .expect("segment");
     segment
@@ -303,6 +304,93 @@ fn shutdown_keeps_the_final_segment_for_a_later_scan() {
         .expect("inspect released lock")
         .expect("existing lock");
     drop(reacquired);
+}
+
+// The wait for sync to stop is not captured time: a segment closed by shutdown
+// is named for the time capture stopped, never for when the wait ended.
+#[test]
+fn shutdown_names_the_segment_for_when_capture_stopped() {
+    let temporary = TestDirectory::new("supervision-shutdown-length");
+    let data_root = temporary.path().join("data");
+    ensure_private_directory(&data_root).expect("data root");
+    let lock =
+        solstone_tmux::instance_lock::InstanceLock::acquire(&data_root).expect("instance lock");
+    let clock = Arc::new(test_clock());
+    let stream = derive_component("host.tmux").expect("stream");
+    let offset = clock.offset_at(clock.wall_now());
+    let stream_dir =
+        stream_directory(&data_root, &stream, clock.wall_now(), offset).expect("stream directory");
+    let mut segment = SegmentState::create(
+        &stream_dir,
+        "120000",
+        clock.wall_now(),
+        Duration::ZERO,
+        offset,
+        None,
+        Duration::from_secs(300),
+    )
+    .expect("segment");
+    segment
+        .append_capture(&golden_capture("main"), 0.25, Duration::from_secs(1))
+        .expect("append capture");
+    clock.set_monotonic(Duration::from_secs(5));
+    struct UtcZone;
+    impl ZoneSource for UtcZone {
+        fn read(&mut self) -> Result<Zone, String> {
+            Ok(Zone::utc())
+        }
+    }
+    let manager = SegmentManager::new(
+        segment,
+        data_root.clone(),
+        stream,
+        SyncWake::default(),
+        Box::new(UtcZone),
+        Arc::new(StderrWarnings),
+        None,
+        false,
+    );
+    let (observer_barrier, supervisor_barrier) = shutdown_barrier();
+    let observer = run_observer(
+        Arc::new(NoCaptures),
+        Box::new(manager),
+        Arc::clone(&clock) as Arc<dyn Clock>,
+        Box::pin(async { ShutdownEvent::Injected }),
+        observer_barrier,
+        ObserverConfig {
+            capture_interval: Duration::from_secs(5),
+            segment_interval: Duration::from_secs(300),
+        },
+    );
+    let (_activity, activity_receiver) = tokio::sync::watch::channel(SyncActivity::Idle);
+    let (sync_stop, mut sync_shutdown) = tokio::sync::watch::channel(false);
+    let (observer_stop, _observer_shutdown) =
+        tokio::sync::watch::channel::<Option<ShutdownEvent>>(None);
+    let sync_clock = Arc::clone(&clock);
+    let sync = async move {
+        wait_for_stop(&mut sync_shutdown).await;
+        sync_clock.set_monotonic(Duration::from_secs(319));
+        Ok(())
+    };
+
+    let exit = runtime().block_on(supervise_observer(
+        observer,
+        sync,
+        Box::new(NoopIndicator),
+        Box::new(lock),
+        SupervisionControl {
+            activity: activity_receiver,
+            sync_stop,
+            observer_stop,
+            shutdown_barrier: supervisor_barrier,
+            retention_fence: Arc::new(RetentionFence::new()),
+        },
+    ));
+
+    assert_eq!(exit.exit_code, 0, "{:?}", exit.failures);
+    assert!(stream_dir.join("120000_005").is_dir());
+    assert!(!stream_dir.join("120000_300").exists());
+    assert!(!stream_dir.join("120000_319").exists());
 }
 
 async fn supervise_fixture(

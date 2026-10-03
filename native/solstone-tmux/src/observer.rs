@@ -86,6 +86,7 @@ fn open_segment(
     stream: &DerivedName,
     wall_now: OffsetDateTime,
     monotonic_now: Duration,
+    segment_interval: Duration,
     source: &mut dyn ZoneSource,
     last_zone: &mut Option<Zone>,
     zone_failure_warned: &mut bool,
@@ -218,6 +219,7 @@ fn open_segment(
         monotonic_now,
         local_offset,
         tz.as_deref(),
+        segment_interval,
         faults,
     )
 }
@@ -238,6 +240,7 @@ impl SegmentManager {
         data_root: PathBuf,
         stream: DerivedName,
         clock: &dyn Clock,
+        segment_interval: Duration,
         sync_wake: SyncWake,
         mut source: Box<dyn ZoneSource>,
         warnings: Arc<dyn WarningSink>,
@@ -251,6 +254,7 @@ impl SegmentManager {
             &stream,
             wall_now,
             monotonic_now,
+            segment_interval,
             &mut *source,
             &mut last_zone,
             &mut zone_failure_warned,
@@ -316,6 +320,7 @@ impl SegmentLifecycle for SegmentManager {
                 &self.stream,
                 wall_now,
                 monotonic_now,
+                segment_interval,
                 &mut *self.source,
                 &mut self.last_zone,
                 &mut self.zone_failure_warned,
@@ -544,11 +549,12 @@ pub async fn run_observer(
         }
     };
 
+    // Capture ends here; the sync-stop wait below is not captured time.
+    let monotonic_now = clock.monotonic_now();
     if let Some(request) = shutdown_barrier.request.take() {
         let _ = request.send(());
     }
     let _ = shutdown_barrier.release.await;
-    let monotonic_now = clock.monotonic_now();
     let blocking = tokio::task::spawn_blocking(move || {
         let result = segment.shutdown(monotonic_now);
         (segment, result)

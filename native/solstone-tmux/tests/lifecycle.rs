@@ -369,6 +369,7 @@ fn actual_segment(
         Duration::ZERO,
         offset,
         None,
+        Duration::from_secs(300),
     )
     .expect("segment");
     if nonempty {
@@ -526,16 +527,17 @@ fn rotation_uses_the_offset_at_each_segment_start() {
     let temporary = TestDirectory::new("rotation-offset-step");
     let data_root = temporary.path().join("data");
     let stream = derive_component("test.tmux").expect("stream");
+    let segment_interval = Duration::from_secs(2);
     let mut manager = SegmentManager::start(
         data_root.clone(),
         stream,
         clock.as_ref(),
+        segment_interval,
         SyncWake::default(),
         Box::new(ClockZoneSource(Arc::clone(&clock))),
         Arc::new(StderrWarnings),
     )
     .expect("start manager");
-    let segment_interval = Duration::from_secs(2);
 
     let wall_t_minus_1 = t - time::Duration::seconds(1);
     clock.set_wall(wall_t_minus_1);
@@ -613,16 +615,17 @@ fn forward_offset_step_opens_the_new_local_date() {
     let temporary = TestDirectory::new("forward-offset-step");
     let data_root = temporary.path().join("data");
     let stream = derive_component("test.tmux").expect("stream");
+    let interval = Duration::from_secs(2);
     let mut manager = SegmentManager::start(
         data_root.clone(),
         stream,
         clock.as_ref(),
+        interval,
         SyncWake::default(),
         Box::new(ClockZoneSource(Arc::clone(&clock))),
         Arc::new(StderrWarnings),
     )
     .expect("start manager");
-    let interval = Duration::from_secs(2);
 
     let poll_wall = t + time::Duration::seconds(1);
     clock.set_wall(poll_wall);
@@ -669,16 +672,17 @@ fn backward_offset_step_across_midnight_opens_the_earlier_date() {
     let temporary = TestDirectory::new("backward-offset-step");
     let data_root = temporary.path().join("data");
     let stream = derive_component("test.tmux").expect("stream");
+    let interval = Duration::from_secs(2);
     let mut manager = SegmentManager::start(
         data_root.clone(),
         stream,
         clock.as_ref(),
+        interval,
         SyncWake::default(),
         Box::new(ClockZoneSource(Arc::clone(&clock))),
         Arc::new(StderrWarnings),
     )
     .expect("start manager");
-    let interval = Duration::from_secs(2);
 
     clock.set_wall(t);
     clock.set_monotonic(interval);
@@ -717,16 +721,17 @@ fn fallback_hour_reuses_a_stem_and_records_each_start_offset() {
     let temporary = TestDirectory::new("fallback-hour");
     let data_root = temporary.path().join("data");
     let stream = derive_component("test.tmux").expect("stream");
+    let interval = Duration::from_secs(300);
     let mut manager = SegmentManager::start(
         data_root.clone(),
         stream.clone(),
         clock.as_ref(),
+        interval,
         SyncWake::default(),
         Box::new(ClockZoneSource(Arc::clone(&clock))),
         Arc::new(StderrWarnings),
     )
     .expect("start manager");
-    let interval = Duration::from_secs(300);
 
     // Initial poll at monotonic 0
     manager
@@ -882,6 +887,7 @@ fn repeated_berlin_hour_stores_the_next_free_second() {
         data_root.clone(),
         stream.clone(),
         clock.as_ref(),
+        interval,
         SyncWake::default(),
         Box::new(BerlinZoneSource::new()),
         Arc::new(StderrWarnings),
@@ -975,6 +981,7 @@ fn startup_collision_uses_the_next_free_second() {
         data_root.clone(),
         stream,
         clock.as_ref(),
+        Duration::from_secs(300),
         SyncWake::default(),
         Box::new(BerlinZoneSource::new()),
         Arc::new(StderrWarnings),
@@ -1022,6 +1029,7 @@ fn taken_names_advance_by_civil_seconds_across_midnight() {
         data_root.clone(),
         stream.clone(),
         clock.as_ref(),
+        Duration::from_secs(300),
         SyncWake::default(),
         Box::new(BerlinZoneSource::new()),
         Arc::new(StderrWarnings),
@@ -1075,6 +1083,7 @@ fn taken_names_advance_by_civil_seconds_across_midnight() {
         data_root.clone(),
         stream.clone(),
         clock_kolkata.as_ref(),
+        Duration::from_secs(300),
         SyncWake::default(),
         Box::new(KolkataZoneSource(kolkata_zone.clone())),
         Arc::new(StderrWarnings),
@@ -1138,6 +1147,7 @@ fn taken_names_advance_by_civil_seconds_across_midnight() {
         data_root.clone(),
         stream,
         clock_free.as_ref(),
+        Duration::from_secs(300),
         SyncWake::default(),
         Box::new(KolkataZoneSource(kolkata_zone)),
         Arc::new(StderrWarnings),
@@ -1176,6 +1186,7 @@ fn existing_entries_stay_byte_identical_across_recovery_and_rotation() {
         data_root.clone(),
         stream.clone(),
         clock.as_ref(),
+        interval,
         SyncWake::default(),
         Box::new(BerlinZoneSource::new()),
         Arc::new(StderrWarnings),
@@ -1218,6 +1229,7 @@ fn existing_entries_stay_byte_identical_across_recovery_and_rotation() {
         Duration::ZERO,
         UtcOffset::from_hms(2, 0, 0).expect("offset +2"),
         Some("Europe/Berlin"),
+        Duration::from_secs(300),
     )
     .expect("create stranded");
     stranded
@@ -1238,8 +1250,12 @@ fn existing_entries_stay_byte_identical_across_recovery_and_rotation() {
     let snap_stranded_meta = std::fs::read(&stranded_meta).expect("read stranded meta");
 
     let lock = InstanceLock::acquire(&data_root).expect("lock");
-    let records =
-        solstone_tmux::recovery::recover_capture_streams(&lock, &data_root).expect("recover");
+    let records = solstone_tmux::recovery::recover_capture_streams(
+        &lock,
+        &data_root,
+        Duration::from_secs(300),
+    )
+    .expect("recover");
     assert!(records.iter().any(
         |r| r.action == solstone_tmux::recovery::RecoveryAction::Failed
             && r.detail.contains("finalized target collision")
@@ -1257,6 +1273,7 @@ fn existing_entries_stay_byte_identical_across_recovery_and_rotation() {
         data_root.clone(),
         stream,
         clock.as_ref(),
+        interval,
         SyncWake::default(),
         Box::new(BerlinZoneSource::new()),
         Arc::new(StderrWarnings),
@@ -1325,6 +1342,7 @@ fn bump_into_next_day_that_cannot_be_created_falls_back_to_the_natural_name() {
         data_root.clone(),
         stream,
         clock.as_ref(),
+        Duration::from_secs(300),
         SyncWake::default(),
         Box::new(KolkataZoneSource(kolkata_zone)),
         Arc::new(StderrWarnings),

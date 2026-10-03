@@ -156,6 +156,7 @@ fn segment_zone_table_driven_wire_envelope() {
                 Duration::ZERO,
                 offset,
                 row.clock.iana_name().as_deref(),
+                Duration::from_secs(300),
             )
             .expect("create segment");
 
@@ -415,6 +416,7 @@ fn segment_zone_backlog_uses_stored_zone_not_current_zone() {
             Duration::ZERO,
             offset_denver,
             clock_denver.iana_name().as_deref(),
+            Duration::from_secs(300),
         )
         .expect("create segment");
 
@@ -596,6 +598,7 @@ fn travel_reads_each_segments_zone() {
         data_root.clone(),
         stream.clone(),
         clock.as_ref(),
+        interval,
         SyncWake::default(),
         Box::new(TravelZoneSource::new()),
         Arc::new(RecordingWarnings::default()),
@@ -721,6 +724,7 @@ fn production_constructor_reads_the_zone_once_per_segment() {
         data_root,
         stream,
         clock.as_ref(),
+        interval,
         SyncWake::default(),
         Box::new(source),
         Arc::new(RecordingWarnings::default()),
@@ -818,6 +822,7 @@ fn failed_read_reuses_the_previous_zone_at_the_new_start() {
         data_root.clone(),
         stream.clone(),
         clock.as_ref(),
+        interval,
         SyncWake::default(),
         Box::new(FallbackZoneSource::new()),
         warnings.clone(),
@@ -914,6 +919,7 @@ fn zone_failure_warns_on_each_transition_into_failure() {
         data_root,
         stream,
         clock.as_ref(),
+        interval,
         SyncWake::default(),
         Box::new(flapping),
         warnings.clone(),

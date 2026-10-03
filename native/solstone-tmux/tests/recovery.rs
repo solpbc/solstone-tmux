@@ -215,6 +215,7 @@ fn rename_failure_keeps_source() {
         &instance_lock,
         &setup.data_root,
         &setup.stream,
+        Duration::from_secs(300),
         RecoveryOptions {
             fail_source_rename: true,
             ..RecoveryOptions::default()
@@ -286,6 +287,7 @@ fn repairs_and_parent_renames_are_fsynced() {
         &instance_lock,
         &setup.data_root,
         &setup.stream,
+        Duration::from_secs(300),
         RecoveryOptions {
             fail_repair_sync: true,
             ..RecoveryOptions::default()
@@ -311,6 +313,7 @@ fn finalized_rename_parent_is_fsynced() {
         &instance_lock,
         &setup.data_root,
         &setup.stream,
+        Duration::from_secs(300),
         RecoveryOptions {
             fail_rename_parent_sync: true,
             ..RecoveryOptions::default()
@@ -348,6 +351,7 @@ fn unexpected_file_between_empty_validation_and_removal_is_retained() {
         &instance_lock,
         &setup.data_root,
         &setup.stream,
+        Duration::from_secs(300),
         RecoveryOptions {
             before_empty_removal: Some(inject_unexpected_owner_file),
             ..RecoveryOptions::default()
@@ -441,6 +445,43 @@ fn invalid_time_offset_and_duration_metadata_are_quarantined() {
     });
 }
 
+// A segment whose recorded length is under one second recovers as one second,
+// including metadata left by a writer that recorded a zero length.
+#[test]
+fn recovered_zero_length_is_named_one_second() {
+    let setup = incomplete("recovered-zero-length", true);
+    let mut metadata = setup.read_metadata();
+    metadata.elapsed_nanos = 0;
+    metadata.finalized_dir = "120000_000".to_owned();
+    setup.write_metadata(&metadata);
+
+    let records = recover(&setup);
+
+    assert_eq!(records[0].action, RecoveryAction::Finalized);
+    assert_eq!(records[0].candidate, setup.stream.join("120000_001"));
+    assert!(setup.stream.join("120000_001").is_dir());
+    assert!(!setup.stream.join("120000_000").exists());
+    assert!(!setup.source.exists());
+    assert!(!setup.metadata.exists());
+}
+
+// A recorded length past the interval recovers bounded to the interval.
+#[test]
+fn recovered_overlong_length_is_bounded_by_the_interval() {
+    let setup = incomplete("recovered-overlong-length", true);
+    let mut metadata = setup.read_metadata();
+    metadata.elapsed_nanos = 14_400 * 1_000_000_000;
+    metadata.finalized_dir = "120000_14400".to_owned();
+    setup.write_metadata(&metadata);
+
+    let records = recover(&setup);
+
+    assert_eq!(records[0].action, RecoveryAction::Finalized);
+    assert_eq!(records[0].candidate, setup.stream.join("120000_300"));
+    assert!(setup.stream.join("120000_300").is_dir());
+    assert!(!setup.stream.join("120000_14400").exists());
+}
+
 // AC 13: an invalid candidate stem is contradictory even when metadata agrees with it.
 #[test]
 fn invalid_candidate_stem_is_quarantined() {
@@ -476,14 +517,24 @@ fn symlink_and_escape_candidates_are_rejected() {
     let instance_lock = InstanceLock::acquire(&data_root).expect("recovery lock");
 
     assert!(matches!(
-        recover_stream(&instance_lock, &data_root, &stream),
+        recover_stream(
+            &instance_lock,
+            &data_root,
+            &stream,
+            Duration::from_secs(300)
+        ),
         Err(RecoveryError::SpecialTarget(_))
     ));
 
     let escaped = temporary.path().join("escaped");
     fs::create_dir(&escaped).expect("escaped");
     assert!(matches!(
-        recover_stream(&instance_lock, &data_root, &escaped),
+        recover_stream(
+            &instance_lock,
+            &data_root,
+            &escaped,
+            Duration::from_secs(300)
+        ),
         Err(RecoveryError::EscapesDataRoot(_))
     ));
 }
@@ -500,7 +551,7 @@ fn configured_stream_scan_rejects_symlinked_captures_root() {
     let instance_lock = InstanceLock::acquire(&data_root).expect("recovery lock");
 
     assert!(matches!(
-        recover_capture_streams(&instance_lock, &data_root),
+        recover_capture_streams(&instance_lock, &data_root, Duration::from_secs(300)),
         Err(RecoveryError::SpecialTarget(path)) if path == data_root.join("captures")
     ));
 }
@@ -524,6 +575,7 @@ fn startup_recovery_finalizes_a_segment_left_under_a_previous_hostname_stream() 
         Duration::ZERO,
         UtcOffset::UTC,
         None,
+        Duration::from_secs(300),
     )
     .expect("segment");
     segment
@@ -533,7 +585,8 @@ fn startup_recovery_finalizes_a_segment_left_under_a_previous_hostname_stream() 
     drop(segment);
     let instance_lock = InstanceLock::acquire(&data_root).expect("recovery lock");
 
-    let records = recover_capture_streams(&instance_lock, &data_root).expect("recovery");
+    let records = recover_capture_streams(&instance_lock, &data_root, Duration::from_secs(300))
+        .expect("recovery");
 
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].action, RecoveryAction::Finalized);
@@ -552,7 +605,13 @@ struct Incomplete {
 
 fn recover(setup: &Incomplete) -> Vec<solstone_tmux::recovery::RecoveryRecord> {
     let instance_lock = InstanceLock::acquire(&setup.data_root).expect("recovery lock");
-    recover_stream(&instance_lock, &setup.data_root, &setup.stream).expect("recovery")
+    recover_stream(
+        &instance_lock,
+        &setup.data_root,
+        &setup.stream,
+        Duration::from_secs(300),
+    )
+    .expect("recovery")
 }
 
 fn assert_contradictory_metadata(label: &str, mutate: impl FnOnce(&mut SegmentMetadata)) {
@@ -608,6 +667,7 @@ fn incomplete(label: &str, append: bool) -> Incomplete {
         Duration::ZERO,
         UtcOffset::UTC,
         None,
+        Duration::from_secs(300),
     )
     .expect("segment");
     if append {
@@ -682,6 +742,7 @@ fn recovery_finalizes_a_bumped_segment_without_touching_the_taken_stem() {
         data_root.clone(),
         stream,
         clock.as_ref(),
+        Duration::from_secs(300),
         SyncWake::default(),
         Box::new(BerlinZoneSource::new()),
         Arc::new(StderrWarnings),
@@ -716,17 +777,18 @@ fn recovery_finalizes_a_bumped_segment_without_touching_the_taken_stem() {
     drop(manager);
 
     let lock = InstanceLock::acquire(&data_root).expect("recovery lock");
-    let records = recover_capture_streams(&lock, &data_root).expect("recover");
+    let records =
+        recover_capture_streams(&lock, &data_root, Duration::from_secs(300)).expect("recover");
 
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].action, RecoveryAction::Finalized);
-    assert_eq!(records[0].candidate, day_stream_dir.join("023001_000"));
+    assert_eq!(records[0].candidate, day_stream_dir.join("023001_001"));
 
-    assert!(day_stream_dir.join("023001_000").is_dir());
+    assert!(day_stream_dir.join("023001_001").is_dir());
     assert_eq!(std::fs::read(&taken_file).expect("read marker"), b"taken");
 
     let finalized_jsonl = day_stream_dir
-        .join("023001_000")
+        .join("023001_001")
         .join("tmux_main_screen.jsonl");
     let finalized_bytes = std::fs::read(&finalized_jsonl).expect("read finalized jsonl");
     assert_eq!(finalized_bytes, incomplete_bytes);
@@ -738,7 +800,7 @@ fn recovery_finalizes_a_bumped_segment_without_touching_the_taken_stem() {
     let frame_time = t + Duration::from_secs_f64(ts);
     assert!(frame_time >= t);
 
-    let zone_path = solstone_tmux::storage::capture_time_path(&day_stream_dir, "023001_000");
+    let zone_path = solstone_tmux::storage::capture_time_path(&day_stream_dir, "023001_001");
     let zone_info = solstone_tmux::storage::load_capture_time(&zone_path);
     assert_eq!(
         zone_info,

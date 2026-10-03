@@ -13,7 +13,7 @@ use time::{Date, Month, OffsetDateTime, UtcOffset};
 
 use crate::instance_lock::InstanceLock;
 use crate::name::derive_component;
-use crate::segment::finalized_name;
+use crate::segment::{finalized_name, record_length};
 use crate::storage::{
     CaptureTime, MetadataLifecycle, SegmentMetadata, atomic_write_metadata, sync_directory,
     write_capture_time,
@@ -48,11 +48,13 @@ pub fn recover_stream(
     instance_lock: &InstanceLock,
     data_root: &Path,
     stream_dir: &Path,
+    segment_interval: Duration,
 ) -> Result<Vec<RecoveryRecord>, RecoveryError> {
     recover_stream_with_options(
         instance_lock,
         data_root,
         stream_dir,
+        segment_interval,
         RecoveryOptions::default(),
     )
 }
@@ -61,10 +63,11 @@ pub fn recover_stream_with_options(
     instance_lock: &InstanceLock,
     data_root: &Path,
     stream_dir: &Path,
+    segment_interval: Duration,
     options: RecoveryOptions,
 ) -> Result<Vec<RecoveryRecord>, RecoveryError> {
     let _held_lock = instance_lock.file();
-    recover_stream_inner(data_root, stream_dir, options)
+    recover_stream_inner(data_root, stream_dir, segment_interval, options)
 }
 
 /// Recovers every stream directory under each capture date, not only the
@@ -73,6 +76,7 @@ pub fn recover_stream_with_options(
 pub fn recover_capture_streams(
     instance_lock: &InstanceLock,
     data_root: &Path,
+    segment_interval: Duration,
 ) -> Result<Vec<RecoveryRecord>, RecoveryError> {
     let _held_lock = instance_lock.file();
     let captures = data_root.join("captures");
@@ -154,6 +158,7 @@ pub fn recover_capture_streams(
         records.extend(recover_stream_inner(
             data_root,
             &stream_dir,
+            segment_interval,
             RecoveryOptions::default(),
         )?);
     }
@@ -163,6 +168,7 @@ pub fn recover_capture_streams(
 fn recover_stream_inner(
     data_root: &Path,
     stream_dir: &Path,
+    segment_interval: Duration,
     options: RecoveryOptions,
 ) -> Result<Vec<RecoveryRecord>, RecoveryError> {
     validate_stream(data_root, stream_dir)?;
@@ -190,7 +196,12 @@ fn recover_stream_inner(
 
     let mut records = Vec::new();
     for stem in stems {
-        records.push(recover_candidate(stream_dir, &stem, options)?);
+        records.push(recover_candidate(
+            stream_dir,
+            &stem,
+            segment_interval,
+            options,
+        )?);
     }
     Ok(records)
 }
@@ -198,6 +209,7 @@ fn recover_stream_inner(
 fn recover_candidate(
     stream_dir: &Path,
     stem: &str,
+    segment_interval: Duration,
     options: RecoveryOptions,
 ) -> Result<RecoveryRecord, RecoveryError> {
     let source = stream_dir.join(format!("{stem}.incomplete"));
@@ -319,6 +331,10 @@ fn recover_candidate(
         ));
     }
 
+    // Metadata written before lengths were bounded can carry a zero or
+    // over-long length; the finalized name always comes from the bound.
+    let recorded = Duration::from_nanos(metadata.elapsed_nanos);
+    record_length(&mut metadata, recorded, segment_interval);
     let finalized = stream_dir.join(&metadata.finalized_dir);
     if entry_exists(&finalized)? {
         return Ok(record(

@@ -38,6 +38,7 @@ pub struct SegmentMetadata {
     pub local_offset_seconds: i32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tz: Option<String>,
+    /// Segment length bounded to `[1 s, segment interval]`; names `finalized_dir`.
     pub elapsed_nanos: u64,
     pub last_durable_frame_id: u64,
     pub durable_frame_count: u64,

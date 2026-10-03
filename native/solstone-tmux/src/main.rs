@@ -241,8 +241,8 @@ fn run_native(
             .map_err(|error| error.to_string())?,
     );
 
-    for record in
-        recover_capture_streams(&instance_lock, &data_root).map_err(|error| error.to_string())?
+    for record in recover_capture_streams(&instance_lock, &data_root, config.segment_interval)
+        .map_err(|error| error.to_string())?
     {
         if matches!(
             record.action,
@@ -267,6 +267,7 @@ fn run_native(
         data_root.clone(),
         config.stream.clone(),
         clock.as_ref(),
+        config.segment_interval,
         sync_wake.clone(),
         Box::new(solstone_tmux::clock::SystemZoneSource),
         Arc::new(solstone_tmux::tmux::StderrWarnings),

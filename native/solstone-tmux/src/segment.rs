@@ -28,6 +28,7 @@ pub struct SegmentState {
     storage: Box<dyn DurableStorage>,
     digests: HashMap<String, u64>,
     start_monotonic: Duration,
+    segment_interval: Duration,
     poisoned: bool,
     closed: Option<SegmentClose>,
 }
@@ -52,6 +53,7 @@ impl SegmentState {
         start_monotonic: Duration,
         local_offset: UtcOffset,
         tz: Option<&str>,
+        segment_interval: Duration,
     ) -> Result<Self, SegmentError> {
         Self::create_with_faults(
             stream_dir,
@@ -60,10 +62,12 @@ impl SegmentState {
             start_monotonic,
             local_offset,
             tz,
+            segment_interval,
             FaultPlan::default(),
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn create_with_faults(
         stream_dir: &Path,
         stem: &str,
@@ -71,6 +75,7 @@ impl SegmentState {
         start_monotonic: Duration,
         local_offset: UtcOffset,
         tz: Option<&str>,
+        segment_interval: Duration,
         faults: FaultPlan,
     ) -> Result<Self, SegmentError> {
         ensure_private_directory(stream_dir).map_err(SegmentError::Path)?;
@@ -87,7 +92,7 @@ impl SegmentState {
             schema_version: SegmentMetadata::SCHEMA_VERSION,
             lifecycle: MetadataLifecycle::Creating,
             incomplete_dir: incomplete_name,
-            finalized_dir: finalized_name(stem, Duration::ZERO),
+            finalized_dir: String::new(),
             start_wall_unix_nanos: start_wall.unix_timestamp_nanos(),
             local_offset_seconds: local_offset.whole_seconds(),
             tz: tz.filter(|name| !name.is_empty()).map(str::to_owned),
@@ -97,6 +102,7 @@ impl SegmentState {
             has_durable_frames: false,
             sessions: Default::default(),
         };
+        record_length(&mut metadata, Duration::ZERO, segment_interval);
         atomic_write_metadata(&metadata_path, stream_dir, &metadata)?;
         ensure_private_directory(&incomplete_dir).map_err(SegmentError::Path)?;
         sync_directory(stream_dir)?;
@@ -116,6 +122,7 @@ impl SegmentState {
             storage: Box::new(storage),
             digests: HashMap::new(),
             start_monotonic,
+            segment_interval,
             poisoned: false,
             closed: None,
         })
@@ -152,9 +159,11 @@ impl SegmentState {
         let bytes =
             serialize_frame(capture, frame_id, timestamp).map_err(SegmentError::Serialize)?;
         let mut proposed = self.metadata.clone();
-        let elapsed = now_monotonic.saturating_sub(self.start_monotonic);
-        proposed.elapsed_nanos = duration_nanos(elapsed);
-        proposed.finalized_dir = finalized_name(segment_stem(&proposed.incomplete_dir), elapsed);
+        record_length(
+            &mut proposed,
+            now_monotonic.saturating_sub(self.start_monotonic),
+            self.segment_interval,
+        );
         proposed.last_durable_frame_id = frame_id;
         proposed.durable_frame_count += 1;
         proposed.has_durable_frames = true;
@@ -209,10 +218,11 @@ impl SegmentState {
             return self.remove_confirmed_empty();
         }
 
-        let elapsed = now_monotonic.saturating_sub(self.start_monotonic);
-        self.metadata.elapsed_nanos = duration_nanos(elapsed);
-        self.metadata.finalized_dir =
-            finalized_name(segment_stem(&self.metadata.incomplete_dir), elapsed);
+        record_length(
+            &mut self.metadata,
+            now_monotonic.saturating_sub(self.start_monotonic),
+            self.segment_interval,
+        );
         self.metadata.lifecycle = MetadataLifecycle::Finalizing;
         self.storage.write_metadata(&self.metadata)?;
         self.storage.sync_and_close()?;
@@ -364,6 +374,28 @@ fn segment_stem(incomplete_name: &str) -> &str {
     incomplete_name
         .strip_suffix(".incomplete")
         .expect("segment metadata has an incomplete directory name")
+}
+
+/// Whole-second LEN of a segment key: the measured duration bounded to
+/// `[1, segment_interval]`. A poll that runs past the rotation mark, a stop
+/// that lands after a long suspension, or a segment stopped within its first
+/// second never names a span outside what one segment can hold.
+pub fn segment_length(elapsed: Duration, segment_interval: Duration) -> u64 {
+    elapsed
+        .as_secs()
+        .clamp(1, segment_interval.as_secs().max(1))
+}
+
+/// Records the bounded length of a segment and the finalized name derived
+/// from it. Every path that names a finalized segment goes through here.
+pub(crate) fn record_length(
+    metadata: &mut SegmentMetadata,
+    elapsed: Duration,
+    segment_interval: Duration,
+) {
+    let length = Duration::from_secs(segment_length(elapsed, segment_interval));
+    metadata.elapsed_nanos = duration_nanos(length);
+    metadata.finalized_dir = finalized_name(segment_stem(&metadata.incomplete_dir), length);
 }
 
 pub(crate) fn finalized_name(stem: &str, elapsed: Duration) -> String {

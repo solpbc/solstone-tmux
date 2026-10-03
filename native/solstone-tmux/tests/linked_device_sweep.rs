@@ -925,6 +925,7 @@ async fn run_binding_failure(
         Duration::ZERO,
         offset,
         None,
+        Duration::from_secs(300),
     )
     .expect("active segment");
     struct UtcZone;
