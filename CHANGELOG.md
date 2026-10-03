@@ -4,6 +4,12 @@ All notable changes to solstone-tmux will be documented in this file.
 
 Format adapted from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- if solstone-tmux is paused (say, with ctrl-z) and later resumed, the stretch of terminal text open when it paused no longer shows up in your journal as lasting the whole pause.
+
 ## [2.0.12] - 2026-10-03
 
 ### Added
