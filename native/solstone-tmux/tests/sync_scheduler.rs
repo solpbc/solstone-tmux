@@ -1875,6 +1875,116 @@ fn repaired_credential_reacks_under_the_new_generation() {
 }
 
 #[test]
+fn a_back_off_from_the_previous_journal_does_not_delay_the_next() {
+    paused(async {
+        let temporary = TestDirectory::new("backoff-follows-pairing");
+        create_segment(&temporary, "20260701", "120000_300", b"fixture\n");
+        let test_clock = clock();
+        let refusal = || {
+            Err(SyncOperationError::RetainCandidate {
+                diagnostic: DiagnosticCode::JournalRejected,
+                answer: "409:content_conflict".to_owned(),
+            })
+        };
+
+        let mut journal_a = FakeJournal::default();
+        journal_a.upload_outcome("120000_300", refusal());
+        let mut scheduler_a =
+            scheduler_with_clock(&temporary, SyncWake::default(), Arc::clone(&test_clock));
+        let refused = scheduler_a.run_sweep(&mut journal_a, no_shutdown()).await;
+        assert_eq!(refused.attempted, 1);
+
+        // The same journal still honors its own back-off.
+        let mut scheduler_a_again =
+            scheduler_with_clock(&temporary, SyncWake::default(), Arc::clone(&test_clock));
+        journal_a.clear_calls();
+        let deferred = scheduler_a_again
+            .run_sweep(&mut journal_a, no_shutdown())
+            .await;
+        assert_eq!(deferred.attempted, 0);
+        assert!(journal_a.uploads().is_empty());
+
+        // After a re-pair to another journal, the held segment goes now.
+        let journal_b_identity = JournalIdentity {
+            instance_id: "inst-2".to_owned(),
+            ca_fp_prefix_hex: "cafp2".to_owned(),
+            pairing_generation_hex: "pairgen2".to_owned(),
+        };
+        let mut journal_b = FakeJournal::default();
+        journal_b.upload_outcome("120000_300", refusal());
+        let mut scheduler_b = scheduler_with_clock_and_identity(
+            &temporary,
+            SyncWake::default(),
+            Arc::clone(&test_clock),
+            journal_b_identity.clone(),
+        );
+        let first_b = scheduler_b.run_sweep(&mut journal_b, no_shutdown()).await;
+        assert_eq!(first_b.attempted, 1);
+        assert_eq!(journal_b.uploads(), vec!["120000_300".to_owned()]);
+
+        // The new journal's own refusal starts a fresh, short back-off.
+        let state_path = temporary
+            .path()
+            .join("sync-ledger/20260701")
+            .join(STREAM)
+            .join("120000_300")
+            .join("state.json");
+        let state: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&state_path).unwrap()).unwrap();
+        assert_eq!(state["answer_count"], 1);
+        assert_eq!(state["next_attempt_interval_seconds"], 3600);
+        assert_eq!(state["journal"]["instance_id"], "inst-2");
+
+        advance_both(&test_clock, Duration::from_secs(3601)).await;
+        let mut scheduler_b_later = scheduler_with_clock_and_identity(
+            &temporary,
+            SyncWake::default(),
+            Arc::clone(&test_clock),
+            journal_b_identity,
+        );
+        journal_b.clear_calls();
+        let delivered = scheduler_b_later
+            .run_sweep(&mut journal_b, no_shutdown())
+            .await;
+        assert_eq!(delivered.custodied, 1);
+        assert!(!segment_path(&temporary, "20260701", "120000_300").exists());
+    });
+}
+
+#[test]
+fn a_back_off_recorded_without_a_journal_does_not_delay_delivery() {
+    run(async {
+        let temporary = TestDirectory::new("backoff-without-journal");
+        create_segment(&temporary, "20260701", "120000_300", b"fixture\n");
+        let state_dir = temporary
+            .path()
+            .join("sync-ledger/20260701")
+            .join(STREAM)
+            .join("120000_300");
+        std::fs::create_dir_all(&state_dir).unwrap();
+        std::fs::write(
+            state_dir.join("state.json"),
+            serde_json::to_string(&serde_json::json!({
+                "next_attempt_unix": clock().wall_now().unix_timestamp() + 86400,
+                "next_attempt_interval_seconds": 86400,
+                "answer": "409:content_conflict",
+                "answer_count": 3
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let mut scheduler = scheduler(&temporary, SyncWake::default());
+        let mut journal = FakeJournal::default();
+        let summary = scheduler.run_sweep(&mut journal, no_shutdown()).await;
+
+        assert_eq!(summary.attempted, 1);
+        assert_eq!(summary.custodied, 1);
+        assert!(!segment_path(&temporary, "20260701", "120000_300").exists());
+    });
+}
+
+#[test]
 fn ack_write_failure_before_rename_reuploads_on_the_next_scheduler() {
     run(async {
         let temporary = TestDirectory::new("ack-write-fail-reupload");
@@ -2812,6 +2922,11 @@ fn future_attempt_defers_and_strips_the_terminal_keep_marker() {
             serde_json::to_string(&serde_json::json!({
                 "next_attempt_unix": future_time,
                 "next_attempt_interval_seconds": 3600,
+                "journal": {
+                    "instance_id": "inst-1",
+                    "ca_fp_prefix_hex": "cafp1",
+                    "pairing_generation_hex": "pairgen1"
+                },
                 "terminal_keep": {
                     "instance_id": "inst-1",
                     "ca_fp_prefix_hex": "cafp1",
@@ -2834,6 +2949,7 @@ fn future_attempt_defers_and_strips_the_terminal_keep_marker() {
         let parsed: serde_json::Value = serde_json::from_slice(&state_bytes).unwrap();
         assert!(parsed.get("terminal_keep").is_none());
         assert_eq!(parsed["next_attempt_unix"], future_time);
+        assert_eq!(parsed["journal"]["instance_id"], "inst-1");
     });
 }
 

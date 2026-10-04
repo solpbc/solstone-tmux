@@ -4,6 +4,12 @@ All notable changes to solstone-tmux will be documented in this file.
 
 Format adapted from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- if you pair solstone-tmux with a different journal, terminal text still waiting on this computer goes to the new journal on its first sync after you confirm its mark. before, if your old journal had turned some of it away, solstone-tmux could hold it back from the new one for up to a day.
+
 ## [2.0.13] - 2026-10-04
 
 ### Fixed

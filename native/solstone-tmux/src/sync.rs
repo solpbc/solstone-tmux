@@ -1032,6 +1032,10 @@ struct StateRecord {
     answer: Option<String>,
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     answer_count: u32,
+    /// The journal whose answer set this retry schedule. A schedule set by
+    /// any other journal, or by none, never delays delivery.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    journal: Option<JournalIdentityRecord>,
     #[serde(default, skip_serializing)]
     terminal_keep: Option<JournalIdentityRecord>,
     #[serde(default, skip_serializing)]
@@ -1162,6 +1166,7 @@ fn read_state_record(ledger_root: &Path, candidate: &SegmentCandidate) -> StateR
             next_attempt_interval_seconds: record.next_attempt_interval_seconds,
             answer: record.answer.clone(),
             answer_count: record.answer_count,
+            journal: record.journal.clone(),
             terminal_keep: None,
             retention_recheck_unix: None,
             retention_recheck_interval_seconds: None,
@@ -1743,10 +1748,17 @@ impl SyncScheduler {
 
                 let ledger_root = self.ledger_root.clone();
                 let target = candidate.clone();
-                let state =
+                let mut state =
                     tokio::task::spawn_blocking(move || read_state_record(&ledger_root, &target))
                         .await
                         .unwrap_or_default();
+                let current_journal = JournalIdentityRecord::from(&self.identity);
+                if state.journal.as_ref() != Some(&current_journal) {
+                    state = StateRecord {
+                        journal: Some(current_journal),
+                        ..StateRecord::default()
+                    };
+                }
 
                 let disk_next_attempt = state.next_attempt_unix.map(|stored| {
                     let interval = state.next_attempt_interval_seconds.unwrap_or(3600) as i64;
