@@ -10,7 +10,10 @@ scratch_root=$(mktemp -d)
 trap 'rm -rf -- "$scratch_root"' EXIT
 rpm2cpio "$1" > "$scratch_root/payload.cpio"
 cpio --quiet --list < "$scratch_root/payload.cpio" > "$scratch_root/members"
-mapfile -t members < "$scratch_root/members"
+members=()
+while IFS= read -r member; do
+    members+=("$member")
+done < "$scratch_root/members"
 if ((${#members[@]} != 1)) || [[ "${members[0]}" != './usr/bin/solstone-tmux' ]]; then
     echo "RPM payload must contain exactly the product executable" >&2
     exit 1
