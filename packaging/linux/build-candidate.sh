@@ -101,6 +101,9 @@ if [[ -n "${requested[deb]:-}" ]]; then
 fi
 if [[ -n "${requested[rpm]:-}" ]]; then
     require_tool rpmbuild
+    require_tool rpm2cpio
+    require_tool cpio
+    require_tool cmp
 fi
 
 require_version git "$(git --version)" \
@@ -358,6 +361,7 @@ if [[ -n "${requested[rpm]:-}" ]]; then
     touch -d "@$SOURCE_DATE_EPOCH" -- "$spec_file"
     rpmbuild -bb \
         --define "_topdir $rpm_root" \
+        --define "__strip /bin/true" \
         --define "_build_id_links none" \
         --define "use_source_date_epoch_as_buildtime 1" \
         --define "clamp_mtime_to_source_date_epoch 1" \
@@ -367,6 +371,7 @@ if [[ -n "${requested[rpm]:-}" ]]; then
         echo "rpmbuild did not produce the expected package" >&2
         exit 1
     fi
+    bash "$repo_root/packaging/linux/verify-rpm-payload.sh" "$built_rpm" "$source_executable"
     install -m 0644 -- "$built_rpm" "$candidate_root/$rpm_name"
     add_artifact "$rpm_name"
 fi

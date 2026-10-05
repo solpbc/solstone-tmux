@@ -622,5 +622,6 @@ operator_exec chmod 0644 "$candidate_root/$record_name"
 
 operator_exec mv "$candidate_root" "$output_directory"
 trap - EXIT
-SOLSTONE_TMUX_OPERATOR_CLEANUP=1 operator_exec rm -rf "$scratch_root" || true
+SOLSTONE_TMUX_OPERATOR_CLEANUP=1 operator_exec rm -rf "$scratch_root"
+SOLSTONE_TMUX_OPERATOR_CLEANUP=1 operator_exec rm -rf "$scratch_tmux"
 printf '%s\n' "$output_directory"

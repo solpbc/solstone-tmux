@@ -151,6 +151,35 @@ fn short_tmux_root_allocation_failure_removes_the_candidate_root() {
     }));
 }
 
+#[test]
+fn successful_candidate_removes_both_allocated_scratch_roots() {
+    let fixture = OperatorFixture::new();
+    let run = fixture.run(0, "success-cleanup");
+    assert_success(&run.output);
+    assert_eq!(run.allocated_roots.len(), 2);
+    for root in &run.allocated_roots {
+        assert!(!root.exists(), "successful candidate retained {root:?}");
+    }
+    assert!(run.output_path.is_dir());
+}
+
+#[test]
+fn successful_candidate_cleanup_failures_are_loud_and_retain_output() {
+    let fixture = OperatorFixture::new();
+    for position in 1..=2 {
+        let run = fixture.run_with_cleanup_failure(0, position, &format!("cleanup-{position}"));
+        assert_eq!(run.output.status.code(), Some(98));
+        assert!(run.output.stdout.is_empty());
+        assert_eq!(run.cleanup_commands.len(), position);
+        assert_eq!(run.allocated_roots.len(), 2);
+        assert!(run.allocated_roots[position - 1].exists());
+        assert!(
+            run.output_path.is_dir(),
+            "candidate output must remain recoverable"
+        );
+    }
+}
+
 fn expected_command_names() -> Vec<&'static str> {
     let mut names = vec!["sh"; 44];
     names.extend([
@@ -290,6 +319,16 @@ struct OperatorRun {
     output: Output,
     workflow_commands: Vec<String>,
     cleanup_commands: Vec<String>,
+    allocated_roots: Vec<PathBuf>,
+    output_path: PathBuf,
+}
+
+impl Drop for OperatorRun {
+    fn drop(&mut self) {
+        for root in &self.allocated_roots {
+            let _ = fs::remove_dir_all(root);
+        }
+    }
 }
 
 struct OperatorFixture {
@@ -315,11 +354,22 @@ impl OperatorFixture {
     }
 
     fn run(&self, fail_at: usize, label: &str) -> OperatorRun {
+        self.run_with_cleanup_failure(fail_at, 0, label)
+    }
+
+    fn run_with_cleanup_failure(
+        &self,
+        fail_at: usize,
+        fail_cleanup_at: usize,
+        label: &str,
+    ) -> OperatorRun {
         let run_root = self.root.path().join(label);
         let output_parent = run_root.join("output");
         fs::create_dir_all(&output_parent).expect("create output parent");
         let log = run_root.join("commands.log");
         let count = run_root.join("count");
+        let cleanup_count = run_root.join("cleanup-count");
+        let allocations = run_root.join("allocations");
         let state = run_root.join("service-state");
         let output_path = output_parent.join("candidate");
         let output = Command::new(&self.script)
@@ -339,6 +389,9 @@ impl OperatorFixture {
             .env("FAKE_OPERATOR_LOG", &log)
             .env("FAKE_OPERATOR_COUNT", &count)
             .env("FAKE_OPERATOR_FAIL_AT", fail_at.to_string())
+            .env("FAKE_OPERATOR_CLEANUP_COUNT", &cleanup_count)
+            .env("FAKE_OPERATOR_FAIL_CLEANUP_AT", fail_cleanup_at.to_string())
+            .env("FAKE_OPERATOR_ALLOCATIONS", &allocations)
             .env("FAKE_OPERATOR_STATE", &state)
             .env("FAKE_SOURCE_COMMIT", SOURCE_COMMIT)
             .env("FAKE_VERSION", VERSION)
@@ -367,6 +420,12 @@ impl OperatorFixture {
             output,
             workflow_commands,
             cleanup_commands,
+            allocated_roots: fs::read_to_string(allocations)
+                .unwrap_or_default()
+                .lines()
+                .map(PathBuf::from)
+                .collect(),
+            output_path,
         }
     }
 }
@@ -400,6 +459,12 @@ set -euo pipefail
 cleanup="${SOLSTONE_TMUX_OPERATOR_CLEANUP:-0}"
 if [[ "$cleanup" == "1" ]]; then
     kind="cleanup"
+    cleanup_count=0
+    if [[ -f "$FAKE_OPERATOR_CLEANUP_COUNT" ]]; then
+        cleanup_count="$(<"$FAKE_OPERATOR_CLEANUP_COUNT")"
+    fi
+    cleanup_count=$((cleanup_count + 1))
+    printf '%s\n' "$cleanup_count" >"$FAKE_OPERATOR_CLEANUP_COUNT"
 else
     kind="workflow"
     count=0
@@ -414,6 +479,11 @@ fi
     printf '%q ' "$@"
     printf '\n'
 } >>"$FAKE_OPERATOR_LOG"
+if [[ "$cleanup" == "1" &&
+    "${FAKE_OPERATOR_FAIL_CLEANUP_AT:-0}" != "0" &&
+    "$cleanup_count" == "$FAKE_OPERATOR_FAIL_CLEANUP_AT" ]]; then
+    exit 98
+fi
 if [[ "$cleanup" != "1" &&
     "${FAKE_OPERATOR_FAIL_AT:-0}" != "0" &&
     "$count" == "$FAKE_OPERATOR_FAIL_AT" ]]; then
@@ -494,11 +564,11 @@ case "$command_name" in
         fi
         ;;
     xcrun | bash | env | codesign | spctl | cmp) ;;
-    kill)
-        /bin/kill "$@" 2>/dev/null || true
-        ;;
+    kill) ;;
     mktemp)
-        /usr/bin/mktemp "$@"
+        allocation="$(/usr/bin/mktemp "$@")"
+        printf '%s\n' "$allocation" >>"$FAKE_OPERATOR_ALLOCATIONS"
+        printf '%s\n' "$allocation"
         ;;
     mkdir)
         /bin/mkdir "$@"
