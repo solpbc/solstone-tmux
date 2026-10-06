@@ -233,7 +233,23 @@ fn run_native(
     let _private_state_lock = private_link::acquire_private_state_lock(&config_root)
         .map_err(|_| "private state is already in use".to_owned())?;
     let hostname = system_hostname().map_err(|error| error.to_string())?;
-    let config = RuntimeConfig::load(&config_root, &hostname).map_err(|error| error.to_string())?;
+    let runtime = runtime()?;
+    let initial_config =
+        RuntimeConfig::load(&config_root, &hostname).map_err(|error| error.to_string())?;
+    let destination_root = config_root.clone();
+    let destination_host = hostname.clone();
+    let (config, _) = runtime
+        .block_on(async {
+            tokio::task::spawn_blocking(move || {
+                solstone_tmux::device_migration::prepare_destination(
+                    &destination_root,
+                    &destination_host,
+                    initial_config,
+                )
+            })
+            .await
+        })
+        .map_err(|error| error.to_string())?;
     let local_observer = load_local_observer(&config_root).map_err(|error| error.to_string())?;
     let tmux_path = local_observer.tmux_path;
     let provider = Arc::new(
@@ -257,7 +273,6 @@ fn run_native(
         }
     }
 
-    let runtime = runtime()?;
     let shutdown = runtime
         .block_on(async { production_shutdown_future() })
         .map_err(|error| error.to_string())?;
@@ -331,6 +346,8 @@ fn run_native(
         identity: instance_lock.identity().clone(),
         health_refresh_interval: solstone_tmux::sync::HEALTH_REFRESH_INTERVAL,
         answer_lock_timeout: solstone_tmux::pairing_answer::ANSWER_LOCK_TIMEOUT,
+        platform,
+        marker_digest: None,
     }
     .run(sync_shutdown);
     let exit = runtime.block_on(supervise_observer(

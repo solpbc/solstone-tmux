@@ -9,8 +9,8 @@ use std::sync::{Arc, Mutex};
 
 use futures_util::{SinkExt, StreamExt};
 use rcgen::{
-    BasicConstraints, CertificateParams, ExtendedKeyUsagePurpose, IsCa, KeyPair, KeyUsagePurpose,
-    PKCS_ECDSA_P256_SHA256,
+    BasicConstraints, Certificate, CertificateParams, CertificateSigningRequestParams,
+    ExtendedKeyUsagePurpose, IsCa, KeyPair, KeyUsagePurpose, PKCS_ECDSA_P256_SHA256,
 };
 use rustls::client::danger::HandshakeSignatureValid;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, UnixTime};
@@ -43,6 +43,7 @@ pub struct PeerRequest {
     headers: Vec<(String, String)>,
     body: Vec<u8>,
     response_status: Option<u16>,
+    authenticated_client_sha256: Option<String>,
 }
 
 impl PeerRequest {
@@ -80,6 +81,10 @@ impl PeerRequest {
 
     pub fn response_status(&self) -> Option<u16> {
         self.response_status
+    }
+
+    pub fn authenticated_client_sha256(&self) -> Option<&str> {
+        self.authenticated_client_sha256.as_deref()
     }
 }
 
@@ -201,9 +206,35 @@ struct PeerState {
     upload_stalled: Arc<Notify>,
     current_stream: Arc<AtomicU32>,
     accepted: Arc<AtomicUsize>,
+    accepted_arrived: Arc<Notify>,
     active_carrier_handlers: Arc<AtomicUsize>,
     refusal_alert: Arc<AtomicU8>,
     expected_client_sha256: Arc<Mutex<Option<String>>>,
+    migration_authority: Arc<MigrationAuthority>,
+    migration_exchange: Arc<Mutex<MigrationExchange>>,
+    migration_routes_supported: Arc<AtomicBool>,
+    migration_decisions_supported: Arc<AtomicBool>,
+    migration_protocol_version: Arc<AtomicU32>,
+    lose_next_migration_decision_reply: Arc<AtomicBool>,
+}
+
+struct MigrationAuthority {
+    ca: Certificate,
+    ca_key: KeyPair,
+    ca_pem: String,
+    instance_id: String,
+    source_cid: String,
+}
+
+#[derive(Default)]
+struct MigrationExchange {
+    operation_id: Option<String>,
+    previous_cid: Option<String>,
+    cid: Option<String>,
+    rekey_response: Option<Vec<u8>>,
+    decision_id: Option<String>,
+    decision_response: Option<Vec<u8>>,
+    state: Option<String>,
 }
 
 pub struct RelayServer {
@@ -259,7 +290,7 @@ impl PrivateLinkPeer {
         assert!(address.ip().is_loopback(), "peer did not bind loopback");
 
         let refusal_alert = Arc::new(AtomicU8::new(0));
-        let (credential, acceptor, client_sha256) =
+        let (credential, acceptor, client_sha256, migration_authority) =
             credential_and_acceptor(address.port(), refusal_alert.clone());
         let state = PeerState {
             responses: Arc::new(Mutex::new(VecDeque::new())),
@@ -282,9 +313,16 @@ impl PrivateLinkPeer {
             upload_stalled: Arc::new(Notify::new()),
             current_stream: Arc::new(AtomicU32::new(0)),
             accepted: Arc::new(AtomicUsize::new(0)),
+            accepted_arrived: Arc::new(Notify::new()),
             active_carrier_handlers: Arc::new(AtomicUsize::new(0)),
             refusal_alert,
             expected_client_sha256: Arc::new(Mutex::new(Some(client_sha256))),
+            migration_authority: Arc::new(migration_authority),
+            migration_exchange: Arc::new(Mutex::new(MigrationExchange::default())),
+            migration_routes_supported: Arc::new(AtomicBool::new(true)),
+            migration_decisions_supported: Arc::new(AtomicBool::new(true)),
+            migration_protocol_version: Arc::new(AtomicU32::new(1)),
+            lose_next_migration_decision_reply: Arc::new(AtomicBool::new(false)),
         };
         let (controls, _) = tokio::sync::broadcast::channel(16);
         let task = tokio::spawn(serve(listener, acceptor, state.clone(), controls.clone()));
@@ -305,6 +343,30 @@ impl PrivateLinkPeer {
 
     pub fn set_expected_client_sha256(&self, sha: Option<String>) {
         *lock(&self.state.expected_client_sha256) = sha;
+    }
+
+    pub fn set_migration_routes_supported(&self, supported: bool) {
+        self.state
+            .migration_routes_supported
+            .store(supported, Ordering::SeqCst);
+    }
+
+    pub fn set_migration_decisions_supported(&self, supported: bool) {
+        self.state
+            .migration_decisions_supported
+            .store(supported, Ordering::SeqCst);
+    }
+
+    pub fn set_migration_protocol_version(&self, version: u32) {
+        self.state
+            .migration_protocol_version
+            .store(version, Ordering::SeqCst);
+    }
+
+    pub fn lose_next_migration_decision_reply(&self) {
+        self.state
+            .lose_next_migration_decision_reply
+            .store(true, Ordering::SeqCst);
     }
 
     pub fn relay_credential(&self, relay_origin: &str) -> Credential {
@@ -668,6 +730,17 @@ impl PrivateLinkPeer {
         self.state.accepted.load(Ordering::SeqCst)
     }
 
+    pub async fn wait_for_accepted_carrier_count(&self, target: usize) {
+        while self.accepted_carriers() < target {
+            let notified = self.state.accepted_arrived.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if self.accepted_carriers() < target {
+                notified.await;
+            }
+        }
+    }
+
     pub fn active_carrier_handlers(&self) -> usize {
         self.state.active_carrier_handlers.load(Ordering::SeqCst)
     }
@@ -734,7 +807,10 @@ impl ClientCertVerifier for RefusingVerifier {
     }
 }
 
-fn credential_and_acceptor(port: u16, refusal: Arc<AtomicU8>) -> (Credential, TlsAcceptor, String) {
+fn credential_and_acceptor(
+    port: u16,
+    refusal: Arc<AtomicU8>,
+) -> (Credential, TlsAcceptor, String, MigrationAuthority) {
     let ca_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("generate peer CA key");
     let mut ca_params =
         CertificateParams::new(Vec::<String>::new()).expect("construct peer CA parameters");
@@ -786,10 +862,12 @@ fn credential_and_acceptor(port: u16, refusal: Arc<AtomicU8>) -> (Credential, Tl
             .expect("build peer TLS server");
     let pin = spl_core::ca::sha256(ca_der.as_ref())[..16].to_vec();
     let client_sha256 = spl_core::ca::sha256_hex(client.der());
+    let source_cid = format!("sha256:{client_sha256}");
+    let migration_ca_pem = ca.pem();
     let credential = Credential {
         client_key_pem: client_key.serialize_pem(),
         client_cert_pem: client.pem(),
-        ca_chain_pem: vec![ca.pem()],
+        ca_chain_pem: vec![migration_ca_pem.clone()],
         ca_fp_prefix: pin,
         instance_id: "test-private-link-instance".to_owned(),
         home_label: "test home".to_owned(),
@@ -803,11 +881,175 @@ fn credential_and_acceptor(port: u16, refusal: Arc<AtomicU8>) -> (Credential, Tl
         device_token: None,
         device_token_expires_at: None,
     };
+    let migration_authority = MigrationAuthority {
+        ca,
+        ca_key,
+        ca_pem: migration_ca_pem,
+        instance_id: "test-private-link-instance".to_owned(),
+        source_cid,
+    };
     (
         credential,
         TlsAcceptor::from(Arc::new(server_config)),
         client_sha256,
+        migration_authority,
     )
+}
+
+fn migration_route_response(state: &PeerState, request: &PeerRequest) -> PeerResponse {
+    if !state.migration_routes_supported.load(Ordering::SeqCst) {
+        return migration_reply(404, Vec::new());
+    }
+    match (request.method(), request.path_without_query()) {
+        ("POST", "/app/network/api/clients/self/rekey") => {
+            #[derive(serde::Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct RekeyRequest {
+                protocol_version: u32,
+                operation_id: String,
+                csr: String,
+                device_label: String,
+                client_label: String,
+                platform: String,
+            }
+
+            let Ok(body) = serde_json::from_slice::<RekeyRequest>(request.body()) else {
+                return migration_reply(400, Vec::new());
+            };
+            if body.protocol_version != 1
+                || body.operation_id.is_empty()
+                || body.csr.is_empty()
+                || body.device_label.is_empty()
+                || body.client_label.is_empty()
+                || !matches!(body.platform.as_str(), "linux" | "macos")
+            {
+                return migration_reply(400, Vec::new());
+            }
+            let mut exchange = lock(&state.migration_exchange);
+            if let Some(existing) = exchange.rekey_response.as_ref() {
+                if exchange.operation_id.as_deref() == Some(body.operation_id.as_str()) {
+                    return migration_reply(200, existing.clone());
+                }
+                if exchange.state.as_deref() != Some("new_device") {
+                    return migration_reply(409, Vec::new());
+                }
+            }
+            let previous_cid = if exchange.state.as_deref() == Some("new_device") {
+                exchange
+                    .cid
+                    .clone()
+                    .unwrap_or_else(|| state.migration_authority.source_cid.clone())
+            } else {
+                state.migration_authority.source_cid.clone()
+            };
+            let Ok(csr) = CertificateSigningRequestParams::from_pem(&body.csr) else {
+                return migration_reply(400, Vec::new());
+            };
+            let Ok(client_cert) = csr.signed_by(
+                &state.migration_authority.ca,
+                &state.migration_authority.ca_key,
+            ) else {
+                return migration_reply(400, Vec::new());
+            };
+            let cid = format!("sha256:{}", spl_core::ca::sha256_hex(client_cert.der()));
+            let response = serde_json::json!({
+                "protocol_version": state.migration_protocol_version.load(Ordering::SeqCst),
+                "operation_id": body.operation_id,
+                "state": "pending",
+                "previous_cid": previous_cid,
+                "cid": cid,
+                "pairing": {
+                    "client_cert": client_cert.pem(),
+                    "ca_chain": [state.migration_authority.ca_pem],
+                    "instance_id": state.migration_authority.instance_id,
+                    "home_label": "test migration home",
+                    "fingerprint": cid,
+                    "home_attestation": null
+                }
+            });
+            let bytes = serde_json::to_vec(&response).expect("serialize rekey response");
+            exchange.operation_id = Some(body.operation_id);
+            exchange.previous_cid = Some(previous_cid);
+            exchange.cid = Some(cid);
+            exchange.rekey_response = Some(bytes.clone());
+            exchange.state = Some("pending".to_owned());
+            migration_reply(201, bytes)
+        }
+        ("GET", "/app/network/api/clients/self/migration") => {
+            let exchange = lock(&state.migration_exchange);
+            let body = serde_json::json!({
+                "protocol_version": state.migration_protocol_version.load(Ordering::SeqCst),
+                "rekey_operation_id": exchange.operation_id,
+                "previous_cid": exchange.previous_cid,
+                "state": exchange.state.as_deref().unwrap_or("none"),
+                "replaced_cid": null
+            });
+            migration_reply(200, serde_json::to_vec(&body).expect("serialize GET state"))
+        }
+        ("PUT", "/app/network/api/clients/self/migration") => {
+            if !state.migration_decisions_supported.load(Ordering::SeqCst) {
+                return migration_reply(404, Vec::new());
+            }
+            #[derive(serde::Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct DecisionRequest {
+                protocol_version: u32,
+                operation_id: String,
+                choice: String,
+            }
+
+            let Ok(body) = serde_json::from_slice::<DecisionRequest>(request.body()) else {
+                return migration_reply(400, Vec::new());
+            };
+            let mut exchange = lock(&state.migration_exchange);
+            if body.protocol_version != 1
+                || body.choice != "new_device"
+                || exchange.operation_id.is_none()
+            {
+                return migration_reply(409, Vec::new());
+            }
+            if exchange.state.as_deref() == Some("new_device") {
+                if exchange.decision_id.as_deref() == Some(body.operation_id.as_str()) {
+                    return migration_reply(
+                        200,
+                        exchange.decision_response.clone().unwrap_or_default(),
+                    );
+                }
+                return migration_reply(409, Vec::new());
+            }
+            let response = serde_json::json!({
+                "protocol_version": state.migration_protocol_version.load(Ordering::SeqCst),
+                "operation_id": body.operation_id,
+                "state": "new_device",
+                "previous_cid": exchange.previous_cid,
+                "cid": exchange.cid,
+                "replaced_cid": null,
+                "display_label": "test migration device"
+            });
+            let bytes = serde_json::to_vec(&response).expect("serialize decision response");
+            exchange.decision_id = Some(body.operation_id);
+            exchange.decision_response = Some(bytes.clone());
+            exchange.state = Some("new_device".to_owned());
+            if state
+                .lose_next_migration_decision_reply
+                .swap(false, Ordering::SeqCst)
+            {
+                return PeerResponse::Raw(
+                    b"HTTP/1.1 200 OK\r\ncontent-length: 100\r\n\r\n{".to_vec(),
+                );
+            }
+            migration_reply(200, bytes)
+        }
+        _ => migration_reply(404, Vec::new()),
+    }
+}
+
+fn migration_reply(status: u16, body: Vec<u8>) -> PeerResponse {
+    PeerResponse::Structured {
+        status,
+        body,
+        delay: None,
+    }
 }
 
 struct ActiveHandler {
@@ -840,6 +1082,7 @@ async fn serve(
             return;
         };
         state.accepted.fetch_add(1, Ordering::SeqCst);
+        state.accepted_arrived.notify_waiters();
         state.handshake_hold.wait_if_held().await;
         let Ok(tls) = acceptor.accept(tcp).await else {
             continue;
@@ -858,6 +1101,12 @@ async fn handle_carrier(
     state: PeerState,
     mut controls: tokio::sync::broadcast::Receiver<Control>,
 ) -> io::Result<()> {
+    let authenticated_client_sha256 = tls
+        .get_ref()
+        .1
+        .peer_certificates()
+        .and_then(|certificates| certificates.first())
+        .map(|certificate| spl_core::ca::sha256_hex(certificate.as_ref()));
     let (mut reader, mut writer) = tokio::io::split(tls);
     let mut decoder = FrameDecoder::new();
     let mut request_bytes: HashMap<u32, Vec<u8>> = HashMap::new();
@@ -959,6 +1208,11 @@ async fn handle_carrier(
                         let is_clients_self = path.as_deref() == Some("/app/network/api/clients/self");
                         let is_about = path.as_deref() == Some("/api/system/about");
                         let is_relay_access = path.as_deref() == Some("/app/network/api/relay/access");
+                        let is_migration_route = path.as_deref().is_some_and(|path| matches!(
+                            path,
+                            "/app/network/api/clients/self/rekey"
+                                | "/app/network/api/clients/self/migration"
+                        ));
                         state.request_count.fetch_add(1, Ordering::SeqCst);
                         if is_clients_self {
                             state
@@ -992,7 +1246,12 @@ async fn handle_carrier(
                                     && req.path_without_query() == "/app/devices/ingest"
                             })
                             .unwrap_or(false);
-                        let response = if is_upload {
+                        let response = if is_migration_route {
+                            parsed
+                                .as_ref()
+                                .map(|request| migration_route_response(&state, request))
+                                .unwrap_or_else(|| migration_reply(400, Vec::new()))
+                        } else if is_upload {
                             if let Some(queued) = lock(&state.responses).pop_front() {
                                 queued
                             } else if state.answer_uploads_with_descriptors.load(Ordering::SeqCst) {
@@ -1125,6 +1384,7 @@ async fn handle_carrier(
                         };
                         if let (Some(mut request), false) = (parsed, is_system_status) {
                             request.response_status = response_status;
+                            request.authenticated_client_sha256 = authenticated_client_sha256.clone();
                             lock(&state.requests).push(request);
                         }
                         let pending_body = matches!(&response, PeerResponse::DelayedBody { .. });
@@ -1282,6 +1542,7 @@ fn parse_request(raw: &[u8]) -> Option<PeerRequest> {
         headers,
         body: raw[split + 4..].to_vec(),
         response_status: None,
+        authenticated_client_sha256: None,
     })
 }
 

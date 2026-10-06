@@ -17,6 +17,7 @@ workspace = true
 futures-core = "0.3"
 jiff = { version = "0.2.37", default-features = false, features = ["std", "tz-system", "tzdb-zoneinfo"] }
 reqwest = { version = "0.12", default-features = false, features = ["multipart", "stream", "cookies"] }
+rcgen = { version = "0.13", default-features = false, features = ["ring", "pem", "x509-parser"] }
 rustix = { version = "1", features = ["fs", "process", "system"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -31,7 +32,6 @@ ar = "0.9"
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink"] }
 minisign-verify = "0.2"
-rcgen = { version = "0.13", default-features = false, features = ["ring", "pem", "x509-parser"] }
 rustix = { version = "1", features = ["fs", "process", "system", "pty"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 tar = { version = "0.4", default-features = false }

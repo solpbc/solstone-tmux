@@ -560,6 +560,8 @@ fn mark_argument_before_stdin() {
                 identity: lock.identity().clone(),
                 health_refresh_interval: Duration::from_millis(50),
                 answer_lock_timeout: Duration::from_millis(200),
+                platform: solstone_tmux::paths::PlatformKind::Linux,
+                marker_digest: Some("a".repeat(64)),
             };
 
             let task_handle = tokio::spawn(async move {
@@ -2214,6 +2216,8 @@ fn pairing_gate_uploads_after_confirm() {
             identity: lock.identity().clone(),
             health_refresh_interval: Duration::from_millis(50),
             answer_lock_timeout: Duration::from_millis(200),
+            platform: solstone_tmux::paths::PlatformKind::Linux,
+            marker_digest: Some("a".repeat(64)),
         };
 
         let task_handle = tokio::spawn(async move {
@@ -2858,6 +2862,8 @@ fn held_status_without_a_daemon() {
             identity: lock.identity().clone(),
             health_refresh_interval: Duration::from_millis(50),
             answer_lock_timeout: Duration::from_millis(200),
+            platform: solstone_tmux::paths::PlatformKind::Linux,
+            marker_digest: Some("a".repeat(64)),
         };
 
         let task_handle = tokio::spawn(async move {

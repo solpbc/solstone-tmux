@@ -330,7 +330,20 @@ where
     R: Read,
     T: std::io::Read + std::io::Write + Send + 'static,
 {
-    setup_with_identity(platform, environment, input, system_hostname(), seat, mark).await
+    let marker_digest =
+        crate::device_migration::host_marker_digest(platform, &crate::command::TokioCommandRunner)
+            .await
+            .ok();
+    setup_with_identity_and_marker(
+        platform,
+        environment,
+        input,
+        system_hostname(),
+        seat,
+        mark,
+        marker_digest,
+    )
+    .await
 }
 
 pub async fn setup_with_identity<R, T, E>(
@@ -346,7 +359,24 @@ where
     T: std::io::Read + std::io::Write + Send + 'static,
     E: std::fmt::Debug,
 {
-    setup_with_pairer(
+    setup_with_identity_and_marker(platform, environment, input, hostname, seat, mark, None).await
+}
+
+async fn setup_with_identity_and_marker<R, T, E>(
+    platform: PlatformKind,
+    environment: &dyn Environment,
+    input: R,
+    hostname: Result<String, E>,
+    seat: impl Into<crate::pairing_answer::TerminalSeat<T>>,
+    mark: crate::pairing_answer::MarkOption,
+    marker_digest: Option<String>,
+) -> crate::pairing_answer::Outcome
+where
+    R: Read,
+    T: std::io::Read + std::io::Write + Send + 'static,
+    E: std::fmt::Debug,
+{
+    setup_with_pairer_and_marker(
         platform,
         environment,
         input,
@@ -358,6 +388,7 @@ where
         },
         seat,
         mark,
+        marker_digest,
     )
     .await
 }
@@ -370,6 +401,37 @@ pub async fn setup_with_pairer<R, T, E, F, Fut>(
     pairer: F,
     seat: impl Into<crate::pairing_answer::TerminalSeat<T>>,
     mark: crate::pairing_answer::MarkOption,
+) -> crate::pairing_answer::Outcome
+where
+    R: Read,
+    T: std::io::Read + std::io::Write + Send + 'static,
+    E: std::fmt::Debug,
+    F: FnOnce(String, String, Map<String, Value>) -> Fut,
+    Fut: Future<Output = Result<Credential, DiagnosticCode>>,
+{
+    setup_with_pairer_and_marker(
+        platform,
+        environment,
+        input,
+        hostname,
+        pairer,
+        seat,
+        mark,
+        None,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn setup_with_pairer_and_marker<R, T, E, F, Fut>(
+    platform: PlatformKind,
+    environment: &dyn Environment,
+    input: R,
+    hostname: Result<String, E>,
+    pairer: F,
+    seat: impl Into<crate::pairing_answer::TerminalSeat<T>>,
+    mark: crate::pairing_answer::MarkOption,
+    marker_digest: Option<String>,
 ) -> crate::pairing_answer::Outcome
 where
     R: Read,
@@ -440,7 +502,13 @@ where
         Ok(lock) => lock,
         Err(code) => return Outcome::Diagnostic(code),
     };
-    let grandfather_res = grandfather_or_settle(&config_root);
+    let grandfather_root = config_root.clone();
+    let grandfather_res = tokio::task::spawn_blocking(move || {
+        crate::device_migration::grandfather_or_settle_if_idle(&grandfather_root)
+    })
+    .await
+    .map_err(|_| DiagnosticCode::PrivateStateIo)
+    .and_then(|result| result);
     drop(answer_lock);
     if let Err(code) = grandfather_res {
         return Outcome::Diagnostic(code);
@@ -480,6 +548,16 @@ where
                     }
                     crate::journal_version::clear_cached_version(&config_root);
                     let write_ans = write_answer_file(&config_root, &generation_hex);
+                    let root = config_root.clone();
+                    let marker = marker_digest.clone();
+                    let result = tokio::task::spawn_blocking(move || {
+                        crate::device_migration::record_setup_baseline(&root, marker.as_deref())
+                    })
+                    .await;
+                    if !matches!(result, Ok(Ok(()))) {
+                        drop(answer_lock);
+                        return Outcome::Diagnostic(DiagnosticCode::PrivateStateIo);
+                    }
                     drop(answer_lock);
                     if write_ans.is_err() {
                         Outcome::Owner {
@@ -533,6 +611,16 @@ where
                     }
                     crate::journal_version::clear_cached_version(&config_root);
                     let write_ans = write_answer_file(&config_root, &generation_hex);
+                    let root = config_root.clone();
+                    let marker = marker_digest.clone();
+                    let result = tokio::task::spawn_blocking(move || {
+                        crate::device_migration::record_setup_baseline(&root, marker.as_deref())
+                    })
+                    .await;
+                    if !matches!(result, Ok(Ok(()))) {
+                        drop(answer_lock);
+                        return Outcome::Diagnostic(DiagnosticCode::PrivateStateIo);
+                    }
                     drop(answer_lock);
                     if write_ans.is_err() {
                         Outcome::Owner {
@@ -578,6 +666,21 @@ where
                         }
                     } else {
                         let persist_res = persist_credential(&config_root, &credential);
+                        if persist_res.is_ok() {
+                            let root = config_root.clone();
+                            let marker = marker_digest.clone();
+                            let result = tokio::task::spawn_blocking(move || {
+                                crate::device_migration::record_setup_baseline(
+                                    &root,
+                                    marker.as_deref(),
+                                )
+                            })
+                            .await;
+                            if !matches!(result, Ok(Ok(()))) {
+                                drop(answer_lock);
+                                return Outcome::Diagnostic(DiagnosticCode::PrivateStateIo);
+                            }
+                        }
                         drop(answer_lock);
                         if let Err(code) = persist_res {
                             return Outcome::Diagnostic(code);
@@ -625,11 +728,45 @@ where
 
     let _ = ensure_private_directory(&config_root);
 
+    let migration_root = config_root.clone();
+    let migration_record = tokio::task::spawn_blocking(move || {
+        crate::device_migration::MigrationRecord::load(&migration_root)
+    })
+    .await;
+    let migration_record = match migration_record {
+        Ok(Ok(record)) => record,
+        Ok(Err(code)) => return Outcome::Diagnostic(code),
+        Err(_) => return Outcome::Diagnostic(DiagnosticCode::PrivateStateIo),
+    };
+    if migration_record
+        .is_some_and(|record| record.phase == crate::device_migration::MigrationPhase::Publishing)
+    {
+        let marker = crate::device_migration::host_marker_digest(
+            platform,
+            &crate::command::TokioCommandRunner,
+        )
+        .await;
+        let Ok(marker) = marker else {
+            return Outcome::Diagnostic(DiagnosticCode::PrivateStateIo);
+        };
+        if crate::device_migration::recover_publication_for_marker(&config_root, &marker)
+            .await
+            .is_err()
+        {
+            return Outcome::Diagnostic(DiagnosticCode::PrivateStateIo);
+        }
+    }
     let answer_lock = match acquire_answer_lock(&config_root).await {
         Ok(lock) => lock,
         Err(code) => return Outcome::Diagnostic(code),
     };
-    let grandfather_res = grandfather_or_settle(&config_root);
+    let grandfather_root = config_root.clone();
+    let grandfather_res = tokio::task::spawn_blocking(move || {
+        crate::device_migration::grandfather_or_settle_if_idle(&grandfather_root)
+    })
+    .await
+    .map_err(|_| DiagnosticCode::PrivateStateIo)
+    .and_then(|result| result);
     drop(answer_lock);
     if let Err(code) = grandfather_res {
         return Outcome::Diagnostic(code);

@@ -610,6 +610,8 @@ fn ignored_retention_setting_still_removes_a_confirmed_segment_in_the_same_sweep
                 identity: lock.identity().clone(),
                 health_refresh_interval: Duration::from_secs(60),
                 answer_lock_timeout: Duration::from_secs(5),
+                platform: solstone_tmux::paths::PlatformKind::Linux,
+                marker_digest: Some("a".repeat(64)),
             }
             .run(shutdown),
         );
@@ -978,6 +980,8 @@ async fn run_binding_failure(
             identity: lock.identity().clone(),
             health_refresh_interval: Duration::from_secs(60),
             answer_lock_timeout: Duration::from_secs(5),
+            platform: solstone_tmux::paths::PlatformKind::Linux,
+            marker_digest: Some("a".repeat(64)),
         }
         .run(sync_shutdown),
     );
@@ -1040,6 +1044,8 @@ fn unavailable_bridge_at_start_stays_supervised_with_bounded_retry() {
                 identity: lock.identity().clone(),
                 health_refresh_interval: Duration::from_secs(60),
                 answer_lock_timeout: Duration::from_secs(5),
+                platform: solstone_tmux::paths::PlatformKind::Linux,
+                marker_digest: Some("a".repeat(64)),
             }
             .run(shutdown),
         );

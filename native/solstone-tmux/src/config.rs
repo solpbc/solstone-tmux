@@ -11,6 +11,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
 use crate::name::{DerivedName, NameError, derive_component};
+use crate::storage::{StorageError, atomic_write_bytes};
 
 pub const CONFIG_FILENAME: &str = "config.json";
 pub const DEFAULT_CAPTURE_INTERVAL_SECONDS: u64 = 5;
@@ -126,6 +127,85 @@ impl RuntimeConfig {
         };
 
         Self::from_config_file(&file, hostname)
+    }
+
+    pub fn stream_is_implicit(config_root: &Path) -> Result<bool, ConfigError> {
+        let path = config_root.join(CONFIG_FILENAME);
+        let file = match fs::symlink_metadata(&path) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink() || !metadata.is_file() {
+                    return Err(ConfigError::InvalidTarget(path));
+                }
+                let bytes = fs::read(&path).map_err(|source| ConfigError::Io {
+                    operation: "read native config",
+                    path: path.clone(),
+                    source,
+                })?;
+                serde_json::from_slice::<ConfigFile>(&bytes).map_err(|source| {
+                    ConfigError::InvalidConfig {
+                        path: path.clone(),
+                        detail: source.to_string(),
+                    }
+                })?
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => ConfigFile::default(),
+            Err(source) => {
+                return Err(ConfigError::Io {
+                    operation: "inspect native config",
+                    path,
+                    source,
+                });
+            }
+        };
+        Ok(file.stream.is_none())
+    }
+
+    pub fn publish_stream_coordinate(
+        config_root: &Path,
+        stream: &str,
+        hostname: &str,
+    ) -> Result<Self, ConfigError> {
+        let path = config_root.join(CONFIG_FILENAME);
+        let mut file = match fs::symlink_metadata(&path) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink() || !metadata.is_file() {
+                    return Err(ConfigError::InvalidTarget(path));
+                }
+                let bytes = fs::read(&path).map_err(|source| ConfigError::Io {
+                    operation: "read native config",
+                    path: path.clone(),
+                    source,
+                })?;
+                serde_json::from_slice::<ConfigFile>(&bytes).map_err(|source| {
+                    ConfigError::InvalidConfig {
+                        path: path.clone(),
+                        detail: source.to_string(),
+                    }
+                })?
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => ConfigFile::default(),
+            Err(source) => {
+                return Err(ConfigError::Io {
+                    operation: "inspect native config",
+                    path,
+                    source,
+                });
+            }
+        };
+        file.stream = Some(stream.to_owned());
+        let bytes = serde_json::to_vec(&file).map_err(|source| ConfigError::InvalidConfig {
+            path: path.clone(),
+            detail: source.to_string(),
+        })?;
+        match atomic_write_bytes(&path, config_root, &bytes) {
+            Ok(()) => Self::from_config_file(&file, hostname),
+            Err(StorageError::InvalidTarget(_)) => Err(ConfigError::InvalidTarget(path)),
+            Err(_) => Err(ConfigError::Io {
+                operation: "publish native stream",
+                path,
+                source: std::io::Error::other("atomic config publication failed"),
+            }),
+        }
     }
 
     pub(crate) fn from_config_file(file: &ConfigFile, hostname: &str) -> Result<Self, ConfigError> {

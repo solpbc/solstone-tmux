@@ -2285,6 +2285,8 @@ pub struct SyncTask {
     pub identity: RunIdentity,
     pub health_refresh_interval: Duration,
     pub answer_lock_timeout: Duration,
+    pub platform: PlatformKind,
+    pub marker_digest: Option<String>,
 }
 
 impl SyncTask {
@@ -2292,7 +2294,7 @@ impl SyncTask {
         let SyncTask {
             config_root,
             data_root,
-            config,
+            mut config,
             hostname,
             clock,
             wake,
@@ -2302,13 +2304,15 @@ impl SyncTask {
             identity,
             health_refresh_interval,
             answer_lock_timeout,
+            platform,
+            marker_digest,
         } = self;
 
         let lock_root = config_root.clone();
         let timeout = answer_lock_timeout;
         let _ = tokio::task::spawn_blocking(move || {
             let _lock = crate::pairing_answer::acquire_answer_lock_blocking(&lock_root, timeout)?;
-            crate::pairing_answer::grandfather_or_settle(&lock_root)
+            crate::device_migration::grandfather_or_settle_if_idle(&lock_root)
         })
         .await;
 
@@ -2319,6 +2323,95 @@ impl SyncTask {
                 .map_err(|_| DiagnosticCode::PrivateStateIo)?;
             match loaded {
                 Ok(Some(cred)) => {
+                    let destination_root = config_root.clone();
+                    let destination_host = hostname.clone();
+                    let destination_config = config.clone();
+                    let destination = tokio::task::spawn_blocking(move || {
+                        crate::device_migration::prepare_destination(
+                            &destination_root,
+                            &destination_host,
+                            destination_config,
+                        )
+                    })
+                    .await;
+                    let Ok((effective_config, destination_ready)) = destination else {
+                        tokio::select! {
+                            biased;
+                            () = wait_for_shutdown(&mut shutdown) => return Ok(()),
+                            () = tokio::time::sleep(health_refresh_interval) => {},
+                        }
+                        continue;
+                    };
+                    config = effective_config;
+                    if !destination_ready {
+                        tokio::select! {
+                            biased;
+                            () = wait_for_shutdown(&mut shutdown) => return Ok(()),
+                            () = tokio::time::sleep(health_refresh_interval) => {},
+                        }
+                        continue;
+                    }
+                    let marker = if let Some(marker) = marker_digest.clone() {
+                        Ok(marker)
+                    } else {
+                        crate::device_migration::host_marker_digest(
+                            platform,
+                            &crate::command::TokioCommandRunner,
+                        )
+                        .await
+                    };
+                    let Ok(marker) = marker else {
+                        let facts = SyncFacts {
+                            paired: true,
+                            held: true,
+                            ..SyncFacts::default()
+                        };
+                        let _ = health
+                            .write(&facts, clock.wall_now().unix_timestamp())
+                            .await;
+                        tokio::select! {
+                            biased;
+                            () = wait_for_shutdown(&mut shutdown) => return Ok(()),
+                            () = tokio::time::sleep(health_refresh_interval) => {},
+                        }
+                        continue;
+                    };
+                    let migration_root = config_root.clone();
+                    let migration_data = data_root.clone();
+                    let migration_host = hostname.clone();
+                    let migration_credential = cred.clone();
+                    let identity_for_migration = identity.clone();
+                    let migration = crate::pairing_answer::ANSWER_LOCK_TIMEOUT_OVERRIDE
+                        .scope(
+                            answer_lock_timeout,
+                            crate::device_migration::migrate_if_needed(
+                                &migration_root,
+                                &migration_data,
+                                platform,
+                                &migration_host,
+                                &marker,
+                                migration_credential,
+                                identity_for_migration,
+                                clock.wall_now().unix_timestamp(),
+                            ),
+                        )
+                        .await;
+                    let Ok(cred) = migration else {
+                        let facts = SyncFacts {
+                            paired: true,
+                            held: true,
+                            ..SyncFacts::default()
+                        };
+                        let _ = health
+                            .write(&facts, clock.wall_now().unix_timestamp())
+                            .await;
+                        tokio::select! {
+                            biased;
+                            () = wait_for_shutdown(&mut shutdown) => return Ok(()),
+                            () = tokio::time::sleep(health_refresh_interval) => {},
+                        }
+                        continue;
+                    };
                     let ans_root = config_root.clone();
                     let check_cred = cred.clone();
                     let confirmed = tokio::task::spawn_blocking(move || {

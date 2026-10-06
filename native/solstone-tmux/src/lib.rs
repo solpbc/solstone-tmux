@@ -9,6 +9,7 @@ pub mod client_metadata;
 pub mod clock;
 pub mod command;
 pub mod config;
+pub mod device_migration;
 pub mod health;
 pub mod indicator;
 pub mod instance_lock;
