@@ -18,8 +18,8 @@ use solstone_tmux::private_link::{PrivateLinkBridge, persist_credential};
 use solstone_tmux::sync::{CredentialStore, JournalSession};
 
 mod support;
-use support::TestDirectory;
 use support::private_link_peer::PrivateLinkPeer;
+use support::{TestDirectory, persist_confirmed_credential};
 
 #[test]
 fn field_sanitization_enforces_exact_bounds_and_valid_utf8() {
@@ -109,6 +109,7 @@ fn clients_self_publishes_when_reported_is_null() {
         ensure_private_directory(temporary.path()).expect("private root");
         let lock = InstanceLock::acquire(temporary.path()).expect("acquire lock");
         let credential = peer.credential();
+        persist_confirmed_credential(temporary.path(), &credential);
         let (store, _) = CredentialStore::new(
             temporary.path().to_path_buf(),
             credential.clone(),
@@ -205,6 +206,7 @@ fn clients_self_noops_when_reported_already_matches() {
         ensure_private_directory(temporary.path()).expect("private root");
         let lock = InstanceLock::acquire(temporary.path()).expect("acquire lock");
         let credential = peer.credential();
+        persist_confirmed_credential(temporary.path(), &credential);
         let (store, _) = CredentialStore::new(
             temporary.path().to_path_buf(),
             credential.clone(),
@@ -273,6 +275,7 @@ fn clients_self_handles_409_conflict_with_refetch_and_retry() {
         ensure_private_directory(temporary.path()).expect("private root");
         let lock = InstanceLock::acquire(temporary.path()).expect("acquire lock");
         let credential = peer.credential();
+        persist_confirmed_credential(temporary.path(), &credential);
         let (store, _) = CredentialStore::new(
             temporary.path().to_path_buf(),
             credential.clone(),
@@ -383,6 +386,7 @@ fn clients_self_404_is_tolerated_as_unsupported() {
         ensure_private_directory(temporary.path()).expect("private root");
         let lock = InstanceLock::acquire(temporary.path()).expect("acquire lock");
         let credential = peer.credential();
+        persist_confirmed_credential(temporary.path(), &credential);
         let (store, _) = CredentialStore::new(
             temporary.path().to_path_buf(),
             credential.clone(),
@@ -1018,7 +1022,7 @@ impl MetadataFixture {
         ensure_private_directory(&data_root).unwrap();
         let lock = InstanceLock::acquire(&data_root).unwrap();
         let credential = peer.credential();
-        persist_credential(&config_root, &credential).unwrap();
+        persist_confirmed_credential(&config_root, &credential);
         let refresh = VersionRefreshState::new(
             config_root.clone(),
             data_root,

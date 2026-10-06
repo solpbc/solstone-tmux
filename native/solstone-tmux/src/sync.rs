@@ -150,6 +150,12 @@ pub enum CredentialPersistenceIssue {
     Uncertain,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum OwnedCredentialPersistence {
+    Confirmed,
+    Uncertain,
+}
+
 struct CredentialStoreState {
     credential: Credential,
     mutation_generation: u64,
@@ -203,6 +209,45 @@ impl CredentialStore {
 
     pub fn pairing_generation(&self) -> [u8; 32] {
         self.pairing_generation
+    }
+
+    fn persist_owned_credential(
+        &self,
+        candidate: &Credential,
+    ) -> Result<OwnedCredentialPersistence, DiagnosticCode> {
+        let _answer_lock = crate::pairing_answer::acquire_answer_lock_blocking(
+            &self.config_root,
+            crate::pairing_answer::ANSWER_LOCK_TIMEOUT,
+        )?;
+        let current = load_credential(&self.config_root)?.ok_or(DiagnosticCode::PrivateStateIo)?;
+        let candidate_generation = compute_pairing_generation(&candidate.client_cert_pem);
+        let current_generation = compute_pairing_generation(&current.client_cert_pem);
+        if candidate_generation != self.pairing_generation
+            || current_generation != self.pairing_generation
+            || !crate::pairing_answer::is_pairing_confirmed(&self.config_root, &current)
+        {
+            return Err(DiagnosticCode::PrivateStateIo);
+        }
+        match persist_credential(&self.config_root, candidate) {
+            Ok(()) => Ok(OwnedCredentialPersistence::Confirmed),
+            Err(error) => {
+                let on_disk_matches = load_credential(&self.config_root)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|credential| {
+                        credential == *candidate
+                            && crate::pairing_answer::is_pairing_confirmed(
+                                &self.config_root,
+                                &credential,
+                            )
+                    });
+                if on_disk_matches {
+                    Ok(OwnedCredentialPersistence::Uncertain)
+                } else {
+                    Err(error)
+                }
+            }
+        }
     }
 
     pub fn instance_id(&self) -> String {
@@ -317,7 +362,10 @@ impl CredentialStore {
                 });
                 let candidate = state.credential.clone();
                 drop(state);
-                let persisted = persist_credential(&store.config_root, &candidate).is_ok();
+                let persisted = matches!(
+                    store.persist_owned_credential(&candidate),
+                    Ok(OwnedCredentialPersistence::Confirmed)
+                );
                 let mut state = store.state.lock().unwrap_or_else(|e| e.into_inner());
                 if persisted {
                     state.pending = None;
@@ -388,25 +436,12 @@ impl CredentialStore {
                 }
                 .map_err(|_| ())?;
                 drop(state);
-                let confirmed = persist_credential(&store.config_root, &updated).is_ok();
-                if !confirmed {
-                    let matches = load_credential(&store.config_root)
-                        .ok()
-                        .flatten()
-                        .is_some_and(|loaded| {
-                            loaded.relay_origin == updated.relay_origin
-                                && loaded.device_token == updated.device_token
-                                && loaded.device_token_expires_at == updated.device_token_expires_at
-                                && loaded.client_cert_pem == updated.client_cert_pem
-                        });
-                    if !matches {
-                        let mut state = store.state.lock().unwrap_or_else(|e| e.into_inner());
-                        Self::record_persistence_issue(
-                            &mut state,
-                            CredentialPersistenceIssue::Failed,
-                        );
-                        return Err(());
-                    }
+                let persistence = store.persist_owned_credential(&updated);
+                let confirmed = persistence == Ok(OwnedCredentialPersistence::Confirmed);
+                if persistence.is_err() {
+                    let mut state = store.state.lock().unwrap_or_else(|e| e.into_inner());
+                    Self::record_persistence_issue(&mut state, CredentialPersistenceIssue::Failed);
+                    return Err(());
                 }
                 let mut state = store.state.lock().unwrap_or_else(|e| e.into_inner());
                 state.credential = updated.clone();
@@ -477,13 +512,15 @@ impl CredentialStore {
                         .map_err(|_| ())?;
                 opener.install_transport(Arc::new(transport), direct.clone(), revision);
             }
-            let config_root = store.config_root.clone();
-            let persisted =
-                tokio::task::spawn_blocking(move || persist_credential(&config_root, &direct))
-                    .await
-                    .ok()
-                    .and_then(Result::ok)
-                    .is_some();
+            let owned_store = Arc::clone(&store);
+            let persisted = tokio::task::spawn_blocking(move || {
+                matches!(
+                    owned_store.persist_owned_credential(&direct),
+                    Ok(OwnedCredentialPersistence::Confirmed)
+                )
+            })
+            .await
+            .unwrap_or(false);
             if persisted {
                 let mut state = store.state.lock().unwrap_or_else(|e| e.into_inner());
                 if state.mutation_generation == revision
@@ -596,7 +633,12 @@ impl CredentialStore {
             // Shutdown retires network work, not this already accepted intent.
             let candidate = state.credential.clone();
             drop(state);
-            let persisted = persist_credential(&store.config_root, &candidate);
+            let persisted = store
+                .persist_owned_credential(&candidate)
+                .and_then(|result| match result {
+                    OwnedCredentialPersistence::Confirmed => Ok(()),
+                    OwnedCredentialPersistence::Uncertain => Err(DiagnosticCode::PrivateStateIo),
+                });
             let mut state = store.state.lock().unwrap_or_else(|e| e.into_inner());
             match persisted {
                 Ok(()) => {
@@ -2335,6 +2377,14 @@ impl SyncTask {
                     })
                     .await;
                     let Ok((effective_config, destination_ready)) = destination else {
+                        let facts = SyncFacts {
+                            paired: true,
+                            held: true,
+                            ..SyncFacts::default()
+                        };
+                        let _ = health
+                            .write(&facts, clock.wall_now().unix_timestamp())
+                            .await;
                         tokio::select! {
                             biased;
                             () = wait_for_shutdown(&mut shutdown) => return Ok(()),
@@ -2344,6 +2394,14 @@ impl SyncTask {
                     };
                     config = effective_config;
                     if !destination_ready {
+                        let facts = SyncFacts {
+                            paired: true,
+                            held: true,
+                            ..SyncFacts::default()
+                        };
+                        let _ = health
+                            .write(&facts, clock.wall_now().unix_timestamp())
+                            .await;
                         tokio::select! {
                             biased;
                             () = wait_for_shutdown(&mut shutdown) => return Ok(()),
@@ -3225,17 +3283,34 @@ fn is_plain_directory(metadata: &fs::Metadata) -> bool {
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     use spl_transport::credential::{Credential, EndpointAddr};
 
-    use super::{CredentialStore, SyncFailureClass, SyncOperationError, map_diagnostic};
+    use super::{
+        CredentialStore, SyncActivity, SyncFailureClass, SyncOperationError, SyncTask, SyncWake,
+        map_diagnostic,
+    };
     use crate::health::DiagnosticCode;
     use crate::post_connect::compute_pairing_generation;
-    use crate::private_link::{CREDENTIALS_FILENAME, load_credential};
+    use crate::private_link::{CREDENTIALS_FILENAME, load_credential, persist_credential};
+    use std::sync::Arc;
+    use tokio::sync::watch;
+
+    fn persist_confirmed(root: &std::path::Path, credential: &Credential) {
+        persist_credential(root, credential).expect("persist test credential");
+        let generation = crate::journal_version::hex_encode(&compute_pairing_generation(
+            &credential.client_cert_pem,
+        ));
+        crate::pairing_answer::write_answer_file(root, &generation)
+            .expect("confirm test credential");
+    }
 
     #[test]
     fn failed_token_persistence_is_reported_and_retried() {
+        let _fault_guard = crate::storage::ATOMIC_FAULT_TEST_LOCK
+            .lock()
+            .expect("atomic write fault lock");
         tokio::runtime::Builder::new_current_thread()
             .build()
             .expect("build test runtime")
@@ -3244,16 +3319,20 @@ mod tests {
                     .duration_since(UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_nanos();
-                let root = std::env::temp_dir().join(format!(
-                    "solstone-token-persistence-{}-{suffix}",
+                let root = std::path::PathBuf::from(format!(
+                    "/var/tmp/solstone-token-persistence-{}-{suffix}",
                     std::process::id()
                 ));
                 fs::create_dir(&root).expect("create token test root");
-                fs::create_dir(root.join(CREDENTIALS_FILENAME))
-                    .expect("create invalid credential target");
                 let cred = credential();
+                persist_confirmed(&root, &cred);
                 let pairing_gen = compute_pairing_generation(&cred.client_cert_pem);
                 let (store, hook) = CredentialStore::new(root.clone(), cred, pairing_gen);
+                crate::storage::set_atomic_write_fault_for_prefix(
+                    &root.join(CREDENTIALS_FILENAME),
+                    crate::storage::AtomicWriteFault::FailBeforeRename,
+                    2,
+                );
                 hook("refreshed-token", 1_900_000_000);
 
                 let code = store
@@ -3264,12 +3343,14 @@ mod tests {
                     map_diagnostic(code),
                     SyncOperationError::EndSweepDiagnostic(
                         SyncFailureClass::Contract,
-                        DiagnosticCode::PrivateStateInvalid
+                        DiagnosticCode::PrivateStateIo
                     )
                 ));
 
-                fs::remove_dir(root.join(CREDENTIALS_FILENAME))
-                    .expect("remove invalid credential target");
+                crate::storage::set_atomic_write_fault_for_path(
+                    &root.join(CREDENTIALS_FILENAME),
+                    None,
+                );
                 store
                     .persist_pending()
                     .await
@@ -3284,6 +3365,86 @@ mod tests {
     }
 
     #[test]
+    fn unavailable_destination_publication_reports_held_health() {
+        use crate::clock::TestClock;
+        use crate::health::{HealthState, HealthWriter, StatusHealth, read_status_health};
+        use crate::instance_lock::InstanceLock;
+
+        let _fault_guard = crate::storage::ATOMIC_FAULT_TEST_LOCK
+            .lock()
+            .expect("atomic write fault lock");
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let root = std::path::PathBuf::from(format!(
+            "/var/tmp/solstone-destination-health-{}-{suffix}",
+            std::process::id()
+        ));
+        let data_root = root.join("data");
+        crate::paths::ensure_private_directory(&root).expect("create config root");
+        crate::paths::ensure_private_directory(&data_root).expect("create data root");
+        fs::write(
+            root.join(crate::config::CONFIG_FILENAME),
+            br#"{"stream":"oldhost.tmux"}"#,
+        )
+        .expect("write prior config");
+        let mut record = crate::device_migration::MigrationRecord::new("oldhost.tmux".to_owned());
+        record.destination_generated = true;
+        record.destination_published = true;
+        record.persist(&root).expect("write generated baseline");
+        let paired = credential();
+        persist_confirmed(&root, &paired);
+        let config = crate::config::RuntimeConfig::load(&root, "oldhost").expect("load config");
+        let instance_lock = InstanceLock::acquire(&data_root).expect("acquire instance lock");
+        let health = HealthWriter::new(data_root.clone(), &instance_lock);
+        let clock = Arc::new(TestClock::new(
+            time::OffsetDateTime::from_unix_timestamp(1_800_000_000).unwrap(),
+            Duration::ZERO,
+            time::UtcOffset::UTC,
+        ));
+        crate::storage::set_atomic_write_fault_for_path(
+            &root.join(crate::config::CONFIG_FILENAME),
+            Some(crate::storage::AtomicWriteFault::FailBeforeRename),
+        );
+        let (_stop, shutdown) = watch::channel(true);
+        let (activity_sender, _activity) = watch::channel(SyncActivity::Idle);
+        let result = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(
+                SyncTask {
+                    config_root: root.clone(),
+                    data_root: data_root.clone(),
+                    config,
+                    hostname: "newhost".to_owned(),
+                    clock,
+                    wake: SyncWake::default(),
+                    activity: activity_sender,
+                    health,
+                    retention_fence: Arc::new(super::RetentionFence::new()),
+                    identity: instance_lock.identity().clone(),
+                    health_refresh_interval: Duration::from_secs(60),
+                    answer_lock_timeout: crate::pairing_answer::ANSWER_LOCK_TIMEOUT,
+                    platform: crate::paths::PlatformKind::Linux,
+                    marker_digest: Some("a".repeat(64)),
+                }
+                .run(shutdown),
+            );
+        crate::storage::set_atomic_write_fault_for_path(
+            &root.join(crate::config::CONFIG_FILENAME),
+            None,
+        );
+        assert_eq!(result, Ok(()));
+        assert_eq!(
+            read_status_health(&data_root, 1_800_000_000),
+            StatusHealth::Live(HealthState::Held)
+        );
+        fs::remove_dir_all(root).expect("remove destination health test root");
+    }
+
+    #[test]
     fn queued_refresh_cannot_publish_after_shutdown() {
         for retire in [false, true] {
             tokio::runtime::Builder::new_current_thread()
@@ -3292,8 +3453,8 @@ mod tests {
                 .build()
                 .unwrap()
                 .block_on(async {
-                    let root = std::env::temp_dir().join(format!(
-                        "tmux-queued-refresh-{}-{}",
+                    let root = std::path::PathBuf::from(format!(
+                        "/var/tmp/tmux-queued-refresh-{}-{}",
                         std::process::id(),
                         SystemTime::now()
                             .duration_since(UNIX_EPOCH)
@@ -3302,7 +3463,7 @@ mod tests {
                     ));
                     crate::paths::ensure_private_directory(&root).unwrap();
                     let initial = credential();
-                    crate::private_link::persist_credential(&root, &initial).unwrap();
+                    persist_confirmed(&root, &initial);
                     let (store, hook) = CredentialStore::new(
                         root.clone(),
                         initial.clone(),
@@ -3340,20 +3501,20 @@ mod tests {
     }
 
     #[test]
-    fn queued_ready_rechecks_new_attempt_and_shutdown_before_disk_publication() {
+    fn queued_ready_rechecks_attempt_and_disk_owner_before_publication() {
         use crate::instance_lock::InstanceLock;
         use crate::journal_version::VersionRefreshState;
-        use crate::private_link::{PrivateLinkBridge, persist_credential};
+        use crate::private_link::{PrivateLinkBridge, load_credential, persist_credential};
         use std::sync::Arc;
-        for supersession in [0, 1, 2] {
+        for supersession in [0, 1, 2, 3, 4] {
             tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .max_blocking_threads(1)
                 .build()
                 .unwrap()
                 .block_on(async {
-                    let root = std::env::temp_dir().join(format!(
-                        "tmux-queued-ready-{}-{}",
+                    let root = std::path::PathBuf::from(format!(
+                        "/var/tmp/tmux-queued-ready-{}-{}",
                         std::process::id(),
                         SystemTime::now()
                             .duration_since(UNIX_EPOCH)
@@ -3369,7 +3530,7 @@ mod tests {
                     initial.client_key_pem = identity.key_pair.serialize_pem();
                     initial.client_cert_pem = identity.cert.pem();
                     initial.ca_chain_pem = vec![identity.cert.pem()];
-                    persist_credential(&root, &initial).unwrap();
+                    persist_confirmed(&root, &initial);
                     let lock = InstanceLock::acquire(&data).unwrap();
                     let refresh = VersionRefreshState::new(
                         root.clone(),
@@ -3422,28 +3583,75 @@ mod tests {
                     if supersession == 2 {
                         store.invalidate();
                     }
+                    if supersession == 3 || supersession == 4 {
+                        let _answer_lock = crate::pairing_answer::acquire_answer_lock_blocking(
+                            &root,
+                            crate::pairing_answer::ANSWER_LOCK_TIMEOUT,
+                        )
+                        .unwrap();
+                        if supersession == 3 {
+                            crate::pairing_answer::delete_credential_file(&root).unwrap();
+                            crate::pairing_answer::write_answer_file(&root, "").unwrap();
+                        } else {
+                            let mut replacement = initial.clone();
+                            replacement.client_key_pem = "replacement-key".to_owned();
+                            replacement.client_cert_pem = "replacement-cert".to_owned();
+                            persist_credential(&root, &replacement).unwrap();
+                            let generation = crate::journal_version::hex_encode(
+                                &compute_pairing_generation(&replacement.client_cert_pem),
+                            );
+                            crate::pairing_answer::write_answer_file(&root, &generation).unwrap();
+                        }
+                    }
                     release_tx.send(()).unwrap();
                     blocker.await.unwrap();
                     let result = ready.await.unwrap();
                     assert_eq!(result.is_ok(), supersession == 0);
-                    let expected = if supersession == 0 {
-                        Some("new-token")
-                    } else {
-                        None
-                    };
-                    assert_eq!(
-                        load_credential(&root)
-                            .unwrap()
-                            .unwrap()
-                            .device_token
-                            .as_deref(),
-                        expected
-                    );
-                    assert_eq!(store.live_credential().device_token.as_deref(), expected);
-                    assert_eq!(
-                        opener.live_dial_credential().device_token.as_deref(),
-                        expected
-                    );
+                    let on_disk = load_credential(&root).unwrap();
+                    match supersession {
+                        0 => {
+                            assert_eq!(on_disk.unwrap().device_token.as_deref(), Some("new-token"));
+                            assert_eq!(
+                                store.live_credential().device_token.as_deref(),
+                                Some("new-token")
+                            );
+                            assert_eq!(
+                                opener.live_dial_credential().device_token.as_deref(),
+                                Some("new-token")
+                            );
+                        }
+                        3 => {
+                            assert!(on_disk.is_none());
+                            assert_eq!(store.live_credential().device_token, None);
+                            assert_eq!(
+                                crate::pairing_answer::read_answer_file(&root)
+                                    .unwrap()
+                                    .unwrap()
+                                    .confirmed,
+                                ""
+                            );
+                        }
+                        4 => {
+                            let replacement = on_disk.unwrap();
+                            assert_eq!(replacement.client_cert_pem, "replacement-cert");
+                            assert_eq!(replacement.device_token, None);
+                            assert_eq!(store.live_credential().device_token, None);
+                            assert_eq!(
+                                crate::pairing_answer::read_answer_file(&root)
+                                    .unwrap()
+                                    .unwrap()
+                                    .confirmed,
+                                crate::journal_version::hex_encode(&compute_pairing_generation(
+                                    &replacement.client_cert_pem
+                                ))
+                            );
+                        }
+                        _ => {
+                            assert_eq!(on_disk.unwrap().device_token, None);
+                            assert_eq!(store.live_credential().device_token, None);
+                            assert_eq!(opener.live_dial_credential().device_token, None);
+                        }
+                    }
                     bridge.shutdown().await;
                     fs::remove_dir_all(root).unwrap();
                 });

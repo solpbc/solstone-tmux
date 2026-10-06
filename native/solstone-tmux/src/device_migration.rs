@@ -128,6 +128,7 @@ pub struct MigrationRecord {
     pub destination_stream: String,
     pub destination_generated: bool,
     pub destination_published: bool,
+    pub destination_source_stream: Option<String>,
     pub source_cid: Option<String>,
     pub source_generation: Option<String>,
     pub source_credential: Option<Credential>,
@@ -167,6 +168,7 @@ impl MigrationRecord {
             destination_stream,
             destination_generated: false,
             destination_published: false,
+            destination_source_stream: None,
             source_cid: None,
             source_generation: None,
             source_credential: None,
@@ -232,6 +234,49 @@ impl MigrationRecord {
             self.phase,
             MigrationPhase::Unadopted | MigrationPhase::Adopted
         )
+    }
+
+    fn clear_transaction_material(&mut self) {
+        self.pending_marker_digest = None;
+        self.source_cid = None;
+        self.source_generation = None;
+        self.source_credential = None;
+        self.candidate_credential = None;
+        self.rekey_operation_id = None;
+        self.candidate_key_pem = None;
+        self.csr_pem = None;
+        self.rekey_request = None;
+        self.rekey_reply = None;
+        self.decision_id = None;
+        self.decision_request = None;
+        self.decision_reply = None;
+        self.decision_state_reply = None;
+        self.source_answer_bytes = None;
+        self.target_answer_bytes = None;
+    }
+
+    fn finish_adoption(&mut self, marker_digest: &str) {
+        self.phase = MigrationPhase::Adopted;
+        self.adopted_marker_digest = Some(marker_digest.to_owned());
+        self.clear_transaction_material();
+    }
+
+    fn has_transaction_material(&self) -> bool {
+        self.source_cid.is_some()
+            || self.source_generation.is_some()
+            || self.source_credential.is_some()
+            || self.candidate_credential.is_some()
+            || self.rekey_operation_id.is_some()
+            || self.candidate_key_pem.is_some()
+            || self.csr_pem.is_some()
+            || self.rekey_request.is_some()
+            || self.rekey_reply.is_some()
+            || self.decision_id.is_some()
+            || self.decision_request.is_some()
+            || self.decision_reply.is_some()
+            || self.decision_state_reply.is_some()
+            || self.source_answer_bytes.is_some()
+            || self.target_answer_bytes.is_some()
     }
 
     fn has_valid_state(&self) -> bool {
@@ -381,17 +426,40 @@ pub fn prepare_destination(
         Ok(None) => MigrationRecord::new(config.stream.as_str().to_owned()),
         Err(_) => return (config, false),
     };
-    let destination_generated = stream_is_implicit
-        || (record.destination_generated && record.destination_stream == config.stream.as_str());
-    let destination = if destination_generated {
+    let current_stream = config.stream.as_str().to_owned();
+    let pending_generated = record.destination_generated && !record.destination_published;
+    let saved_destination_matches = pending_generated
+        && (record.destination_source_stream.as_deref() == Some(current_stream.as_str())
+            || record.destination_stream == current_stream);
+    let pending_was_superseded = pending_generated
+        && record.destination_source_stream.is_some()
+        && !saved_destination_matches;
+    let destination_generated = if saved_destination_matches {
+        true
+    } else if pending_was_superseded {
+        false
+    } else {
+        stream_is_implicit
+            || (record.destination_generated
+                && record.destination_published
+                && record.destination_stream == current_stream)
+    };
+    let destination = if saved_destination_matches {
+        record.destination_stream.clone()
+    } else if destination_generated {
         target
     } else {
-        config.stream.as_str().to_owned()
+        current_stream.clone()
     };
     let Ok(derived) = derive_component(&destination) else {
         return (config, false);
     };
     config.stream = derived;
+    if destination_generated && !saved_destination_matches {
+        record.destination_source_stream = Some(current_stream);
+    } else if !saved_destination_matches {
+        record.destination_source_stream = None;
+    }
     record.destination_stream = config.stream.as_str().to_owned();
     record.destination_generated = destination_generated;
     record.destination_published = false;
@@ -409,6 +477,7 @@ pub fn prepare_destination(
         config
     };
     record.destination_published = true;
+    record.destination_source_stream = None;
     if record.persist(config_root).is_err() {
         return (published_config, false);
     }
@@ -424,28 +493,13 @@ pub fn record_setup_baseline(
     }
     let mut record =
         MigrationRecord::load(config_root)?.unwrap_or_else(|| MigrationRecord::new(String::new()));
-    record.phase = if marker_digest.is_some() {
-        MigrationPhase::Adopted
+    if let Some(marker_digest) = marker_digest {
+        record.finish_adoption(marker_digest);
     } else {
-        MigrationPhase::Unadopted
-    };
-    record.adopted_marker_digest = marker_digest.map(str::to_owned);
-    record.pending_marker_digest = None;
-    record.source_cid = None;
-    record.source_generation = None;
-    record.source_credential = None;
-    record.candidate_credential = None;
-    record.rekey_operation_id = None;
-    record.candidate_key_pem = None;
-    record.csr_pem = None;
-    record.rekey_request = None;
-    record.rekey_reply = None;
-    record.decision_id = None;
-    record.decision_request = None;
-    record.decision_reply = None;
-    record.decision_state_reply = None;
-    record.source_answer_bytes = None;
-    record.target_answer_bytes = None;
+        record.phase = MigrationPhase::Unadopted;
+        record.adopted_marker_digest = None;
+        record.clear_transaction_material();
+    }
     record.persist(config_root)
 }
 
@@ -505,8 +559,11 @@ pub async fn recover_publication(config_root: &Path) -> Result<bool, DiagnosticC
             .await
             .map_err(|_| DiagnosticCode::PrivateStateIo)??;
     }
-    record.phase = MigrationPhase::Adopted;
-    record.adopted_marker_digest = record.pending_marker_digest.take();
+    let marker_digest = record
+        .pending_marker_digest
+        .clone()
+        .ok_or(DiagnosticCode::PrivateStateInvalid)?;
+    record.finish_adoption(&marker_digest);
     let root = config_root.to_owned();
     tokio::task::spawn_blocking(move || record.persist(&root))
         .await
@@ -642,29 +699,26 @@ pub async fn migrate_if_needed(
             .map_err(|_| DiagnosticCode::PrivateStateIo)??;
         return current.ok_or(DiagnosticCode::PrivateStateIo);
     }
+    if record.phase == MigrationPhase::Adopted && record.has_transaction_material() {
+        record.clear_transaction_material();
+        let root = config_root.to_owned();
+        let persisted_record = record.clone();
+        tokio::task::spawn_blocking(move || persisted_record.persist(&root))
+            .await
+            .map_err(|_| DiagnosticCode::PrivateStateIo)??;
+    }
     if record.phase == MigrationPhase::Publishing
         && record.pending_marker_digest.as_deref() != Some(marker_digest)
     {
         credential = restore_source_for_new_marker(config_root, &record, &credential).await?;
-        record.phase = MigrationPhase::Adopted;
-        record.pending_marker_digest = None;
-        record.candidate_credential = None;
-        record.candidate_key_pem = None;
-        record.csr_pem = None;
-        record.rekey_operation_id = None;
-        record.rekey_request = None;
-        record.rekey_reply = None;
-        record.decision_id = None;
-        record.decision_request = None;
-        record.decision_reply = None;
-        record.decision_state_reply = None;
-        record.source_answer_bytes = None;
-        record.target_answer_bytes = None;
+        let adopted_marker = record
+            .adopted_marker_digest
+            .clone()
+            .ok_or(DiagnosticCode::PrivateStateInvalid)?;
+        record.finish_adoption(&adopted_marker);
     }
     if record.phase == MigrationPhase::Unadopted {
-        record.pending_marker_digest = None;
-        record.adopted_marker_digest = Some(marker_digest.to_owned());
-        record.phase = MigrationPhase::Adopted;
+        record.finish_adoption(marker_digest);
         if !record.destination_published {
             return Err(DiagnosticCode::ConfiguredStreamMismatch);
         }
@@ -1133,9 +1187,7 @@ async fn publish_candidate(
             .await
             .map_err(|_| DiagnosticCode::PrivateStateIo)??;
     }
-    record.phase = MigrationPhase::Adopted;
-    record.adopted_marker_digest = Some(marker_digest.to_owned());
-    record.pending_marker_digest = None;
+    record.finish_adoption(marker_digest);
     let root = config_root.to_owned();
     tokio::task::spawn_blocking(move || record.persist(&root))
         .await
@@ -1769,8 +1821,6 @@ mod tests {
     use spl_transport::credential::Credential;
     use spl_transport::credential::EndpointAddr;
 
-    static ATOMIC_FAULT_TEST_LOCK: Mutex<()> = Mutex::new(());
-
     struct TempRoot(PathBuf);
 
     impl TempRoot {
@@ -2312,7 +2362,9 @@ mod tests {
     fn migration_record_refuses_symlinks_and_preserves_old_state_on_write_failure() {
         use std::os::unix::fs::symlink;
 
-        let _fault_guard = ATOMIC_FAULT_TEST_LOCK.lock().expect("fault test lock");
+        let _fault_guard = crate::storage::ATOMIC_FAULT_TEST_LOCK
+            .lock()
+            .expect("fault test lock");
         let root = TempRoot::new();
         let record = MigrationRecord::new("machine.tmux".to_owned());
         let mut invalid = record.clone();
@@ -2347,14 +2399,35 @@ mod tests {
 
     #[test]
     fn destination_recovery_shares_one_effective_stream_and_preserves_old_folders() {
-        let _fault_guard = ATOMIC_FAULT_TEST_LOCK.lock().expect("fault test lock");
+        let _fault_guard = crate::storage::ATOMIC_FAULT_TEST_LOCK
+            .lock()
+            .expect("fault test lock");
+        use crate::clock::{TestClock, Zone, ZoneSource};
+        use crate::instance_lock::InstanceLock;
+        use crate::observer::SegmentManager;
+        use crate::sync::{RetentionFence, SyncActivity, SyncTask, SyncWake};
+        use crate::tmux::WarningSink;
+
+        struct FixedZoneSource;
+        impl ZoneSource for FixedZoneSource {
+            fn read(&mut self) -> Result<Zone, String> {
+                Ok(Zone::utc())
+            }
+        }
+        struct NoWarnings;
+        impl WarningSink for NoWarnings {
+            fn warn(&self, _message: &str) {}
+        }
+
         let root = TempRoot::new();
+        let data_root = root.path().join("data");
+        ensure_private_directory(&data_root).expect("create data root");
         fs::write(
             root.path().join(crate::config::CONFIG_FILENAME),
             br#"{"stream":"oldhost.tmux","capture_interval":7,"segment_interval":301,"status_indicator":false,"source":"custom-source"}"#,
         )
         .expect("write existing config");
-        let old_folder = root.path().join("captures/20261006/oldhost.tmux");
+        let old_folder = data_root.join("captures/20261006/oldhost.tmux");
         fs::create_dir_all(&old_folder).expect("create held old stream");
         let old_segment = old_folder.join("held.incomplete");
         fs::write(&old_segment, b"held segment bytes\n").expect("write held segment");
@@ -2368,7 +2441,7 @@ mod tests {
             .expect("save prior default stream");
         set_atomic_write_fault_for_path(
             &root.path().join(crate::config::CONFIG_FILENAME),
-            Some(AtomicWriteFault::FailAfterRename),
+            Some(AtomicWriteFault::FailBeforeRename),
         );
         let (first, ready) = prepare_destination(root.path(), "newhost", config);
         set_atomic_write_fault_for_path(&root.path().join(crate::config::CONFIG_FILENAME), None);
@@ -2381,21 +2454,92 @@ mod tests {
         assert!(!interrupted.destination_published);
         assert_eq!(interrupted.destination_stream, target_stream.as_str());
         assert_eq!(
+            interrupted.destination_source_stream.as_deref(),
+            Some("oldhost.tmux")
+        );
+        let disk_config: Value = serde_json::from_slice(
+            &fs::read(root.path().join(crate::config::CONFIG_FILENAME))
+                .expect("old config remains after pre-rename failure"),
+        )
+        .expect("parse old config");
+        assert_eq!(disk_config["stream"], "oldhost.tmux");
+        assert_eq!(
             fs::read(&old_segment).expect("held segment remains"),
             b"held segment bytes\n"
         );
 
-        let (recovered, ready) = prepare_destination(
-            root.path(),
-            "newhost",
-            RuntimeConfig::load(root.path(), "newhost").expect("reload config"),
-        );
+        let old_coordinate_after_restart =
+            RuntimeConfig::load(root.path(), "newhost").expect("reload prior on-disk config");
+        assert_eq!(old_coordinate_after_restart.stream.as_str(), "oldhost.tmux");
+        let (recovered, ready) =
+            prepare_destination(root.path(), "newhost", old_coordinate_after_restart);
         assert!(ready);
         assert_eq!(recovered.stream, first.stream);
         assert_eq!(recovered.capture_interval, Duration::from_secs(7));
         assert_eq!(recovered.segment_interval, Duration::from_secs(301));
         assert!(!recovered.status_indicator);
         assert_eq!(recovered.source, "custom-source");
+        assert_eq!(recovered.stream, target_stream);
+
+        let credential = test_credential("migration destination test credential");
+        crate::private_link::persist_credential(root.path(), &credential)
+            .expect("persist paired credential");
+        let generation = hex_encode(&crate::post_connect::compute_pairing_generation(
+            &credential.client_cert_pem,
+        ));
+        write_answer_file(root.path(), &generation).expect("confirm paired credential");
+        let instance_lock = InstanceLock::acquire(&data_root).expect("acquire instance lock");
+        let clock: Arc<dyn crate::clock::Clock> = Arc::new(TestClock::new(
+            time::OffsetDateTime::from_unix_timestamp(1_800_000_000).expect("fixed wall time"),
+            Duration::ZERO,
+            time::UtcOffset::UTC,
+        ));
+        let wake = SyncWake::default();
+        let manager = SegmentManager::start(
+            data_root.clone(),
+            recovered.stream.clone(),
+            clock.as_ref(),
+            recovered.segment_interval,
+            wake.clone(),
+            Box::new(FixedZoneSource),
+            Arc::new(NoWarnings),
+        )
+        .expect("capture opens at the recovered destination");
+        let capture_days = fs::read_dir(data_root.join("captures"))
+            .expect("read capture root")
+            .map(|entry| entry.expect("capture day").path())
+            .collect::<Vec<_>>();
+        assert!(
+            capture_days
+                .iter()
+                .any(|day| day.join(target_stream.as_str()).is_dir())
+        );
+        drop(manager);
+
+        let health = crate::health::HealthWriter::new(data_root.clone(), &instance_lock);
+        let (activity, _activity_receiver) = tokio::sync::watch::channel(SyncActivity::Idle);
+        let (_stop, shutdown) = tokio::sync::watch::channel(true);
+        let sync_result = test_runtime().block_on(
+            SyncTask {
+                config_root: root.path().to_owned(),
+                data_root: data_root.clone(),
+                config: recovered.clone(),
+                hostname: "newhost".to_owned(),
+                clock,
+                wake,
+                activity,
+                health,
+                retention_fence: Arc::new(RetentionFence::new()),
+                identity: instance_lock.identity().clone(),
+                health_refresh_interval: Duration::from_secs(60),
+                answer_lock_timeout: crate::pairing_answer::ANSWER_LOCK_TIMEOUT,
+                platform: PlatformKind::Linux,
+                marker_digest: Some("a".repeat(64)),
+            }
+            .run(shutdown),
+        );
+        assert_eq!(sync_result, Ok(()));
+
         let persisted: Value = serde_json::from_slice(
             &fs::read(root.path().join(crate::config::CONFIG_FILENAME)).expect("read config"),
         )
@@ -2514,6 +2658,10 @@ mod tests {
                 .expect("load record")
                 .expect("record exists");
             assert_eq!(adopted.phase, MigrationPhase::Adopted);
+            assert!(!adopted.has_transaction_material(), "{label}");
+            assert!(adopted.source_credential.is_none(), "{label}");
+            assert!(adopted.candidate_credential.is_none(), "{label}");
+            assert!(adopted.candidate_key_pem.is_none(), "{label}");
             assert_eq!(
                 adopted.adopted_marker_digest.as_deref(),
                 Some("c".repeat(64).as_str())
@@ -2522,8 +2670,41 @@ mod tests {
     }
 
     #[test]
+    fn adopted_transition_persists_no_source_or_candidate_secret_material() {
+        let root = TempRoot::new();
+        let marker = "c".repeat(64);
+        let (source, candidate, record) = publication_fixture(&marker);
+        let source_generation = hex_encode(&crate::post_connect::compute_pairing_generation(
+            &source.client_cert_pem,
+        ));
+        crate::private_link::persist_credential(root.path(), &source)
+            .expect("persist source credential");
+        write_answer_file(root.path(), &source_generation).expect("confirm source credential");
+
+        test_runtime()
+            .block_on(publish_candidate(root.path(), &marker, record))
+            .expect("complete migration");
+
+        let adopted = MigrationRecord::load(root.path())
+            .expect("load durable adopted state")
+            .expect("adopted state exists");
+        assert_eq!(adopted.phase, MigrationPhase::Adopted);
+        assert!(!adopted.has_transaction_material());
+        assert!(adopted.source_credential.is_none());
+        assert!(adopted.candidate_credential.is_none());
+        assert!(adopted.candidate_key_pem.is_none());
+        assert!(adopted.csr_pem.is_none());
+        assert_eq!(
+            load_credential(root.path()).expect("load new credential"),
+            Some(candidate)
+        );
+    }
+
+    #[test]
     fn interrupted_credential_and_answer_publications_recover_confirmation() {
-        let _fault_guard = ATOMIC_FAULT_TEST_LOCK.lock().expect("fault test lock");
+        let _fault_guard = crate::storage::ATOMIC_FAULT_TEST_LOCK
+            .lock()
+            .expect("fault test lock");
         for (label, target, fault) in [
             (
                 "credential-after-rename",

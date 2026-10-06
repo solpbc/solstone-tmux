@@ -7,6 +7,19 @@ pub mod authority;
 pub mod pairing_peer;
 pub mod private_link_peer;
 
+pub fn persist_confirmed_credential(
+    config_root: &std::path::Path,
+    credential: &spl_transport::credential::Credential,
+) {
+    let generation = solstone_tmux::journal_version::hex_encode(
+        &solstone_tmux::post_connect::compute_pairing_generation(&credential.client_cert_pem),
+    );
+    solstone_tmux::private_link::persist_credential(config_root, credential)
+        .expect("persist confirmed test credential");
+    solstone_tmux::pairing_answer::write_answer_file(config_root, &generation)
+        .expect("confirm test credential");
+}
+
 use std::collections::{HashMap, VecDeque};
 use std::ffi::OsString;
 use std::fs;

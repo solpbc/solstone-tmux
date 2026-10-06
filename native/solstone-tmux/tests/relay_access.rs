@@ -19,8 +19,8 @@ use spl_transport::journal_bridge::CarrierOpener;
 use spl_transport::validate_relay_origin;
 
 mod support;
-use support::TestDirectory;
 use support::private_link_peer::PrivateLinkPeer;
+use support::{TestDirectory, persist_confirmed_credential};
 
 static FAULT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -271,6 +271,7 @@ fn relay_access_ready_commits_credentials_and_updates_opener() {
             .await
             .expect("journal client");
 
+        persist_confirmed_credential(&config_root, &initial_cred);
         let pairing_gen = compute_pairing_generation(&initial_cred.client_cert_pem);
         let (store, _hook) =
             CredentialStore::new(config_root.clone(), initial_cred.clone(), pairing_gen);
@@ -349,6 +350,7 @@ fn relay_access_not_configured_clears_relay_credentials() {
             .await
             .expect("journal client");
 
+        persist_confirmed_credential(&config_root, &initial_cred);
         let pairing_gen = compute_pairing_generation(&initial_cred.client_cert_pem);
         let (store, _hook) =
             CredentialStore::new(config_root.clone(), initial_cred.clone(), pairing_gen);
@@ -398,7 +400,7 @@ fn relay_only_disable_blocks_the_next_dial_locally() {
         credential.endpoints.clear();
         credential.relay_origin = Some("https://relay.example.invalid".to_owned());
         credential.device_token = Some("relay-only-token".to_owned());
-        persist_credential(&config_root, &credential).expect("persist credential");
+        persist_confirmed_credential(&config_root, &credential);
         let refresh = VersionRefreshState::new(
             config_root.clone(),
             data_root,
@@ -455,6 +457,7 @@ fn relay_access_stale_not_configured_cannot_clobber_newer_ready() {
         let client = JournalClient::bootstrap(&bridge)
             .await
             .expect("journal client");
+        persist_confirmed_credential(&config_root, &credential);
         let (store, _) = CredentialStore::new(
             config_root,
             credential.clone(),
@@ -545,6 +548,7 @@ fn relay_access_shared_validation_rejections_preserve_live_access() {
         let client = JournalClient::bootstrap(&bridge)
             .await
             .expect("journal client");
+        persist_confirmed_credential(&config_root, &credential);
         let (store, _) = CredentialStore::new(
             config_root,
             credential.clone(),
@@ -657,6 +661,7 @@ fn relay_access_fault_before_rename_does_not_mutate_live() {
             .await
             .expect("journal client");
 
+        persist_confirmed_credential(&config_root, &initial_cred);
         let pairing_gen = compute_pairing_generation(&initial_cred.client_cert_pem);
         let (store, _hook) =
             CredentialStore::new(config_root.clone(), initial_cred.clone(), pairing_gen);
@@ -717,7 +722,7 @@ fn relay_access_integrates_with_journal_session() {
         let lock = InstanceLock::acquire(&data_root).expect("acquire lock");
 
         let credential = peer.credential();
-        persist_credential(&config_root, &credential).expect("persist cred");
+        persist_confirmed_credential(&config_root, &credential);
 
         let refresh = VersionRefreshState::new(
             config_root.clone(),
@@ -1062,6 +1067,7 @@ fn relay_access_fault_after_rename_is_durability_uncertain() {
             .expect("start bridge");
         let opener = bridge.opener().clone();
 
+        persist_confirmed_credential(&config_root, &initial_cred);
         let pairing_gen = compute_pairing_generation(&initial_cred.client_cert_pem);
         let (store, _hook) =
             CredentialStore::new(config_root.clone(), initial_cred.clone(), pairing_gen);
@@ -1168,6 +1174,7 @@ fn relay_access_durable_clear_retry_does_not_clobber_newer_ready() {
             .expect("start bridge");
         let opener = bridge.opener().clone();
 
+        persist_confirmed_credential(&config_root, &initial_cred);
         let pairing_gen = compute_pairing_generation(&initial_cred.client_cert_pem);
         let (store, _hook) =
             CredentialStore::new(config_root.clone(), initial_cred.clone(), pairing_gen);
@@ -1255,6 +1262,7 @@ fn relay_access_failed_clear_survives_shutdown_and_retries() {
             .expect("start bridge");
         let opener = bridge.opener().clone();
 
+        persist_confirmed_credential(&config_root, &initial_cred);
         let pairing_gen = compute_pairing_generation(&initial_cred.client_cert_pem);
         let (store, _hook) =
             CredentialStore::new(config_root.clone(), initial_cred.clone(), pairing_gen);
@@ -1333,6 +1341,7 @@ fn relay_access_stale_hook_cannot_undo_disable() {
         let bridge = PrivateLinkBridge::start(initial_cred.clone(), None, refresh)
             .await
             .expect("start bridge");
+        persist_confirmed_credential(&config_root, &initial_cred);
         let pairing_gen = compute_pairing_generation(&initial_cred.client_cert_pem);
         let (store, old_hook) =
             CredentialStore::new(config_root.clone(), initial_cred.clone(), pairing_gen);

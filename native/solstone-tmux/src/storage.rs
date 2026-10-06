@@ -9,6 +9,9 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+#[cfg(test)]
+pub(crate) static ATOMIC_FAULT_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 use rustix::fd::AsFd;
 use serde::{Deserialize, Serialize};
 

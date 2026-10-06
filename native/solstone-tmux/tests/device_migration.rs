@@ -136,30 +136,11 @@ async fn authenticated_routes_publish_candidate_and_transfer_confirmation_after_
         record.adopted_marker_digest.as_deref(),
         Some(destination_marker.as_str())
     );
-    assert!(record.decision_reply.is_none());
-    assert!(record.decision_state_reply.is_some());
-    let request = serde_json::from_slice::<Value>(
-        record
-            .rekey_request
-            .as_deref()
-            .expect("exact saved rekey request"),
-    )
-    .expect("parse saved request");
-    assert_eq!(request["protocol_version"], 1);
-    assert_eq!(request["platform"], "linux");
-    assert_eq!(request["device_label"], "newhost");
-    assert_eq!(request["client_label"], "newhost");
-    assert!(request.get("replaces_cid").is_none());
-    let decision = serde_json::from_slice::<Value>(
-        record
-            .decision_request
-            .as_deref()
-            .expect("exact saved decision request"),
-    )
-    .expect("parse saved decision");
-    assert_eq!(decision["choice"], "new_device");
-    assert_eq!(decision["protocol_version"], 1);
-    assert!(decision.get("replaces_cid").is_none());
+    assert!(record.source_credential.is_none());
+    assert!(record.candidate_credential.is_none());
+    assert!(record.candidate_key_pem.is_none());
+    assert!(record.rekey_request.is_none());
+    assert!(record.decision_request.is_none());
 
     let source_sha = sha256_hex(
         spl_transport::tls::parse_certs(&source.client_cert_pem)
@@ -185,10 +166,12 @@ async fn authenticated_routes_publish_candidate_and_transfer_confirmation_after_
         rekey.authenticated_client_sha256(),
         Some(source_sha.as_str())
     );
-    assert_eq!(
-        rekey.body(),
-        record.rekey_request.as_deref().expect("request bytes")
-    );
+    let request = serde_json::from_slice::<Value>(rekey.body()).expect("parse sent rekey request");
+    assert_eq!(request["protocol_version"], 1);
+    assert_eq!(request["platform"], "linux");
+    assert_eq!(request["device_label"], "newhost");
+    assert_eq!(request["client_label"], "newhost");
+    assert!(request.get("replaces_cid").is_none());
     let get = requests
         .iter()
         .find(|request| {
@@ -219,10 +202,10 @@ async fn authenticated_routes_publish_candidate_and_transfer_confirmation_after_
         put.authenticated_client_sha256(),
         Some(candidate_sha.as_str())
     );
-    assert_eq!(
-        put.body(),
-        record.decision_request.as_deref().expect("decision bytes")
-    );
+    let decision = serde_json::from_slice::<Value>(put.body()).expect("parse sent decision");
+    assert_eq!(decision["choice"], "new_device");
+    assert_eq!(decision["protocol_version"], 1);
+    assert!(decision.get("replaces_cid").is_none());
     assert_eq!(
         load_credential(roots.config()).expect("load final credential"),
         Some(candidate.clone())
