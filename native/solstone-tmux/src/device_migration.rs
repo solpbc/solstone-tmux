@@ -7,12 +7,10 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::command::{CommandInvocation, CommandOperation, CommandRunner};
-use crate::config::{RuntimeConfig, default_stream};
 use crate::health::DiagnosticCode;
 use crate::journal::JournalClient;
 use crate::journal_version::VersionRefreshState;
 use crate::journal_version::hex_encode;
-use crate::name::derive_component;
 use crate::pairing_answer::{ANSWER_FILENAME, AnswerRecord, acquire_answer_lock, read_answer_file};
 use crate::paths::PlatformKind;
 use crate::private_link::{PrivateLinkBridge, load_credential, persist_credential};
@@ -125,10 +123,6 @@ pub struct MigrationRecord {
     pub phase: MigrationPhase,
     pub adopted_marker_digest: Option<String>,
     pub pending_marker_digest: Option<String>,
-    pub destination_stream: String,
-    pub destination_generated: bool,
-    pub destination_published: bool,
-    pub destination_source_stream: Option<String>,
     pub source_cid: Option<String>,
     pub source_generation: Option<String>,
     pub source_credential: Option<Credential>,
@@ -158,17 +152,13 @@ pub enum MigrationPhase {
     Adopted,
 }
 
-impl MigrationRecord {
-    pub fn new(destination_stream: String) -> Self {
+impl Default for MigrationRecord {
+    fn default() -> Self {
         Self {
             version: RECORD_VERSION,
             phase: MigrationPhase::Unadopted,
             adopted_marker_digest: None,
             pending_marker_digest: None,
-            destination_stream,
-            destination_generated: false,
-            destination_published: false,
-            destination_source_stream: None,
             source_cid: None,
             source_generation: None,
             source_credential: None,
@@ -186,7 +176,9 @@ impl MigrationRecord {
             target_answer_bytes: None,
         }
     }
+}
 
+impl MigrationRecord {
     pub fn load(config_root: &Path) -> Result<Option<Self>, DiagnosticCode> {
         let path = config_root.join(RECORD_FILENAME);
         let mut file = match open_regular_readonly(&path) {
@@ -375,8 +367,7 @@ impl MigrationRecord {
                             && no_answer_transfer
                     }
                     MigrationPhase::Publishing => {
-                        self.destination_published
-                            && self.candidate_credential.is_some()
+                        self.candidate_credential.is_some()
                             && self.rekey_reply.is_some()
                             && self.decision_id.is_some()
                             && self.decision_request.is_some()
@@ -410,80 +401,6 @@ pub fn grandfather_or_settle_if_idle(config_root: &Path) -> Result<(), Diagnosti
     crate::pairing_answer::grandfather_or_settle(config_root)
 }
 
-pub fn prepare_destination(
-    config_root: &Path,
-    hostname: &str,
-    mut config: RuntimeConfig,
-) -> (RuntimeConfig, bool) {
-    let Ok(stream_is_implicit) = RuntimeConfig::stream_is_implicit(config_root) else {
-        return (config, false);
-    };
-    let Ok(target) = default_stream(hostname) else {
-        return (config, false);
-    };
-    let mut record = match MigrationRecord::load(config_root) {
-        Ok(Some(record)) => record,
-        Ok(None) => MigrationRecord::new(config.stream.as_str().to_owned()),
-        Err(_) => return (config, false),
-    };
-    let current_stream = config.stream.as_str().to_owned();
-    let pending_generated = record.destination_generated && !record.destination_published;
-    let saved_destination_matches = pending_generated
-        && (record.destination_source_stream.as_deref() == Some(current_stream.as_str())
-            || record.destination_stream == current_stream);
-    let pending_was_superseded = pending_generated
-        && record.destination_source_stream.is_some()
-        && !saved_destination_matches;
-    let destination_generated = if saved_destination_matches {
-        true
-    } else if pending_was_superseded {
-        false
-    } else {
-        stream_is_implicit
-            || (record.destination_generated
-                && record.destination_published
-                && record.destination_stream == current_stream)
-    };
-    let destination = if saved_destination_matches {
-        record.destination_stream.clone()
-    } else if destination_generated {
-        target
-    } else {
-        current_stream.clone()
-    };
-    let Ok(derived) = derive_component(&destination) else {
-        return (config, false);
-    };
-    config.stream = derived;
-    if destination_generated && !saved_destination_matches {
-        record.destination_source_stream = Some(current_stream);
-    } else if !saved_destination_matches {
-        record.destination_source_stream = None;
-    }
-    record.destination_stream = config.stream.as_str().to_owned();
-    record.destination_generated = destination_generated;
-    record.destination_published = false;
-    if record.persist(config_root).is_err() {
-        return (config, false);
-    }
-    let published_config = if destination_generated {
-        let Ok(published_config) =
-            RuntimeConfig::publish_stream_coordinate(config_root, config.stream.as_str(), hostname)
-        else {
-            return (config, false);
-        };
-        published_config
-    } else {
-        config
-    };
-    record.destination_published = true;
-    record.destination_source_stream = None;
-    if record.persist(config_root).is_err() {
-        return (published_config, false);
-    }
-    (published_config, true)
-}
-
 pub fn record_setup_baseline(
     config_root: &Path,
     marker_digest: Option<&str>,
@@ -491,8 +408,7 @@ pub fn record_setup_baseline(
     if marker_digest.is_some_and(|value| !is_sha256_hex(value)) {
         return Err(DiagnosticCode::PrivateStateInvalid);
     }
-    let mut record =
-        MigrationRecord::load(config_root)?.unwrap_or_else(|| MigrationRecord::new(String::new()));
+    let mut record = MigrationRecord::load(config_root)?.unwrap_or_default();
     if let Some(marker_digest) = marker_digest {
         record.finish_adoption(marker_digest);
     } else {
@@ -505,49 +421,34 @@ pub fn record_setup_baseline(
 
 pub async fn recover_publication(config_root: &Path) -> Result<bool, DiagnosticCode> {
     let root = config_root.to_owned();
-    let Some(mut record) = tokio::task::spawn_blocking(move || MigrationRecord::load(&root))
-        .await
-        .map_err(|_| DiagnosticCode::PrivateStateIo)??
-    else {
+    let Some(mut record) = blocking(move || MigrationRecord::load(&root)).await? else {
         return Ok(false);
     };
     if record.phase != MigrationPhase::Publishing {
         return Ok(false);
-    }
-    if !record.destination_published {
-        return Err(DiagnosticCode::ConfiguredStreamMismatch);
     }
     let source = record
         .source_credential
         .clone()
         .ok_or(DiagnosticCode::PrivateStateInvalid)?;
     let validation_record = record.clone();
-    let candidate =
-        tokio::task::spawn_blocking(move || verify_publishing_record(&validation_record))
-            .await
-            .map_err(|_| DiagnosticCode::PrivateStateIo)??;
+    let candidate = blocking(move || verify_publishing_record(&validation_record)).await?;
     let lock = acquire_answer_lock(config_root).await?;
     let root = config_root.to_owned();
-    let current = tokio::task::spawn_blocking(move || load_credential(&root))
-        .await
-        .map_err(|_| DiagnosticCode::PrivateStateIo)??;
+    let current = blocking(move || load_credential(&root)).await?;
     if current.as_ref() != Some(&source) && current.as_ref() != Some(&candidate) {
         drop(lock);
         return Err(DiagnosticCode::PrivateStateIo);
     }
     if let Some(target) = record.target_answer_bytes.as_deref() {
         let root = config_root.to_owned();
-        let current_bytes = tokio::task::spawn_blocking(move || read_answer_bytes(&root))
-            .await
-            .map_err(|_| DiagnosticCode::PrivateStateIo)??;
+        let current_bytes = blocking(move || read_answer_bytes(&root)).await?;
         if current_bytes.as_deref() == Some(target) {
             // The answer publication reached disk before the interrupted checkpoint.
         } else if current_bytes.as_deref() == record.source_answer_bytes.as_deref() {
             let root = config_root.to_owned();
             let bytes = target.to_vec();
-            tokio::task::spawn_blocking(move || write_answer_bytes(&root, &bytes))
-                .await
-                .map_err(|_| DiagnosticCode::PrivateStateIo)??;
+            blocking(move || write_answer_bytes(&root, &bytes)).await?;
         } else {
             drop(lock);
             return Err(DiagnosticCode::PrivateStateIo);
@@ -555,9 +456,7 @@ pub async fn recover_publication(config_root: &Path) -> Result<bool, DiagnosticC
     }
     if current.as_ref() == Some(&source) {
         let root = config_root.to_owned();
-        tokio::task::spawn_blocking(move || persist_credential(&root, &candidate))
-            .await
-            .map_err(|_| DiagnosticCode::PrivateStateIo)??;
+        blocking(move || persist_credential(&root, &candidate)).await?;
     }
     let marker_digest = record
         .pending_marker_digest
@@ -565,31 +464,9 @@ pub async fn recover_publication(config_root: &Path) -> Result<bool, DiagnosticC
         .ok_or(DiagnosticCode::PrivateStateInvalid)?;
     record.finish_adoption(&marker_digest);
     let root = config_root.to_owned();
-    tokio::task::spawn_blocking(move || record.persist(&root))
-        .await
-        .map_err(|_| DiagnosticCode::PrivateStateIo)??;
+    blocking(move || record.persist(&root)).await?;
     drop(lock);
     Ok(true)
-}
-
-pub async fn recover_publication_for_marker(
-    config_root: &Path,
-    marker_digest: &str,
-) -> Result<bool, DiagnosticCode> {
-    let root = config_root.to_owned();
-    let record = tokio::task::spawn_blocking(move || MigrationRecord::load(&root))
-        .await
-        .map_err(|_| DiagnosticCode::PrivateStateIo)??;
-    let Some(record) = record else {
-        return Ok(false);
-    };
-    if record.phase != MigrationPhase::Publishing {
-        return Ok(false);
-    }
-    if record.pending_marker_digest.as_deref() != Some(marker_digest) {
-        return Err(DiagnosticCode::PrivateStateIo);
-    }
-    recover_publication(config_root).await
 }
 
 async fn supersede_stale_setup(
@@ -612,21 +489,18 @@ async fn supersede_stale_setup(
     }
     let answer_lock = acquire_answer_lock(config_root).await?;
     let root = config_root.to_owned();
-    let current = tokio::task::spawn_blocking(move || load_credential(&root))
-        .await
-        .map_err(|_| DiagnosticCode::PrivateStateIo)??;
+    let current = blocking(move || load_credential(&root)).await?;
     if current.as_ref() != Some(credential) {
         drop(answer_lock);
         return Err(DiagnosticCode::PrivateStateIo);
     }
     let root = config_root.to_owned();
     let marker = marker_digest.to_owned();
-    tokio::task::spawn_blocking(move || {
+    blocking(move || {
         crate::journal_version::clear_cached_version(&root);
         record_setup_baseline(&root, Some(&marker))
     })
-    .await
-    .map_err(|_| DiagnosticCode::PrivateStateIo)??;
+    .await?;
     drop(answer_lock);
     Ok(true)
 }
@@ -655,6 +529,29 @@ fn write_answer_bytes(config_root: &Path, bytes: &[u8]) -> Result<(), Diagnostic
     }
 }
 
+async fn blocking<T, F>(work: F) -> Result<T, DiagnosticCode>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, DiagnosticCode> + Send + 'static,
+{
+    tokio::task::spawn_blocking(work)
+        .await
+        .map_err(|_| DiagnosticCode::PrivateStateIo)?
+}
+
+async fn save_record(config_root: &Path, record: &MigrationRecord) -> Result<(), DiagnosticCode> {
+    let root = config_root.to_owned();
+    let record = record.clone();
+    blocking(move || record.persist(&root)).await
+}
+
+async fn current_credential(config_root: &Path) -> Result<Credential, DiagnosticCode> {
+    let root = config_root.to_owned();
+    blocking(move || load_credential(&root))
+        .await?
+        .ok_or(DiagnosticCode::PrivateStateIo)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn migrate_if_needed(
     config_root: &Path,
@@ -670,10 +567,9 @@ pub async fn migrate_if_needed(
         return Err(DiagnosticCode::PrivateStateInvalid);
     }
     let root = config_root.to_owned();
-    let loaded_record = tokio::task::spawn_blocking(move || MigrationRecord::load(&root))
-        .await
-        .map_err(|_| DiagnosticCode::PrivateStateIo)??;
-    let mut record = loaded_record.unwrap_or_else(|| MigrationRecord::new(String::new()));
+    let mut record = blocking(move || MigrationRecord::load(&root))
+        .await?
+        .unwrap_or_default();
     if record.phase == MigrationPhase::Unadopted
         && record.source_credential.is_none()
         && record.adopted_marker_digest.is_none()
@@ -681,9 +577,7 @@ pub async fn migrate_if_needed(
     {
         let answer_lock = acquire_answer_lock(config_root).await?;
         let legacy_root = config_root.to_owned();
-        tokio::task::spawn_blocking(move || grandfather_or_settle_if_idle(&legacy_root))
-            .await
-            .map_err(|_| DiagnosticCode::PrivateStateIo)??;
+        blocking(move || grandfather_or_settle_if_idle(&legacy_root)).await?;
         drop(answer_lock);
     }
     if supersede_stale_setup(config_root, &record, &credential, marker_digest).await? {
@@ -693,23 +587,13 @@ pub async fn migrate_if_needed(
         && record.pending_marker_digest.as_deref() == Some(marker_digest)
     {
         recover_publication(config_root).await?;
-        let root = config_root.to_owned();
-        let current = tokio::task::spawn_blocking(move || load_credential(&root))
-            .await
-            .map_err(|_| DiagnosticCode::PrivateStateIo)??;
-        return current.ok_or(DiagnosticCode::PrivateStateIo);
+        return current_credential(config_root).await;
     }
     if record.phase == MigrationPhase::Adopted && record.has_transaction_material() {
         record.clear_transaction_material();
-        let root = config_root.to_owned();
-        let persisted_record = record.clone();
-        tokio::task::spawn_blocking(move || persisted_record.persist(&root))
-            .await
-            .map_err(|_| DiagnosticCode::PrivateStateIo)??;
+        save_record(config_root, &record).await?;
     }
-    if record.phase == MigrationPhase::Publishing
-        && record.pending_marker_digest.as_deref() != Some(marker_digest)
-    {
+    if record.phase == MigrationPhase::Publishing {
         credential = restore_source_for_new_marker(config_root, &record, &credential).await?;
         let adopted_marker = record
             .adopted_marker_digest
@@ -719,62 +603,31 @@ pub async fn migrate_if_needed(
     }
     if record.phase == MigrationPhase::Unadopted {
         record.finish_adoption(marker_digest);
-        if !record.destination_published {
-            return Err(DiagnosticCode::ConfiguredStreamMismatch);
-        }
-        let root = config_root.to_owned();
-        tokio::task::spawn_blocking(move || record.persist(&root))
-            .await
-            .map_err(|_| DiagnosticCode::PrivateStateIo)??;
-        let root = config_root.to_owned();
-        let current = tokio::task::spawn_blocking(move || load_credential(&root))
-            .await
-            .map_err(|_| DiagnosticCode::PrivateStateIo)??;
-        return current.ok_or(DiagnosticCode::PrivateStateIo);
+        save_record(config_root, &record).await?;
+        return current_credential(config_root).await;
     }
     if record.phase == MigrationPhase::Adopted
         && record.adopted_marker_digest.as_deref() == Some(marker_digest)
     {
-        if !record.destination_published {
-            return Err(DiagnosticCode::ConfiguredStreamMismatch);
-        }
         return Ok(credential);
     }
 
-    if !record.destination_published {
-        return Err(DiagnosticCode::ConfiguredStreamMismatch);
-    }
-    let source_matches = record
-        .source_credential
-        .as_ref()
-        .is_some_and(|source| source == &credential);
     if record.phase == MigrationPhase::Adopted
-        && record.adopted_marker_digest.as_deref() != Some(marker_digest)
-        || record.phase != MigrationPhase::Adopted
-            && record.pending_marker_digest.as_deref() != Some(marker_digest)
+        || record.pending_marker_digest.as_deref() != Some(marker_digest)
     {
-        if record.phase != MigrationPhase::Adopted && !source_matches {
+        if record.phase != MigrationPhase::Adopted
+            && record.source_credential.as_ref() != Some(&credential)
+        {
             return Err(DiagnosticCode::PrivateStateIo);
         }
         let (source_cid, source_generation) =
             certificate_binding(credential.client_cert_pem.clone()).await?;
+        record.clear_transaction_material();
         record.phase = MigrationPhase::Unadopted;
         record.pending_marker_digest = Some(marker_digest.to_owned());
         record.source_credential = Some(credential.clone());
         record.source_cid = Some(source_cid);
         record.source_generation = Some(source_generation);
-        record.candidate_credential = None;
-        record.candidate_key_pem = None;
-        record.csr_pem = None;
-        record.rekey_operation_id = None;
-        record.rekey_request = None;
-        record.rekey_reply = None;
-        record.decision_id = None;
-        record.decision_request = None;
-        record.decision_reply = None;
-        record.decision_state_reply = None;
-        record.source_answer_bytes = None;
-        record.target_answer_bytes = None;
         let (device_label, fields) = crate::private_link::pairing_ceremony_identity(
             platform,
             Ok::<String, ()>(hostname.to_owned()),
@@ -787,48 +640,43 @@ pub async fn migrate_if_needed(
             .to_owned();
         let client_label = truncate_label_to(&client_label, 253).to_owned();
         let label = device_label.clone();
-        let generated = tokio::task::spawn_blocking(move || generate_candidate(&label))
-            .await
-            .map_err(|_| DiagnosticCode::PrivateStateIo)?
-            .map_err(|_| DiagnosticCode::PrivateStateIo)?;
-        record.candidate_key_pem = Some(generated.0.clone());
-        record.csr_pem = Some(generated.1.clone());
-        record.rekey_operation_id = Some(generated.2.clone());
+        let (key_pem, csr_pem, operation_id) = blocking(move || {
+            generate_candidate(&label).map_err(|_| DiagnosticCode::PrivateStateIo)
+        })
+        .await?;
         let request = RekeyRequest {
             protocol_version: 1,
-            operation_id: record.rekey_operation_id.as_deref().unwrap_or_default(),
-            csr: record.csr_pem.as_deref().unwrap_or_default(),
+            operation_id: &operation_id,
+            csr: &csr_pem,
             device_label: &device_label,
             client_label: &client_label,
             platform: platform.pairing_platform(),
         };
         record.rekey_request =
             Some(serde_json::to_vec(&request).map_err(|_| DiagnosticCode::PrivateStateInvalid)?);
+        record.candidate_key_pem = Some(key_pem);
+        record.csr_pem = Some(csr_pem);
+        record.rekey_operation_id = Some(operation_id);
         record.phase = MigrationPhase::RekeyPending;
-        let root = config_root.to_owned();
-        tokio::task::spawn_blocking(move || record.persist(&root))
-            .await
-            .map_err(|_| DiagnosticCode::PrivateStateIo)??;
-        let root = config_root.to_owned();
-        record = tokio::task::spawn_blocking(move || MigrationRecord::load(&root))
-            .await
-            .map_err(|_| DiagnosticCode::PrivateStateIo)??
-            .ok_or(DiagnosticCode::PrivateStateInvalid)?;
-    }
-
-    if record.phase != MigrationPhase::Adopted
-        && !record
-            .source_credential
-            .as_ref()
-            .is_some_and(|source| source == &credential)
-    {
-        return Err(DiagnosticCode::PrivateStateIo);
+        // A confirmation rejection retires the current credential under the
+        // answer lock only while no migration owns it, so a transaction starts
+        // under the same lock and only for the credential still on disk.
+        let answer_lock = acquire_answer_lock(config_root).await?;
+        if current_credential(config_root).await? != credential {
+            drop(answer_lock);
+            return Err(DiagnosticCode::PrivateStateIo);
+        }
+        save_record(config_root, &record).await?;
+        drop(answer_lock);
     }
 
     let source = record
         .source_credential
         .clone()
         .ok_or(DiagnosticCode::PrivateStateInvalid)?;
+    if source != credential {
+        return Err(DiagnosticCode::PrivateStateIo);
+    }
     let old_cid = record
         .source_cid
         .clone()
@@ -841,15 +689,14 @@ pub async fn migrate_if_needed(
         return Err(DiagnosticCode::PrivateStateInvalid);
     }
     let validation_record = record.clone();
-    tokio::task::spawn_blocking(move || {
+    blocking(move || {
         validate_saved_rekey_request(&validation_record)?;
         if validation_record.decision_request.is_some() {
             validate_saved_decision_request(&validation_record)?;
         }
         Ok(())
     })
-    .await
-    .map_err(|_| DiagnosticCode::PrivateStateIo)??;
+    .await?;
     let refresh = VersionRefreshState::new(
         config_root.to_owned(),
         data_root.to_owned(),
@@ -857,93 +704,26 @@ pub async fn migrate_if_needed(
         &source.ca_fp_prefix,
         identity,
     );
-    let old_bridge = PrivateLinkBridge::start(source.clone(), None, refresh.clone()).await?;
-    let old_client = match JournalClient::bootstrap(&old_bridge).await {
-        Ok(client) => client,
-        Err(code) => {
-            old_bridge.shutdown().await;
-            return Err(code);
-        }
-    };
     if record.rekey_reply.is_none() {
-        let body = record
-            .rekey_request
-            .as_deref()
-            .ok_or(DiagnosticCode::PrivateStateInvalid)?;
-        let response = control_request(&old_client, Method::POST, REKEY_PATH, Some(body)).await;
-        let Some((status, response_body)) = response else {
-            old_bridge.shutdown().await;
-            return Err(DiagnosticCode::JournalUnavailable);
-        };
-        if status != StatusCode::CREATED && status != StatusCode::OK {
-            old_bridge.shutdown().await;
-            return Err(DiagnosticCode::JournalUnavailable);
-        }
-        let response: RekeyResponse = serde_json::from_slice(&response_body)
-            .map_err(|_| DiagnosticCode::JournalContractInvalid)?;
-        let operation = record
-            .rekey_operation_id
-            .as_deref()
-            .ok_or(DiagnosticCode::PrivateStateInvalid)?;
-        if response.protocol_version != 1
-            || response.operation_id != operation
-            || response.state != "pending"
-            || response.previous_cid != old_cid
-            || response.cid == old_cid
-        {
-            old_bridge.shutdown().await;
-            return Err(DiagnosticCode::JournalContractInvalid);
-        }
-        let key_pem = record
-            .candidate_key_pem
-            .as_deref()
-            .ok_or(DiagnosticCode::PrivateStateInvalid)?
-            .to_owned();
-        let pairing = response.pairing.clone();
-        let response_cid = response.cid.clone();
-        let candidate_source = source.clone();
-        let candidate = tokio::task::spawn_blocking(move || {
-            candidate_credential(
-                &pairing,
-                &key_pem,
-                &response_cid,
-                &candidate_source,
-                now_unix_seconds,
-            )
-        })
-        .await
-        .map_err(|_| DiagnosticCode::PrivateStateIo)??;
-        record.candidate_credential = Some(candidate);
-        record.rekey_reply = Some(response_body);
-        record.phase = MigrationPhase::RekeyVerified;
-        let root = config_root.to_owned();
-        tokio::task::spawn_blocking(move || record.persist(&root))
-            .await
-            .map_err(|_| DiagnosticCode::PrivateStateIo)??;
-        let root = config_root.to_owned();
-        record = tokio::task::spawn_blocking(move || MigrationRecord::load(&root))
-            .await
-            .map_err(|_| DiagnosticCode::PrivateStateIo)??
-            .ok_or(DiagnosticCode::PrivateStateInvalid)?;
+        let bridge = PrivateLinkBridge::start(source.clone(), None, refresh.clone()).await?;
+        let sent = send_rekey(
+            &bridge,
+            config_root,
+            &mut record,
+            &source,
+            &old_cid,
+            now_unix_seconds,
+        )
+        .await;
+        bridge.shutdown().await;
+        sent?;
     }
-    old_bridge.shutdown().await;
 
     let validation_record = record.clone();
-    let candidate = tokio::task::spawn_blocking(move || {
-        verify_saved_candidate(&validation_record, now_unix_seconds)
-    })
-    .await
-    .map_err(|_| DiagnosticCode::PrivateStateIo)??;
+    let candidate =
+        blocking(move || verify_saved_candidate(&validation_record, now_unix_seconds)).await?;
     let expected_candidate_cid =
         certificate_cid_blocking(candidate.client_cert_pem.clone()).await?;
-    let candidate_bridge = PrivateLinkBridge::start(candidate.clone(), None, refresh).await?;
-    let client = match JournalClient::bootstrap(&candidate_bridge).await {
-        Ok(client) => client,
-        Err(code) => {
-            candidate_bridge.shutdown().await;
-            return Err(code);
-        }
-    };
     if record.decision_request.is_none() {
         let key_material = record
             .candidate_key_pem
@@ -951,9 +731,7 @@ pub async fn migrate_if_needed(
             .unwrap_or_default()
             .into_bytes();
         let decision_id =
-            tokio::task::spawn_blocking(move || uuid_from_material(&key_material, b"decision"))
-                .await
-                .map_err(|_| DiagnosticCode::PrivateStateIo)?;
+            blocking(move || Ok(uuid_from_material(&key_material, b"decision"))).await?;
         let request = DecisionRequest {
             protocol_version: 1,
             operation_id: &decision_id,
@@ -963,100 +741,143 @@ pub async fn migrate_if_needed(
             Some(serde_json::to_vec(&request).map_err(|_| DiagnosticCode::PrivateStateInvalid)?);
         record.decision_id = Some(decision_id);
         record.phase = MigrationPhase::DecisionPending;
-        let root = config_root.to_owned();
-        tokio::task::spawn_blocking(move || record.persist(&root))
-            .await
-            .map_err(|_| DiagnosticCode::PrivateStateIo)??;
-        let root = config_root.to_owned();
-        record = tokio::task::spawn_blocking(move || MigrationRecord::load(&root))
-            .await
-            .map_err(|_| DiagnosticCode::PrivateStateIo)??
-            .ok_or(DiagnosticCode::PrivateStateInvalid)?;
+        save_record(config_root, &record).await?;
     }
-    let mut decided = false;
-    if let Some((state_bytes, state)) = get_migration_state(&client).await {
-        decided = is_keep_both_state(&state, &record, &old_cid);
-        if !decided && !is_pending_state(&state, &record, &old_cid) {
-            candidate_bridge.shutdown().await;
-            return Err(DiagnosticCode::JournalContractInvalid);
-        }
-        if decided {
-            record.decision_state_reply = Some(state_bytes);
-        }
-    }
-    if !decided {
-        let body = record
-            .decision_request
-            .as_deref()
-            .ok_or(DiagnosticCode::PrivateStateInvalid)?;
-        let mut invalid_put_reply = false;
-        if let Some((status, response_body)) =
-            control_request(&client, Method::PUT, MIGRATION_PATH, Some(body)).await
-            && status == StatusCode::OK
-        {
-            let decision_id = record.decision_id.as_deref().unwrap_or_default();
-            match serde_json::from_slice::<DecisionResponse>(&response_body) {
-                Ok(response)
-                    if response.protocol_version == 1
-                        && response.operation_id == decision_id
-                        && response.state == "new_device"
-                        && response.previous_cid.as_deref() == Some(old_cid.as_str())
-                        && response.cid == expected_candidate_cid
-                        && response.replaced_cid.is_none() =>
-                {
-                    let _ = response.display_label;
-                    record.decision_reply = Some(response_body);
-                    record.phase = MigrationPhase::DecisionVerified;
-                    let root = config_root.to_owned();
-                    let saved_record = record.clone();
-                    let saved = tokio::task::spawn_blocking(move || saved_record.persist(&root))
-                        .await
-                        .map_err(|_| DiagnosticCode::PrivateStateIo)?;
-                    if let Err(code) = saved {
-                        candidate_bridge.shutdown().await;
-                        return Err(code);
-                    }
-                    decided = true;
-                }
-                _ => invalid_put_reply = true,
-            }
-        }
-        if !decided && let Some((state_bytes, state)) = get_migration_state(&client).await {
-            decided = is_keep_both_state(&state, &record, &old_cid);
-            if decided {
-                record.decision_state_reply = Some(state_bytes);
-            } else if !is_pending_state(&state, &record, &old_cid) {
-                candidate_bridge.shutdown().await;
-                return Err(DiagnosticCode::JournalContractInvalid);
-            }
-        }
-        if !decided && invalid_put_reply {
-            candidate_bridge.shutdown().await;
-            return Err(DiagnosticCode::JournalContractInvalid);
-        }
-    }
-    candidate_bridge.shutdown().await;
-    if !decided {
-        return Err(DiagnosticCode::JournalUnavailable);
-    }
+    let bridge = PrivateLinkBridge::start(candidate, None, refresh).await?;
+    let decided = finalize_keep_both(
+        &bridge,
+        config_root,
+        &mut record,
+        &old_cid,
+        &expected_candidate_cid,
+    )
+    .await;
+    bridge.shutdown().await;
+    decided?;
     if record.phase != MigrationPhase::DecisionVerified {
         record.phase = MigrationPhase::DecisionVerified;
-        let root = config_root.to_owned();
-        tokio::task::spawn_blocking(move || record.persist(&root))
-            .await
-            .map_err(|_| DiagnosticCode::PrivateStateIo)??;
-        let root = config_root.to_owned();
-        record = tokio::task::spawn_blocking(move || MigrationRecord::load(&root))
-            .await
-            .map_err(|_| DiagnosticCode::PrivateStateIo)??
-            .ok_or(DiagnosticCode::PrivateStateInvalid)?;
+        save_record(config_root, &record).await?;
     }
     publish_candidate(config_root, marker_digest, record).await?;
-    let root = config_root.to_owned();
-    tokio::task::spawn_blocking(move || load_credential(&root))
+    current_credential(config_root).await
+}
+
+/// Sends the saved rekey bytes under the copied credential. Any failure leaves
+/// the transaction pending so a later attempt replays the same request.
+async fn send_rekey(
+    bridge: &PrivateLinkBridge,
+    config_root: &Path,
+    record: &mut MigrationRecord,
+    source: &Credential,
+    old_cid: &str,
+    now_unix_seconds: i64,
+) -> Result<(), DiagnosticCode> {
+    let client = JournalClient::bootstrap(bridge).await?;
+    let body = record
+        .rekey_request
+        .as_deref()
+        .ok_or(DiagnosticCode::PrivateStateInvalid)?;
+    let (status, response_body) = control_request(&client, Method::POST, REKEY_PATH, Some(body))
         .await
-        .map_err(|_| DiagnosticCode::PrivateStateIo)?
-        .and_then(|credential| credential.ok_or(DiagnosticCode::PrivateStateIo))
+        .ok_or(DiagnosticCode::JournalUnavailable)?;
+    if status != StatusCode::CREATED && status != StatusCode::OK {
+        return Err(DiagnosticCode::JournalUnavailable);
+    }
+    let response: RekeyResponse = serde_json::from_slice(&response_body)
+        .map_err(|_| DiagnosticCode::JournalContractInvalid)?;
+    let operation = record
+        .rekey_operation_id
+        .as_deref()
+        .ok_or(DiagnosticCode::PrivateStateInvalid)?;
+    if response.protocol_version != 1
+        || response.operation_id != operation
+        || response.state != "pending"
+        || response.previous_cid != old_cid
+        || response.cid == old_cid
+    {
+        return Err(DiagnosticCode::JournalContractInvalid);
+    }
+    let key_pem = record
+        .candidate_key_pem
+        .clone()
+        .ok_or(DiagnosticCode::PrivateStateInvalid)?;
+    let candidate_source = source.clone();
+    let candidate = blocking(move || {
+        candidate_credential(
+            &response.pairing,
+            &key_pem,
+            &response.cid,
+            &candidate_source,
+            now_unix_seconds,
+        )
+    })
+    .await?;
+    record.candidate_credential = Some(candidate);
+    record.rekey_reply = Some(response_body);
+    record.phase = MigrationPhase::RekeyVerified;
+    save_record(config_root, record).await
+}
+
+/// Records keep-both under the new credential, reconciling a lost decision
+/// reply through the migration state. Anything unproven stays pending.
+async fn finalize_keep_both(
+    bridge: &PrivateLinkBridge,
+    config_root: &Path,
+    record: &mut MigrationRecord,
+    old_cid: &str,
+    candidate_cid: &str,
+) -> Result<(), DiagnosticCode> {
+    let client = JournalClient::bootstrap(bridge).await?;
+    if let Some((state_bytes, state)) = get_migration_state(&client).await {
+        if is_keep_both_state(&state, record, old_cid) {
+            record.decision_state_reply = Some(state_bytes);
+            return Ok(());
+        }
+        if !is_pending_state(&state, record, old_cid) {
+            return Err(DiagnosticCode::JournalContractInvalid);
+        }
+    }
+    let body = record
+        .decision_request
+        .clone()
+        .ok_or(DiagnosticCode::PrivateStateInvalid)?;
+    let mut invalid_put_reply = false;
+    if let Some((status, response_body)) =
+        control_request(&client, Method::PUT, MIGRATION_PATH, Some(&body)).await
+        && status == StatusCode::OK
+    {
+        let decision_id = record.decision_id.as_deref().unwrap_or_default();
+        match serde_json::from_slice::<DecisionResponse>(&response_body) {
+            Ok(response)
+                if response.protocol_version == 1
+                    && response.operation_id == decision_id
+                    && response.state == "new_device"
+                    && response.previous_cid.as_deref() == Some(old_cid)
+                    && response.cid == candidate_cid
+                    && response.replaced_cid.is_none() =>
+            {
+                let _ = response.display_label;
+                record.decision_reply = Some(response_body);
+                record.phase = MigrationPhase::DecisionVerified;
+                return save_record(config_root, record).await;
+            }
+            _ => invalid_put_reply = true,
+        }
+    }
+    if let Some((state_bytes, state)) = get_migration_state(&client).await {
+        if is_keep_both_state(&state, record, old_cid) {
+            record.decision_state_reply = Some(state_bytes);
+            return Ok(());
+        }
+        if !is_pending_state(&state, record, old_cid) {
+            return Err(DiagnosticCode::JournalContractInvalid);
+        }
+    }
+    Err(if invalid_put_reply {
+        DiagnosticCode::JournalContractInvalid
+    } else {
+        DiagnosticCode::JournalUnavailable
+    })
 }
 
 async fn restore_source_for_new_marker(
@@ -1077,9 +898,7 @@ async fn restore_source_for_new_marker(
     }
     let lock = acquire_answer_lock(config_root).await?;
     let root = config_root.to_owned();
-    let owner = tokio::task::spawn_blocking(move || load_credential(&root))
-        .await
-        .map_err(|_| DiagnosticCode::PrivateStateIo)??;
+    let owner = blocking(move || load_credential(&root)).await?;
     if owner.as_ref() != Some(&source) && owner.as_ref() != Some(candidate) {
         drop(lock);
         return Err(DiagnosticCode::PrivateStateIo);
@@ -1089,15 +908,11 @@ async fn restore_source_for_new_marker(
         record.target_answer_bytes.as_deref(),
     ) {
         let root = config_root.to_owned();
-        let actual = tokio::task::spawn_blocking(move || read_answer_bytes(&root))
-            .await
-            .map_err(|_| DiagnosticCode::PrivateStateIo)??;
+        let actual = blocking(move || read_answer_bytes(&root)).await?;
         if actual.as_deref() == Some(new_answer) {
             let root = config_root.to_owned();
             let bytes = old_answer.to_vec();
-            tokio::task::spawn_blocking(move || write_answer_bytes(&root, &bytes))
-                .await
-                .map_err(|_| DiagnosticCode::PrivateStateIo)??;
+            blocking(move || write_answer_bytes(&root, &bytes)).await?;
         } else if actual.as_deref() != Some(old_answer) {
             drop(lock);
             return Err(DiagnosticCode::PrivateStateIo);
@@ -1106,9 +921,7 @@ async fn restore_source_for_new_marker(
     if owner.as_ref() == Some(candidate) {
         let root = config_root.to_owned();
         let source_to_write = source.clone();
-        tokio::task::spawn_blocking(move || persist_credential(&root, &source_to_write))
-            .await
-            .map_err(|_| DiagnosticCode::PrivateStateIo)??;
+        blocking(move || persist_credential(&root, &source_to_write)).await?;
     }
     drop(lock);
     Ok(source)
@@ -1124,13 +937,12 @@ async fn publish_candidate(
         .clone()
         .ok_or(DiagnosticCode::PrivateStateInvalid)?;
     let validation_record = record.clone();
-    let candidate = tokio::task::spawn_blocking(move || {
+    let candidate = blocking(move || {
         let candidate = verify_saved_candidate(&validation_record, 0)?;
         verify_decision_proof(&validation_record, &candidate)?;
         Ok(candidate)
     })
-    .await
-    .map_err(|_| DiagnosticCode::PrivateStateIo)??;
+    .await?;
     let source_generation = record
         .source_generation
         .clone()
@@ -1138,9 +950,7 @@ async fn publish_candidate(
     let candidate_generation = pairing_generation(candidate.client_cert_pem.clone()).await?;
     let lock = acquire_answer_lock(config_root).await?;
     let root = config_root.to_owned();
-    let current = tokio::task::spawn_blocking(move || load_credential(&root))
-        .await
-        .map_err(|_| DiagnosticCode::PrivateStateIo)??;
+    let current = blocking(move || load_credential(&root)).await?;
     if current.as_ref() != Some(&source) {
         drop(lock);
         return Err(DiagnosticCode::PrivateStateIo);
@@ -1171,27 +981,19 @@ async fn publish_candidate(
     record.phase = MigrationPhase::Publishing;
     let root = config_root.to_owned();
     let publication_record = record.clone();
-    tokio::task::spawn_blocking(move || publication_record.persist(&root))
-        .await
-        .map_err(|_| DiagnosticCode::PrivateStateIo)??;
+    blocking(move || publication_record.persist(&root)).await?;
 
     let root = config_root.to_owned();
     let candidate_for_write = candidate.clone();
-    tokio::task::spawn_blocking(move || persist_credential(&root, &candidate_for_write))
-        .await
-        .map_err(|_| DiagnosticCode::PrivateStateIo)??;
+    blocking(move || persist_credential(&root, &candidate_for_write)).await?;
     if let Some(target) = record.target_answer_bytes.as_deref() {
         let root = config_root.to_owned();
         let bytes = target.to_vec();
-        tokio::task::spawn_blocking(move || write_answer_bytes(&root, &bytes))
-            .await
-            .map_err(|_| DiagnosticCode::PrivateStateIo)??;
+        blocking(move || write_answer_bytes(&root, &bytes)).await?;
     }
     record.finish_adoption(marker_digest);
     let root = config_root.to_owned();
-    tokio::task::spawn_blocking(move || record.persist(&root))
-        .await
-        .map_err(|_| DiagnosticCode::PrivateStateIo)??;
+    blocking(move || record.persist(&root)).await?;
     drop(lock);
     Ok(())
 }
@@ -1555,7 +1357,7 @@ fn verify_decision_proof(
 }
 
 fn verify_publishing_record(record: &MigrationRecord) -> Result<Credential, DiagnosticCode> {
-    if record.phase != MigrationPhase::Publishing || !record.destination_published {
+    if record.phase != MigrationPhase::Publishing {
         return Err(DiagnosticCode::PrivateStateInvalid);
     }
     let candidate = verify_saved_candidate(record, 0)?;
@@ -1972,7 +1774,6 @@ mod tests {
         let record = MigrationRecord {
             phase: MigrationPhase::DecisionVerified,
             pending_marker_digest: Some(marker_digest.to_owned()),
-            destination_published: true,
             source_cid: Some(source_cid),
             source_generation: Some(source_generation),
             source_credential: Some(source.clone()),
@@ -1987,7 +1788,7 @@ mod tests {
             decision_reply: Some(
                 serde_json::to_vec(&decision_reply).expect("serialize decision reply"),
             ),
-            ..MigrationRecord::new("machine.tmux".to_owned())
+            ..MigrationRecord::default()
         };
         (source, candidate, record)
     }
@@ -2136,8 +1937,7 @@ mod tests {
         let credential = test_credential("initial-certificate");
         crate::private_link::persist_credential(root.path(), &credential)
             .expect("persist fixture credential");
-        let mut record = MigrationRecord::new("machine.tmux".to_owned());
-        record
+        MigrationRecord::default()
             .persist(root.path())
             .expect("persist pre-adoption state");
 
@@ -2161,26 +1961,6 @@ mod tests {
             record_setup_baseline(root.path(), Some("missing-marker")),
             Err(DiagnosticCode::PrivateStateInvalid)
         );
-        assert_eq!(
-            test_runtime().block_on(migrate_if_needed(
-                root.path(),
-                root.path(),
-                PlatformKind::Linux,
-                "machine",
-                &"a".repeat(64),
-                credential.clone(),
-                crate::instance_lock::RunIdentity {
-                    run_id: "test-run".to_owned(),
-                    lock_inode: 1,
-                },
-                1_800_000_000,
-            )),
-            Err(DiagnosticCode::ConfiguredStreamMismatch)
-        );
-        record.destination_published = true;
-        record
-            .persist(root.path())
-            .expect("publish destination coordinate");
 
         let result = test_runtime().block_on(migrate_if_needed(
             root.path(),
@@ -2217,12 +1997,6 @@ mod tests {
         crate::private_link::persist_credential(root.path(), &credential)
             .expect("persist held credential");
         write_answer_file(root.path(), "").expect("persist walk-away pause");
-        let (_, ready) = prepare_destination(
-            root.path(),
-            "machine",
-            RuntimeConfig::load(root.path(), "machine").expect("load initial config"),
-        );
-        assert!(ready);
         record_setup_baseline(root.path(), Some(&"a".repeat(64))).expect("persist setup baseline");
 
         let result = test_runtime().block_on(migrate_if_needed(
@@ -2276,26 +2050,28 @@ mod tests {
         let root = TempRoot::new();
         let source = test_credential("superseded-migration-source");
         let operation_id = uuid_from_material(b"pending", b"rekey");
-        let mut record = MigrationRecord::new("machine.tmux".to_owned());
-        record.phase = MigrationPhase::RekeyPending;
-        record.pending_marker_digest = Some("a".repeat(64));
-        record.source_cid = Some(format!("sha256:{}", "b".repeat(64)));
-        record.source_generation = Some("c".repeat(64));
-        record.source_credential = Some(source);
-        record.rekey_operation_id = Some(operation_id.clone());
-        record.candidate_key_pem = Some("candidate-key".to_owned());
-        record.csr_pem = Some("candidate-csr".to_owned());
-        record.rekey_request = Some(
-            serde_json::to_vec(&serde_json::json!({
-                "protocol_version": 1,
-                "operation_id": operation_id,
-                "csr": "candidate-csr",
-                "device_label": "machine",
-                "client_label": "machine",
-                "platform": "linux"
-            }))
-            .expect("serialize pending request"),
-        );
+        let record = MigrationRecord {
+            phase: MigrationPhase::RekeyPending,
+            pending_marker_digest: Some("a".repeat(64)),
+            source_cid: Some(format!("sha256:{}", "b".repeat(64))),
+            source_generation: Some("c".repeat(64)),
+            source_credential: Some(source),
+            rekey_operation_id: Some(operation_id.clone()),
+            candidate_key_pem: Some("candidate-key".to_owned()),
+            csr_pem: Some("candidate-csr".to_owned()),
+            rekey_request: Some(
+                serde_json::to_vec(&serde_json::json!({
+                    "protocol_version": 1,
+                    "operation_id": operation_id,
+                    "csr": "candidate-csr",
+                    "device_label": "machine",
+                    "client_label": "machine",
+                    "platform": "linux"
+                }))
+                .expect("serialize pending request"),
+            ),
+            ..MigrationRecord::default()
+        };
         record
             .persist(root.path())
             .expect("persist old pending migration");
@@ -2310,7 +2086,6 @@ mod tests {
         assert!(reset.source_credential.is_none());
         assert!(reset.candidate_key_pem.is_none());
         assert!(reset.rekey_request.is_none());
-        assert_eq!(reset.destination_stream, "machine.tmux");
     }
 
     #[test]
@@ -2366,7 +2141,7 @@ mod tests {
             .lock()
             .expect("fault test lock");
         let root = TempRoot::new();
-        let record = MigrationRecord::new("machine.tmux".to_owned());
+        let record = MigrationRecord::default();
         let mut invalid = record.clone();
         invalid.phase = MigrationPhase::Publishing;
         assert_eq!(
@@ -2394,203 +2169,6 @@ mod tests {
         assert_eq!(
             MigrationRecord::load(root.path()),
             Err(DiagnosticCode::PrivateStateInvalid)
-        );
-    }
-
-    #[test]
-    fn destination_recovery_shares_one_effective_stream_and_preserves_old_folders() {
-        let _fault_guard = crate::storage::ATOMIC_FAULT_TEST_LOCK
-            .lock()
-            .expect("fault test lock");
-        use crate::clock::{TestClock, Zone, ZoneSource};
-        use crate::instance_lock::InstanceLock;
-        use crate::observer::SegmentManager;
-        use crate::sync::{RetentionFence, SyncActivity, SyncTask, SyncWake};
-        use crate::tmux::WarningSink;
-
-        struct FixedZoneSource;
-        impl ZoneSource for FixedZoneSource {
-            fn read(&mut self) -> Result<Zone, String> {
-                Ok(Zone::utc())
-            }
-        }
-        struct NoWarnings;
-        impl WarningSink for NoWarnings {
-            fn warn(&self, _message: &str) {}
-        }
-
-        let root = TempRoot::new();
-        let data_root = root.path().join("data");
-        ensure_private_directory(&data_root).expect("create data root");
-        fs::write(
-            root.path().join(crate::config::CONFIG_FILENAME),
-            br#"{"stream":"oldhost.tmux","capture_interval":7,"segment_interval":301,"status_indicator":false,"source":"custom-source"}"#,
-        )
-        .expect("write existing config");
-        let old_folder = data_root.join("captures/20261006/oldhost.tmux");
-        fs::create_dir_all(&old_folder).expect("create held old stream");
-        let old_segment = old_folder.join("held.incomplete");
-        fs::write(&old_segment, b"held segment bytes\n").expect("write held segment");
-
-        let config = RuntimeConfig::load(root.path(), "oldhost").expect("load config");
-        let mut prior = MigrationRecord::new("oldhost.tmux".to_owned());
-        prior.destination_generated = true;
-        prior.destination_published = true;
-        prior
-            .persist(root.path())
-            .expect("save prior default stream");
-        set_atomic_write_fault_for_path(
-            &root.path().join(crate::config::CONFIG_FILENAME),
-            Some(AtomicWriteFault::FailBeforeRename),
-        );
-        let (first, ready) = prepare_destination(root.path(), "newhost", config);
-        set_atomic_write_fault_for_path(&root.path().join(crate::config::CONFIG_FILENAME), None);
-        assert!(!ready);
-        let target_stream = derive_component("newhost.tmux").expect("derived stream");
-        assert_eq!(first.stream, target_stream);
-        let interrupted = MigrationRecord::load(root.path())
-            .expect("load interrupted config transaction")
-            .expect("record exists");
-        assert!(!interrupted.destination_published);
-        assert_eq!(interrupted.destination_stream, target_stream.as_str());
-        assert_eq!(
-            interrupted.destination_source_stream.as_deref(),
-            Some("oldhost.tmux")
-        );
-        let disk_config: Value = serde_json::from_slice(
-            &fs::read(root.path().join(crate::config::CONFIG_FILENAME))
-                .expect("old config remains after pre-rename failure"),
-        )
-        .expect("parse old config");
-        assert_eq!(disk_config["stream"], "oldhost.tmux");
-        assert_eq!(
-            fs::read(&old_segment).expect("held segment remains"),
-            b"held segment bytes\n"
-        );
-
-        let old_coordinate_after_restart =
-            RuntimeConfig::load(root.path(), "newhost").expect("reload prior on-disk config");
-        assert_eq!(old_coordinate_after_restart.stream.as_str(), "oldhost.tmux");
-        let (recovered, ready) =
-            prepare_destination(root.path(), "newhost", old_coordinate_after_restart);
-        assert!(ready);
-        assert_eq!(recovered.stream, first.stream);
-        assert_eq!(recovered.capture_interval, Duration::from_secs(7));
-        assert_eq!(recovered.segment_interval, Duration::from_secs(301));
-        assert!(!recovered.status_indicator);
-        assert_eq!(recovered.source, "custom-source");
-        assert_eq!(recovered.stream, target_stream);
-
-        let credential = test_credential("migration destination test credential");
-        crate::private_link::persist_credential(root.path(), &credential)
-            .expect("persist paired credential");
-        let generation = hex_encode(&crate::post_connect::compute_pairing_generation(
-            &credential.client_cert_pem,
-        ));
-        write_answer_file(root.path(), &generation).expect("confirm paired credential");
-        let instance_lock = InstanceLock::acquire(&data_root).expect("acquire instance lock");
-        let clock: Arc<dyn crate::clock::Clock> = Arc::new(TestClock::new(
-            time::OffsetDateTime::from_unix_timestamp(1_800_000_000).expect("fixed wall time"),
-            Duration::ZERO,
-            time::UtcOffset::UTC,
-        ));
-        let wake = SyncWake::default();
-        let manager = SegmentManager::start(
-            data_root.clone(),
-            recovered.stream.clone(),
-            clock.as_ref(),
-            recovered.segment_interval,
-            wake.clone(),
-            Box::new(FixedZoneSource),
-            Arc::new(NoWarnings),
-        )
-        .expect("capture opens at the recovered destination");
-        let capture_days = fs::read_dir(data_root.join("captures"))
-            .expect("read capture root")
-            .map(|entry| entry.expect("capture day").path())
-            .collect::<Vec<_>>();
-        assert!(
-            capture_days
-                .iter()
-                .any(|day| day.join(target_stream.as_str()).is_dir())
-        );
-        drop(manager);
-
-        let health = crate::health::HealthWriter::new(data_root.clone(), &instance_lock);
-        let (activity, _activity_receiver) = tokio::sync::watch::channel(SyncActivity::Idle);
-        let (_stop, shutdown) = tokio::sync::watch::channel(true);
-        let sync_result = test_runtime().block_on(
-            SyncTask {
-                config_root: root.path().to_owned(),
-                data_root: data_root.clone(),
-                config: recovered.clone(),
-                hostname: "newhost".to_owned(),
-                clock,
-                wake,
-                activity,
-                health,
-                retention_fence: Arc::new(RetentionFence::new()),
-                identity: instance_lock.identity().clone(),
-                health_refresh_interval: Duration::from_secs(60),
-                answer_lock_timeout: crate::pairing_answer::ANSWER_LOCK_TIMEOUT,
-                platform: PlatformKind::Linux,
-                marker_digest: Some("a".repeat(64)),
-            }
-            .run(shutdown),
-        );
-        assert_eq!(sync_result, Ok(()));
-        let sync_health_path = data_root.join(crate::health::HEALTH_FILENAME);
-        if sync_health_path.exists() {
-            let sync_health: Value = serde_json::from_slice(
-                &fs::read(&sync_health_path).expect("read published sync health"),
-            )
-            .expect("parse published sync health");
-            assert_ne!(
-                sync_health["last_error_code"], "configured_stream_mismatch",
-                "sync must not publish a stream mismatch hold after destination recovery"
-            );
-        }
-
-        let persisted: Value = serde_json::from_slice(
-            &fs::read(root.path().join(crate::config::CONFIG_FILENAME)).expect("read config"),
-        )
-        .expect("parse config");
-        assert_eq!(persisted["stream"], "newhost.tmux");
-        assert_eq!(persisted["source"], "custom-source");
-        assert_eq!(
-            fs::read(&old_segment).expect("held segment remains after recovery"),
-            b"held segment bytes\n"
-        );
-        assert!(
-            MigrationRecord::load(root.path())
-                .expect("load recovered record")
-                .expect("record exists")
-                .destination_published
-        );
-    }
-
-    #[test]
-    fn destination_preserves_explicit_stream_and_other_config() {
-        let root = TempRoot::new();
-        fs::write(
-            root.path().join(crate::config::CONFIG_FILENAME),
-            br#"{"stream":"custom-stream","capture_interval":7,"segment_interval":301,"status_indicator":false,"source":"custom-source"}"#,
-        )
-        .expect("write explicit config");
-        let (config, ready) = prepare_destination(
-            root.path(),
-            "newhost",
-            RuntimeConfig::load(root.path(), "newhost").expect("load config"),
-        );
-        assert!(ready);
-        assert_eq!(config.stream.as_str(), "custom-stream");
-        assert_eq!(config.capture_interval, Duration::from_secs(7));
-        assert_eq!(config.source, "custom-source");
-        assert!(
-            !MigrationRecord::load(root.path())
-                .expect("load destination")
-                .expect("record exists")
-                .destination_generated
         );
     }
 
@@ -2831,7 +2409,7 @@ mod tests {
             pending_marker_digest: Some("f".repeat(64)),
             source_credential: Some(source.clone()),
             candidate_credential: Some(candidate.clone()),
-            ..MigrationRecord::new("machine.tmux".to_owned())
+            ..MigrationRecord::default()
         };
         crate::pairing_answer::delete_credential_file(rejected_root.path())
             .expect("completed concurrent rejection");

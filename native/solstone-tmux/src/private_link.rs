@@ -728,34 +728,6 @@ where
 
     let _ = ensure_private_directory(&config_root);
 
-    let migration_root = config_root.clone();
-    let migration_record = tokio::task::spawn_blocking(move || {
-        crate::device_migration::MigrationRecord::load(&migration_root)
-    })
-    .await;
-    let migration_record = match migration_record {
-        Ok(Ok(record)) => record,
-        Ok(Err(code)) => return Outcome::Diagnostic(code),
-        Err(_) => return Outcome::Diagnostic(DiagnosticCode::PrivateStateIo),
-    };
-    if migration_record
-        .is_some_and(|record| record.phase == crate::device_migration::MigrationPhase::Publishing)
-    {
-        let marker = crate::device_migration::host_marker_digest(
-            platform,
-            &crate::command::TokioCommandRunner,
-        )
-        .await;
-        let Ok(marker) = marker else {
-            return Outcome::Diagnostic(DiagnosticCode::PrivateStateIo);
-        };
-        if crate::device_migration::recover_publication_for_marker(&config_root, &marker)
-            .await
-            .is_err()
-        {
-            return Outcome::Diagnostic(DiagnosticCode::PrivateStateIo);
-        }
-    }
     let answer_lock = match acquire_answer_lock(&config_root).await {
         Ok(lock) => lock,
         Err(code) => return Outcome::Diagnostic(code),
@@ -865,27 +837,9 @@ where
                             lines: vec![MARK_UNVERIFIABLE_CONFIRM.to_owned()],
                         }
                     } else {
-                        retire_credential(&saved_cred, &config_root).await;
-                        let answer_lock = match acquire_answer_lock(&config_root).await {
-                            Ok(lock) => lock,
-                            Err(code) => return Outcome::Diagnostic(code),
-                        };
-                        let current_cred = match load_credential(&config_root) {
-                            Ok(Some(cred)) => cred,
-                            _ => {
-                                drop(answer_lock);
-                                return Outcome::Diagnostic(DiagnosticCode::PrivateStateIo);
-                            }
-                        };
-                        let current_gen =
-                            hex_encode(&compute_pairing_generation(&current_cred.client_cert_pem));
-                        if current_gen != displayed_gen {
-                            drop(answer_lock);
-                            return Outcome::Diagnostic(DiagnosticCode::PrivateStateIo);
-                        }
-                        let del_res = delete_credential_file(&config_root);
-                        drop(answer_lock);
-                        if let Err(code) = del_res {
+                        if let Err(code) =
+                            retire_rejected(&config_root, &saved_cred, &displayed_gen).await
+                        {
                             Outcome::Diagnostic(code)
                         } else {
                             Outcome::Owner {
@@ -937,27 +891,9 @@ where
                     }
                 }
                 TerminalDecision::No => {
-                    retire_credential(&saved_cred, &config_root).await;
-                    let answer_lock = match acquire_answer_lock(&config_root).await {
-                        Ok(lock) => lock,
-                        Err(code) => return Outcome::Diagnostic(code),
-                    };
-                    let current_cred = match load_credential(&config_root) {
-                        Ok(Some(cred)) => cred,
-                        _ => {
-                            drop(answer_lock);
-                            return Outcome::Diagnostic(DiagnosticCode::PrivateStateIo);
-                        }
-                    };
-                    let current_gen =
-                        hex_encode(&compute_pairing_generation(&current_cred.client_cert_pem));
-                    if current_gen != displayed_gen {
-                        drop(answer_lock);
-                        return Outcome::Diagnostic(DiagnosticCode::PrivateStateIo);
-                    }
-                    let del_res = delete_credential_file(&config_root);
-                    drop(answer_lock);
-                    if let Err(code) = del_res {
+                    if let Err(code) =
+                        retire_rejected(&config_root, &saved_cred, &displayed_gen).await
+                    {
                         Outcome::Diagnostic(code)
                     } else if is_identified {
                         Outcome::Owner {
@@ -979,6 +915,32 @@ where
         }
         _ => unreachable!(),
     }
+}
+
+/// Retires a rejected credential only while it is still the current owner and
+/// no device migration has claimed it. The answer lock is held across the
+/// remote retirement, so a migration cannot start on, or publish over, the
+/// credential being retired; a stale prompt leaves everything untouched.
+async fn retire_rejected(
+    config_root: &Path,
+    saved_cred: &Credential,
+    displayed_gen: &str,
+) -> Result<(), DiagnosticCode> {
+    let answer_lock = crate::pairing_answer::acquire_answer_lock(config_root).await?;
+    let still_owned = matches!(
+        load_credential(config_root),
+        Ok(Some(current))
+            if hex_encode(&compute_pairing_generation(&current.client_cert_pem)) == displayed_gen
+    ) && crate::device_migration::MigrationRecord::load(config_root)
+        .is_ok_and(|record| !record.is_some_and(|record| record.is_transaction_pending()));
+    if !still_owned {
+        drop(answer_lock);
+        return Err(DiagnosticCode::PrivateStateIo);
+    }
+    crate::pairing_answer::retire_credential(saved_cred, config_root).await;
+    let result = crate::pairing_answer::delete_credential_file(config_root);
+    drop(answer_lock);
+    result
 }
 
 pub fn acquire_private_state_lock(config_root: &Path) -> Result<File, DiagnosticCode> {

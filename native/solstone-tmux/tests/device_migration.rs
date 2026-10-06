@@ -10,10 +10,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use serde_json::Value;
-use solstone_tmux::config::RuntimeConfig;
-use solstone_tmux::device_migration::{
-    MigrationPhase, MigrationRecord, migrate_if_needed, prepare_destination,
-};
+use solstone_tmux::config::{CONFIG_FILENAME, RuntimeConfig};
+use solstone_tmux::device_migration::{MigrationPhase, MigrationRecord, migrate_if_needed};
 use solstone_tmux::health::HealthWriter;
 use solstone_tmux::instance_lock::InstanceLock;
 use solstone_tmux::journal_version::hex_encode;
@@ -79,17 +77,49 @@ fn now() -> i64 {
     1_800_000_000
 }
 
+/// The settings file setup writes: the stream is left to follow the hostname.
+const SETUP_CONFIG: &[u8] = br#"{"stream":null,"capture_interval":5,"segment_interval":300,"cache_retention_days":7,"status_indicator":true}"#;
+
 fn initialize_source(roots: &TestRoots, peer_credential: &spl_transport::credential::Credential) {
-    let hostname = "newhost";
-    let config = RuntimeConfig::load(roots.config(), hostname).expect("load initial config");
-    let (_, ready) = prepare_destination(roots.config(), hostname, config);
-    assert!(ready);
+    fs::write(roots.config().join(CONFIG_FILENAME), SETUP_CONFIG).expect("write setup config");
     persist_credential(roots.config(), peer_credential).expect("persist paired source");
     let held = roots
         .data()
         .join("captures/20261006/oldhost.tmux/held.incomplete");
     fs::create_dir_all(held.parent().expect("held parent")).expect("create old stream");
     fs::write(&held, b"held segment bytes\n").expect("write old segment");
+}
+
+fn pending_rekey(source: &spl_transport::credential::Credential) -> MigrationRecord {
+    let source_cert = spl_transport::tls::parse_certs(&source.client_cert_pem)
+        .expect("parse source certificate")
+        .into_iter()
+        .next()
+        .expect("source certificate exists");
+    let operation_id = "11111111-2222-4333-8444-555555555555";
+    let mut pending = MigrationRecord::default();
+    pending.phase = MigrationPhase::RekeyPending;
+    pending.pending_marker_digest = Some("a".repeat(64));
+    pending.source_cid = Some(format!("sha256:{}", sha256_hex(source_cert.as_ref())));
+    pending.source_generation = Some(hex_encode(&compute_pairing_generation(
+        &source.client_cert_pem,
+    )));
+    pending.source_credential = Some(source.clone());
+    pending.rekey_operation_id = Some(operation_id.to_owned());
+    pending.candidate_key_pem = Some("candidate-key-pem".to_owned());
+    pending.csr_pem = Some("candidate-csr".to_owned());
+    pending.rekey_request = Some(
+        serde_json::to_vec(&serde_json::json!({
+            "protocol_version": 1,
+            "operation_id": operation_id,
+            "csr": "candidate-csr",
+            "device_label": "newhost",
+            "client_label": "newhost",
+            "platform": "linux"
+        }))
+        .expect("serialize pending request"),
+    );
+    pending
 }
 
 #[tokio::test]
@@ -301,35 +331,7 @@ async fn restarted_sync_supersedes_stale_rekey_after_fresh_setup() {
     initialize_source(&roots, &source);
     write_answer_file(roots.config(), "").expect("preserve walk-away pause");
 
-    let source_cert = spl_transport::tls::parse_certs(&source.client_cert_pem)
-        .expect("parse source certificate")
-        .into_iter()
-        .next()
-        .expect("source certificate exists");
-    let source_cid = format!("sha256:{}", sha256_hex(source_cert.as_ref()));
-    let source_generation = hex_encode(&compute_pairing_generation(&source.client_cert_pem));
-    let operation_id = "11111111-2222-4333-8444-555555555555";
-    let mut stale = MigrationRecord::new("newhost.tmux".to_owned());
-    stale.phase = MigrationPhase::RekeyPending;
-    stale.destination_published = true;
-    stale.pending_marker_digest = Some("a".repeat(64));
-    stale.source_cid = Some(source_cid);
-    stale.source_generation = Some(source_generation);
-    stale.source_credential = Some(source);
-    stale.rekey_operation_id = Some(operation_id.to_owned());
-    stale.candidate_key_pem = Some("candidate-key-pem".to_owned());
-    stale.csr_pem = Some("candidate-csr".to_owned());
-    stale.rekey_request = Some(
-        serde_json::to_vec(&serde_json::json!({
-            "protocol_version": 1,
-            "operation_id": operation_id,
-            "csr": "candidate-csr",
-            "device_label": "newhost",
-            "client_label": "newhost",
-            "platform": "linux"
-        }))
-        .expect("serialize stale request"),
-    );
+    let stale = pending_rekey(&source);
     stale
         .persist(roots.config())
         .expect("persist stale migration");
@@ -649,4 +651,236 @@ async fn unsupported_route_and_version_retries_replay_exact_saved_rekey_bytes() 
         }
         peer.shutdown().await;
     }
+}
+
+#[tokio::test]
+async fn interrupted_publication_recovers_through_sync_startup_on_a_renamed_copy() {
+    use solstone_tmux::clock::{Clock, TestClock, Zone, ZoneSource};
+    use solstone_tmux::observer::SegmentManager;
+    use solstone_tmux::private_link::CREDENTIALS_FILENAME;
+    use solstone_tmux::storage::{AtomicWriteFault, set_atomic_write_fault_for_path};
+
+    struct UtcZone;
+    impl ZoneSource for UtcZone {
+        fn read(&mut self) -> Result<Zone, String> {
+            Ok(Zone::utc())
+        }
+    }
+    const HELD_BYTES: &[u8] = b"held under the source hostname\n";
+
+    let roots = TestRoots::new("migration-publication-recovery");
+    let peer = PrivateLinkPeer::start().await;
+    peer.answer_uploads_with_received_descriptors();
+    let source = peer.credential();
+    initialize_source(&roots, &source);
+    write_answer_file(
+        roots.config(),
+        &hex_encode(&compute_pairing_generation(&source.client_cert_pem)),
+    )
+    .expect("confirm source credential");
+    solstone_tmux::device_migration::record_setup_baseline(roots.config(), Some(&"a".repeat(64)))
+        .expect("persist source marker");
+    let held_segment = roots
+        .data()
+        .join("captures/20261006/oldhost.tmux/110000_300");
+    fs::create_dir_all(&held_segment).expect("create held segment");
+    fs::write(held_segment.join("tmux_held_screen.jsonl"), HELD_BYTES).expect("write held segment");
+
+    // The process stops after the publication checkpoint, before the fresh
+    // credential reaches disk.
+    let credentials = roots.config().join(CREDENTIALS_FILENAME);
+    set_atomic_write_fault_for_path(&credentials, Some(AtomicWriteFault::FailBeforeRename));
+    let interrupted = migrate_if_needed(
+        roots.config(),
+        roots.data(),
+        PlatformKind::Linux,
+        "newhost",
+        &"b".repeat(64),
+        source.clone(),
+        identity(),
+        now(),
+    )
+    .await;
+    set_atomic_write_fault_for_path(&credentials, None);
+    assert!(interrupted.is_err());
+    let checkpoint = MigrationRecord::load(roots.config())
+        .expect("load checkpoint")
+        .expect("checkpoint exists");
+    assert_eq!(checkpoint.phase, MigrationPhase::Publishing);
+    let candidate = checkpoint
+        .candidate_credential
+        .expect("candidate saved at checkpoint");
+    assert_eq!(
+        load_credential(roots.config()).expect("load source"),
+        Some(source.clone())
+    );
+    let decisions_before_restart = peer.requests().len();
+
+    // The copied default settings follow the new hostname for capture and sync.
+    let config = RuntimeConfig::load(roots.config(), "newhost").expect("load copied settings");
+    assert_eq!(config.stream.as_str(), "newhost.tmux");
+    let clock = Arc::new(TestClock::new(
+        time::OffsetDateTime::from_unix_timestamp(1_791_288_000).expect("fixed wall time"),
+        Duration::ZERO,
+        time::UtcOffset::UTC,
+    ));
+    let manager = SegmentManager::start(
+        roots.data().to_owned(),
+        config.stream.clone(),
+        clock.as_ref(),
+        config.segment_interval,
+        SyncWake::default(),
+        Box::new(UtcZone),
+        Arc::new(solstone_tmux::tmux::StderrWarnings),
+    )
+    .expect("capture opens under the new hostname");
+    assert!(roots.data().join("captures/20261006/newhost.tmux").is_dir());
+    drop(manager);
+
+    let lock = InstanceLock::acquire(roots.data()).expect("instance lock");
+    let _private_state_lock =
+        acquire_private_state_lock(roots.config()).expect("private state lock");
+    let (stop, shutdown) = tokio::sync::watch::channel(false);
+    let (activity, _activity_receiver) = tokio::sync::watch::channel(SyncActivity::Idle);
+    let task = tokio::spawn(
+        SyncTask {
+            config_root: roots.config().to_owned(),
+            data_root: roots.data().to_owned(),
+            config,
+            hostname: "newhost".to_owned(),
+            clock: clock as Arc<dyn Clock>,
+            wake: SyncWake::default(),
+            activity,
+            health: HealthWriter::new(roots.data().to_owned(), &lock),
+            retention_fence: Arc::new(RetentionFence::new()),
+            identity: lock.identity().clone(),
+            health_refresh_interval: Duration::from_millis(50),
+            answer_lock_timeout: Duration::from_secs(1),
+            platform: PlatformKind::Linux,
+            marker_digest: Some("b".repeat(64)),
+        }
+        .run(shutdown),
+    );
+    let ingest = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if let Some(request) = peer
+                .requests()
+                .into_iter()
+                .find(|request| request.path_without_query() == "/app/devices/ingest")
+            {
+                return request;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the held segment uploads after recovery");
+    stop.send_replace(true);
+    tokio::time::timeout(Duration::from_secs(5), task)
+        .await
+        .expect("sync stops")
+        .expect("join sync")
+        .expect("clean shutdown");
+
+    let candidate_sha = sha256_hex(
+        spl_transport::tls::parse_certs(&candidate.client_cert_pem)
+            .expect("parse candidate cert")
+            .first()
+            .expect("candidate cert exists")
+            .as_ref(),
+    );
+    assert_eq!(
+        ingest.authenticated_client_sha256(),
+        Some(candidate_sha.as_str())
+    );
+    for literal in [
+        HELD_BYTES,
+        b"110000_300".as_slice(),
+        b"tmux_held_screen.jsonl".as_slice(),
+    ] {
+        assert!(support::private_link_peer::find_bytes(ingest.body(), literal).is_some());
+    }
+    assert_eq!(
+        load_credential(roots.config()).expect("load recovered credential"),
+        Some(candidate.clone())
+    );
+    assert_eq!(
+        read_answer_file(roots.config())
+            .expect("read recovered answer")
+            .expect("answer exists")
+            .confirmed,
+        hex_encode(&compute_pairing_generation(&candidate.client_cert_pem))
+    );
+    let recovered = MigrationRecord::load(roots.config())
+        .expect("load recovered record")
+        .expect("record exists");
+    assert_eq!(recovered.phase, MigrationPhase::Adopted);
+    assert_eq!(
+        recovered.adopted_marker_digest.as_deref(),
+        Some("b".repeat(64).as_str())
+    );
+    assert!(
+        peer.requests()[decisions_before_restart..]
+            .iter()
+            .all(|request| !request
+                .path_without_query()
+                .starts_with("/app/network/api/clients/self/")),
+        "recovery replays no migration operation"
+    );
+    drop(lock);
+    peer.shutdown().await;
+}
+
+#[tokio::test]
+async fn rejection_while_a_migration_is_pending_retires_nothing() {
+    use solstone_tmux::cli::MarkOption;
+    use solstone_tmux::health::DiagnosticCode;
+    use solstone_tmux::pairing_answer::{Outcome, TerminalSeat};
+    use solstone_tmux::private_link::confirm;
+
+    let temporary = support::TestDirectory::new("migration-pending-rejection");
+    let roots = support::IsolatedRoots::new(temporary.path());
+    let environment = support::FakeEnvironment::from_paths(roots.entries().iter().cloned());
+    let config_root = roots.config_root();
+    ensure_private_directory(&config_root).expect("config root");
+    let peer = PrivateLinkPeer::start().await;
+    let mut source = peer.credential();
+    let key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).expect("key");
+    let certificate = rcgen::CertificateParams::new(Vec::<String>::new())
+        .expect("params")
+        .self_signed(&key)
+        .expect("certificate");
+    source.instance_id = spl_core::relay_window::jid_from_spki(
+        &spl_core::ca::extract_spki_der(certificate.der()).expect("spki"),
+    )
+    .expect("spoken instance id");
+    persist_credential(&config_root, &source).expect("persist carried credential");
+    write_answer_file(&config_root, "").expect("answer awaits confirmation");
+    pending_rekey(&source)
+        .persist(&config_root)
+        .expect("migration owns the carried credential");
+
+    let outcome = confirm(
+        solstone_tmux::service::current_platform(),
+        &environment,
+        TerminalSeat::Scripted(None::<std::io::Cursor<Vec<u8>>>),
+        MarkOption::Value("wrong mark".to_owned()),
+    )
+    .await;
+
+    assert_eq!(outcome, Outcome::Diagnostic(DiagnosticCode::PrivateStateIo));
+    assert!(peer.requests().is_empty(), "no DELETE of the source device");
+    assert_eq!(peer.accepted_carriers(), 0);
+    assert_eq!(
+        load_credential(&config_root).expect("load carried credential"),
+        Some(source)
+    );
+    assert_eq!(
+        MigrationRecord::load(&config_root)
+            .expect("load migration")
+            .expect("migration remains")
+            .phase,
+        MigrationPhase::RekeyPending
+    );
+    peer.shutdown().await;
 }

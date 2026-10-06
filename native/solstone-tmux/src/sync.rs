@@ -2336,7 +2336,7 @@ impl SyncTask {
         let SyncTask {
             config_root,
             data_root,
-            mut config,
+            config,
             hostname,
             clock,
             wake,
@@ -2365,119 +2365,46 @@ impl SyncTask {
                 .map_err(|_| DiagnosticCode::PrivateStateIo)?;
             match loaded {
                 Ok(Some(cred)) => {
-                    let destination_root = config_root.clone();
-                    let destination_host = hostname.clone();
-                    let destination_config = config.clone();
-                    let destination = tokio::task::spawn_blocking(move || {
-                        crate::device_migration::prepare_destination(
-                            &destination_root,
-                            &destination_host,
-                            destination_config,
-                        )
-                    })
-                    .await;
-                    let Ok((effective_config, destination_ready)) = destination else {
-                        let facts = SyncFacts {
-                            paired: true,
-                            held: true,
-                            ..SyncFacts::default()
-                        };
-                        let _ = health
-                            .write(&facts, clock.wall_now().unix_timestamp())
-                            .await;
-                        tokio::select! {
-                            biased;
-                            () = wait_for_shutdown(&mut shutdown) => return Ok(()),
-                            () = tokio::time::sleep(health_refresh_interval) => {},
-                        }
-                        continue;
-                    };
-                    config = effective_config;
-                    if !destination_ready {
-                        let facts = SyncFacts {
-                            paired: true,
-                            held: true,
-                            ..SyncFacts::default()
-                        };
-                        let _ = health
-                            .write(&facts, clock.wall_now().unix_timestamp())
-                            .await;
-                        tokio::select! {
-                            biased;
-                            () = wait_for_shutdown(&mut shutdown) => return Ok(()),
-                            () = tokio::time::sleep(health_refresh_interval) => {},
-                        }
-                        continue;
-                    }
-                    let marker = if let Some(marker) = marker_digest.clone() {
-                        Ok(marker)
-                    } else {
-                        crate::device_migration::host_marker_digest(
-                            platform,
-                            &crate::command::TokioCommandRunner,
-                        )
-                        .await
-                    };
-                    let Ok(marker) = marker else {
-                        let facts = SyncFacts {
-                            paired: true,
-                            held: true,
-                            ..SyncFacts::default()
-                        };
-                        let _ = health
-                            .write(&facts, clock.wall_now().unix_timestamp())
-                            .await;
-                        tokio::select! {
-                            biased;
-                            () = wait_for_shutdown(&mut shutdown) => return Ok(()),
-                            () = tokio::time::sleep(health_refresh_interval) => {},
-                        }
-                        continue;
-                    };
-                    let migration_root = config_root.clone();
-                    let migration_data = data_root.clone();
-                    let migration_host = hostname.clone();
-                    let migration_credential = cred.clone();
-                    let identity_for_migration = identity.clone();
-                    let migration = crate::pairing_answer::ANSWER_LOCK_TIMEOUT_OVERRIDE
-                        .scope(
-                            answer_lock_timeout,
-                            crate::device_migration::migrate_if_needed(
-                                &migration_root,
-                                &migration_data,
+                    // A copied credential is admitted only after any machine
+                    // move is settled under a confirmed identity; otherwise
+                    // outbound work stays held and the next interval retries.
+                    let admitted = async {
+                        let marker = match marker_digest.clone() {
+                            Some(marker) => marker,
+                            None => crate::device_migration::host_marker_digest(
                                 platform,
-                                &migration_host,
-                                &marker,
-                                migration_credential,
-                                identity_for_migration,
-                                clock.wall_now().unix_timestamp(),
-                            ),
-                        )
-                        .await;
-                    let Ok(cred) = migration else {
-                        let facts = SyncFacts {
-                            paired: true,
-                            held: true,
-                            ..SyncFacts::default()
+                                &crate::command::TokioCommandRunner,
+                            )
+                            .await
+                            .ok()?,
                         };
-                        let _ = health
-                            .write(&facts, clock.wall_now().unix_timestamp())
-                            .await;
-                        tokio::select! {
-                            biased;
-                            () = wait_for_shutdown(&mut shutdown) => return Ok(()),
-                            () = tokio::time::sleep(health_refresh_interval) => {},
-                        }
-                        continue;
-                    };
-                    let ans_root = config_root.clone();
-                    let check_cred = cred.clone();
-                    let confirmed = tokio::task::spawn_blocking(move || {
-                        crate::pairing_answer::is_pairing_confirmed(&ans_root, &check_cred)
-                    })
-                    .await
-                    .unwrap_or(false);
-                    if confirmed {
+                        let cred = crate::pairing_answer::ANSWER_LOCK_TIMEOUT_OVERRIDE
+                            .scope(
+                                answer_lock_timeout,
+                                crate::device_migration::migrate_if_needed(
+                                    &config_root,
+                                    &data_root,
+                                    platform,
+                                    &hostname,
+                                    &marker,
+                                    cred,
+                                    identity.clone(),
+                                    clock.wall_now().unix_timestamp(),
+                                ),
+                            )
+                            .await
+                            .ok()?;
+                        let ans_root = config_root.clone();
+                        let check_cred = cred.clone();
+                        tokio::task::spawn_blocking(move || {
+                            crate::pairing_answer::is_pairing_confirmed(&ans_root, &check_cred)
+                        })
+                        .await
+                        .unwrap_or(false)
+                        .then_some(cred)
+                    }
+                    .await;
+                    if let Some(cred) = admitted {
                         break cred;
                     }
                     let facts = SyncFacts {
@@ -3283,19 +3210,14 @@ fn is_plain_directory(metadata: &fs::Metadata) -> bool {
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     use spl_transport::credential::{Credential, EndpointAddr};
 
-    use super::{
-        CredentialStore, SyncActivity, SyncFailureClass, SyncOperationError, SyncTask, SyncWake,
-        map_diagnostic,
-    };
+    use super::{CredentialStore, SyncFailureClass, SyncOperationError, map_diagnostic};
     use crate::health::DiagnosticCode;
     use crate::post_connect::compute_pairing_generation;
     use crate::private_link::{CREDENTIALS_FILENAME, load_credential, persist_credential};
-    use std::sync::Arc;
-    use tokio::sync::watch;
 
     fn persist_confirmed(root: &std::path::Path, credential: &Credential) {
         persist_credential(root, credential).expect("persist test credential");
@@ -3362,86 +3284,6 @@ mod tests {
                 assert!(loaded.device_token_expires_at.is_some());
                 fs::remove_dir_all(root).expect("remove token test root");
             });
-    }
-
-    #[test]
-    fn unavailable_destination_publication_reports_held_health() {
-        use crate::clock::TestClock;
-        use crate::health::{HealthState, HealthWriter, StatusHealth, read_status_health};
-        use crate::instance_lock::InstanceLock;
-
-        let _fault_guard = crate::storage::ATOMIC_FAULT_TEST_LOCK
-            .lock()
-            .expect("atomic write fault lock");
-        let suffix = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
-        let root = std::path::PathBuf::from(format!(
-            "/var/tmp/solstone-destination-health-{}-{suffix}",
-            std::process::id()
-        ));
-        let data_root = root.join("data");
-        crate::paths::ensure_private_directory(&root).expect("create config root");
-        crate::paths::ensure_private_directory(&data_root).expect("create data root");
-        fs::write(
-            root.join(crate::config::CONFIG_FILENAME),
-            br#"{"stream":"oldhost.tmux"}"#,
-        )
-        .expect("write prior config");
-        let mut record = crate::device_migration::MigrationRecord::new("oldhost.tmux".to_owned());
-        record.destination_generated = true;
-        record.destination_published = true;
-        record.persist(&root).expect("write generated baseline");
-        let paired = credential();
-        persist_confirmed(&root, &paired);
-        let config = crate::config::RuntimeConfig::load(&root, "oldhost").expect("load config");
-        let instance_lock = InstanceLock::acquire(&data_root).expect("acquire instance lock");
-        let health = HealthWriter::new(data_root.clone(), &instance_lock);
-        let clock = Arc::new(TestClock::new(
-            time::OffsetDateTime::from_unix_timestamp(1_800_000_000).unwrap(),
-            Duration::ZERO,
-            time::UtcOffset::UTC,
-        ));
-        crate::storage::set_atomic_write_fault_for_path(
-            &root.join(crate::config::CONFIG_FILENAME),
-            Some(crate::storage::AtomicWriteFault::FailBeforeRename),
-        );
-        let (_stop, shutdown) = watch::channel(true);
-        let (activity_sender, _activity) = watch::channel(SyncActivity::Idle);
-        let result = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap()
-            .block_on(
-                SyncTask {
-                    config_root: root.clone(),
-                    data_root: data_root.clone(),
-                    config,
-                    hostname: "newhost".to_owned(),
-                    clock,
-                    wake: SyncWake::default(),
-                    activity: activity_sender,
-                    health,
-                    retention_fence: Arc::new(super::RetentionFence::new()),
-                    identity: instance_lock.identity().clone(),
-                    health_refresh_interval: Duration::from_secs(60),
-                    answer_lock_timeout: crate::pairing_answer::ANSWER_LOCK_TIMEOUT,
-                    platform: crate::paths::PlatformKind::Linux,
-                    marker_digest: Some("a".repeat(64)),
-                }
-                .run(shutdown),
-            );
-        crate::storage::set_atomic_write_fault_for_path(
-            &root.join(crate::config::CONFIG_FILENAME),
-            None,
-        );
-        assert_eq!(result, Ok(()));
-        assert_eq!(
-            read_status_health(&data_root, 1_800_000_000),
-            StatusHealth::Live(HealthState::Held)
-        );
-        fs::remove_dir_all(root).expect("remove destination health test root");
     }
 
     #[test]
