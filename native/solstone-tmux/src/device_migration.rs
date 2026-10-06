@@ -1830,6 +1830,118 @@ mod tests {
     }
 
     #[test]
+    fn contract_vectors_pass_typed_request_and_reply_validation() {
+        let document: Value = serde_json::from_slice(include_bytes!(
+            "../vendor/device-migration-contract/contracts/v1.vectors.json"
+        ))
+        .expect("parse vendored vectors");
+        let vectors = &document["vectors"];
+        let edited = |value: &Value, field: &str, replacement: Option<Value>| {
+            let mut value = value.clone();
+            let object = value.as_object_mut().expect("vector object");
+            match replacement {
+                Some(replacement) => object.insert(field.to_owned(), replacement),
+                None => object.remove(field),
+            };
+            value
+        };
+        let accepts = |kind: &str, value: &Value| {
+            let bytes = serde_json::to_vec(value).expect("serialize vector");
+            match kind {
+                "rekey_request" => serde_json::from_slice::<SavedRekeyRequest>(&bytes).is_ok(),
+                "rekey_reply" => {
+                    serde_json::from_slice::<RekeyResponse>(&bytes).is_ok_and(|reply| {
+                        serde_json::from_value::<PairResponse>(reply.pairing).is_ok()
+                    })
+                }
+                "state" => serde_json::from_slice::<MigrationStateResponse>(&bytes).is_ok(),
+                "decision_request" => {
+                    serde_json::from_slice::<SavedDecisionRequest>(&bytes).is_ok()
+                }
+                "decision_reply" => serde_json::from_slice::<DecisionResponse>(&bytes).is_ok(),
+                _ => unreachable!(),
+            }
+        };
+        let rekey_request = &vectors["rekey_request"];
+        let first_state = &vectors["migration_states"][0];
+        let created = &vectors["rekey_created_201"]["body"];
+        let mut cases = vec![
+            ("rekey_request", rekey_request.clone(), true),
+            (
+                "rekey_request",
+                edited(rekey_request, "replaces_cid", Some(Value::Null)),
+                false,
+            ),
+            ("rekey_request", edited(rekey_request, "csr", None), false),
+            ("rekey_reply", edited(created, "cid", None), false),
+            (
+                "rekey_reply",
+                edited(created, "extra", Some(Value::Bool(true))),
+                false,
+            ),
+            ("state", edited(first_state, "replaced_cid", None), false),
+            ("decision_reply", vectors["decision_response"].clone(), true),
+            (
+                "decision_reply",
+                edited(&vectors["decision_response"], "cid", None),
+                false,
+            ),
+            // This client only keeps both devices, so a replacement is never valid.
+            (
+                "decision_request",
+                vectors["replace_request"].clone(),
+                false,
+            ),
+        ];
+        for name in [
+            "rekey_created_201",
+            "rekey_replay_200",
+            "rekey_without_network_metadata",
+        ] {
+            cases.push(("rekey_reply", vectors[name]["body"].clone(), true));
+        }
+        for state in vectors["migration_states"]
+            .as_array()
+            .expect("state vectors")
+        {
+            cases.push(("state", state.clone(), true));
+        }
+        for (kind, value, valid) in cases {
+            assert_eq!(accepts(kind, &value), valid, "{kind}: {value}");
+        }
+
+        let field = |name: &str| rekey_request[name].as_str().expect("request field");
+        let request = RekeyRequest {
+            protocol_version: 1,
+            operation_id: field("operation_id"),
+            csr: field("csr"),
+            device_label: field("device_label"),
+            client_label: field("client_label"),
+            platform: field("platform"),
+        };
+        assert_eq!(
+            &serde_json::to_value(&request).expect("serialize"),
+            rekey_request
+        );
+        let replacement = &vectors["replace_request"];
+        let decision = DecisionRequest {
+            protocol_version: 1,
+            operation_id: replacement["operation_id"].as_str().expect("operation id"),
+            choice: "new_device",
+        };
+        let keep_both = edited(
+            &edited(replacement, "replaces_cid", None),
+            "choice",
+            Some(Value::from("new_device")),
+        );
+        assert_eq!(
+            serde_json::to_value(&decision).expect("serialize"),
+            keep_both
+        );
+        assert!(accepts("decision_request", &keep_both));
+    }
+
+    #[test]
     fn linux_marker_accepts_only_exact_hex_id() {
         assert_eq!(
             parse_machine_id(b"00112233445566778899aabbccddeeff\n").unwrap()[0],
