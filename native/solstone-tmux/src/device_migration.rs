@@ -2539,6 +2539,17 @@ mod tests {
             .run(shutdown),
         );
         assert_eq!(sync_result, Ok(()));
+        let sync_health_path = data_root.join(crate::health::HEALTH_FILENAME);
+        if sync_health_path.exists() {
+            let sync_health: Value = serde_json::from_slice(
+                &fs::read(&sync_health_path).expect("read published sync health"),
+            )
+            .expect("parse published sync health");
+            assert_ne!(
+                sync_health["last_error_code"], "configured_stream_mismatch",
+                "sync must not publish a stream mismatch hold after destination recovery"
+            );
+        }
 
         let persisted: Value = serde_json::from_slice(
             &fs::read(root.path().join(crate::config::CONFIG_FILENAME)).expect("read config"),
