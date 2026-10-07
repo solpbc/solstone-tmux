@@ -560,8 +560,6 @@ fn mark_argument_before_stdin() {
                 identity: lock.identity().clone(),
                 health_refresh_interval: Duration::from_millis(50),
                 answer_lock_timeout: Duration::from_millis(200),
-                platform: solstone_tmux::paths::PlatformKind::Linux,
-                marker_digest: Some("a".repeat(64)),
             };
 
             let task_handle = tokio::spawn(async move {
@@ -1938,7 +1936,7 @@ fn confirm_binds_the_displayed_generation() {
         }
 
         {
-            // Y -> Z swap with "no\n": returns PrivateStateIo, Z bytes kept, and the stale rejection retires nothing on either peer
+            // Y -> Z swap with "no\n": returns PrivateStateIo, Z bytes kept, exactly 1 DELETE request for Y on Y's peer, 0 on Z's peer
             let peer_y = PrivateLinkPeer::start().await;
             let mut cred_y = peer_y.credential();
             cred_y.instance_id = test_jid();
@@ -1970,8 +1968,7 @@ fn confirm_binds_the_displayed_generation() {
             assert_eq!(cred_bytes, z_expected_bytes);
             let ans_record = read_answer_file(&roots.config_root()).unwrap().unwrap();
             assert_eq!(ans_record.confirmed, "");
-            assert_eq!(peer_y.requests().len(), 0);
-            assert_eq!(peer_y.accepted_carriers(), 0);
+            assert_journal_retire(&peer_y, &peer_y.expected_client_sha256(), 200, 0);
             assert_eq!(peer_z.requests().len(), 0);
             assert_eq!(peer_z.accepted_carriers(), 0);
 
@@ -2217,8 +2214,6 @@ fn pairing_gate_uploads_after_confirm() {
             identity: lock.identity().clone(),
             health_refresh_interval: Duration::from_millis(50),
             answer_lock_timeout: Duration::from_millis(200),
-            platform: solstone_tmux::paths::PlatformKind::Linux,
-            marker_digest: Some("a".repeat(64)),
         };
 
         let task_handle = tokio::spawn(async move {
@@ -2863,8 +2858,6 @@ fn held_status_without_a_daemon() {
             identity: lock.identity().clone(),
             health_refresh_interval: Duration::from_millis(50),
             answer_lock_timeout: Duration::from_millis(200),
-            platform: solstone_tmux::paths::PlatformKind::Linux,
-            marker_digest: Some("a".repeat(64)),
         };
 
         let task_handle = tokio::spawn(async move {

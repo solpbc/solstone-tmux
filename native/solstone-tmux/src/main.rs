@@ -331,8 +331,6 @@ fn run_native(
         identity: instance_lock.identity().clone(),
         health_refresh_interval: solstone_tmux::sync::HEALTH_REFRESH_INTERVAL,
         answer_lock_timeout: solstone_tmux::pairing_answer::ANSWER_LOCK_TIMEOUT,
-        platform,
-        marker_digest: None,
     }
     .run(sync_shutdown);
     let exit = runtime.block_on(supervise_observer(
