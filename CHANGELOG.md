@@ -6,9 +6,11 @@ Format adapted from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [2.0.15] - 2026-10-09
+
 ### Fixed
 
-- solstone-tmux now saves your journal's current addresses each time it connects, so once it has connected after your journal's address changes, it keeps using the new one without pairing again. a journal on this computer is unaffected.
+- with journal 2.0.38 or later, solstone-tmux now saves your journal's current addresses each time it connects, so once it has connected after your journal's address changes, it keeps using the new one without pairing again.
 
 ## [2.0.14] - 2026-10-05
 
