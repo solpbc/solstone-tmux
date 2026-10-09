@@ -15,7 +15,7 @@ use crate::journal::{JournalClient, OPTIONAL_JOB_TIMEOUT};
 use crate::journal_version::VersionRefreshState;
 use crate::paths::PlatformKind;
 use crate::private_link::PrivateLinkOpener;
-use crate::relay_access::run_relay_access_job;
+use crate::relay_access::run_access_lane;
 use crate::sync::CredentialStore;
 
 pub fn compute_pairing_generation(client_cert_pem: &str) -> [u8; 32] {
@@ -254,7 +254,7 @@ impl PostConnectCoordinator {
         let coordinator = Arc::clone(self);
         tokio::spawn(async move {
             // The lane wait is bounded; queued blocking publication stays owned.
-            let result = run_relay_access_job(
+            let result = run_access_lane(
                 &coordinator.journal_client,
                 &coordinator.store,
                 &coordinator.opener,
@@ -263,7 +263,7 @@ impl PostConnectCoordinator {
                 coordinator.timeout,
             )
             .await;
-            coordinator.on_access_complete(attempt_id, result.is_ok());
+            coordinator.on_access_complete(attempt_id, result.relay.is_ok());
         });
     }
 

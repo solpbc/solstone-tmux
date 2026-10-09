@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use spl_transport::client::TokenPersistHook;
-use spl_transport::credential::Credential;
+use spl_transport::credential::{Credential, EndpointAddr};
 use spl_transport::journal_bridge::JournalBridgeTerminalReason;
 use time::{Date, Month};
 use tokio::sync::{Mutex as AsyncMutex, Notify, OwnedSemaphorePermit, Semaphore, oneshot, watch};
@@ -37,6 +37,7 @@ use crate::paths::{self, PlatformKind};
 use crate::private_link::{
     PrivateLinkBridge, PrivateLinkOpener, load_credential, persist_credential,
 };
+use crate::relay_access::merge_dial_endpoints;
 use crate::segment::SegmentClose;
 use crate::storage::{
     CaptureTime, CaptureTimeLoad, atomic_write_bytes, capture_time_path, load_capture_time,
@@ -398,6 +399,7 @@ impl CredentialStore {
                                 && loaded.device_token == updated.device_token
                                 && loaded.device_token_expires_at == updated.device_token_expires_at
                                 && loaded.client_cert_pem == updated.client_cert_pem
+                                && loaded.endpoints == updated.endpoints
                         });
                     if !matches {
                         let mut state = store.state.lock().unwrap_or_else(|e| e.into_inner());
@@ -434,6 +436,67 @@ impl CredentialStore {
                 } else {
                     ReadyPublication::Uncertain
                 })
+            });
+            #[cfg(test)]
+            receipt.publication_queued.notify_one();
+            worker.await.unwrap_or(Err(()))
+        })
+        .await
+        .unwrap_or(Err(()))
+    }
+
+    pub async fn submit_dial_endpoints(
+        self: &Arc<Self>,
+        opener: Arc<PrivateLinkOpener>,
+        endpoints: Vec<EndpointAddr>,
+    ) -> Result<(), ()> {
+        let store = Arc::clone(self);
+        self.enqueue_owned(async move {
+            #[cfg(test)]
+            let receipt = Arc::clone(&store);
+            let worker = tokio::task::spawn_blocking(move || {
+                let state = store.state.lock().unwrap_or_else(|e| e.into_inner());
+                if state.shutdown
+                    || compute_pairing_generation(&state.credential.client_cert_pem)
+                        != store.pairing_generation
+                {
+                    return Err(());
+                }
+                let merged = merge_dial_endpoints(&endpoints, &state.credential.endpoints);
+                if merged.is_empty() {
+                    return Ok(());
+                }
+                if merged == state.credential.endpoints {
+                    return Ok(());
+                }
+                let mut updated = state.credential.clone();
+                updated.endpoints = merged;
+                let hook = store.token_persist_hook(state.mutation_generation);
+                let transport =
+                    spl_transport::client::TransportClient::new(updated.clone(), Some(hook))
+                        .map_err(|_| ())?;
+                let generation = state.mutation_generation;
+                drop(state);
+                let confirmed = persist_credential(&store.config_root, &updated).is_ok();
+                if !confirmed {
+                    let matches = load_credential(&store.config_root)
+                        .ok()
+                        .flatten()
+                        .is_some_and(|loaded| {
+                            loaded.relay_origin == updated.relay_origin
+                                && loaded.device_token == updated.device_token
+                                && loaded.device_token_expires_at == updated.device_token_expires_at
+                                && loaded.client_cert_pem == updated.client_cert_pem
+                                && loaded.endpoints == updated.endpoints
+                        });
+                    if !matches {
+                        return Err(());
+                    }
+                }
+                let mut state = store.state.lock().unwrap_or_else(|e| e.into_inner());
+                state.credential = updated.clone();
+                opener.install_transport(Arc::new(transport), updated, generation);
+                Ok(())
             });
             #[cfg(test)]
             receipt.publication_queued.notify_one();

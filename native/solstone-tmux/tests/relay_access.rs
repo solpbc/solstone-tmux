@@ -13,8 +13,9 @@ use solstone_tmux::journal_version::VersionRefreshState;
 use solstone_tmux::paths::ensure_private_directory;
 use solstone_tmux::post_connect::compute_pairing_generation;
 use solstone_tmux::private_link::{PrivateLinkBridge, load_credential, persist_credential};
-use solstone_tmux::relay_access::run_relay_access_job;
+use solstone_tmux::relay_access::{run_access_lane, run_dial_address_job, run_relay_access_job};
 use solstone_tmux::sync::{CredentialStore, JournalSession, ReadyPublication};
+use spl_transport::credential::EndpointAddr;
 use spl_transport::journal_bridge::CarrierOpener;
 use spl_transport::validate_relay_origin;
 
@@ -1400,6 +1401,1455 @@ fn shutdown_retires_an_already_blocked_dial() {
                 .is_err()
         );
         assert!(opener.dial_carrier().await.is_err());
+        peer.shutdown().await;
+    });
+}
+
+#[test]
+fn relay_access_dial_address_mixed_set_queries_loopback_only_skips() {
+    runtime().block_on(async {
+        let peer = PrivateLinkPeer::start().await;
+        let temporary = TestDirectory::new("dial-address-mixed-vs-loopback");
+        let config_root = temporary.path().join("config");
+        let data_root = temporary.path().join("data");
+        ensure_private_directory(&config_root).expect("config root");
+        ensure_private_directory(&data_root).expect("data root");
+        let lock = InstanceLock::acquire(&data_root).expect("acquire lock");
+
+        let loopback_cred = peer.credential();
+        persist_credential(&config_root, &loopback_cred).expect("persist cred");
+        let refresh = VersionRefreshState::new(
+            config_root.clone(),
+            data_root.clone(),
+            loopback_cred.instance_id.clone(),
+            &loopback_cred.ca_fp_prefix,
+            lock.identity().clone(),
+        );
+        let bridge = PrivateLinkBridge::start(loopback_cred.clone(), None, refresh)
+            .await
+            .expect("start bridge");
+        let client = JournalClient::bootstrap(&bridge)
+            .await
+            .expect("bootstrap client");
+        let pairing_gen = compute_pairing_generation(&loopback_cred.client_cert_pem);
+        let (store, _) =
+            CredentialStore::new(config_root.clone(), loopback_cred.clone(), pairing_gen);
+
+        let res =
+            run_dial_address_job(&client, &store, bridge.opener(), Duration::from_secs(5)).await;
+        assert!(res.is_ok());
+        assert_eq!(peer.local_endpoints_request_count(), 0);
+
+        let lane_res = run_access_lane(
+            &client,
+            &store,
+            bridge.opener(),
+            1,
+            &clock_at(1_700_000_000),
+            Duration::from_secs(5),
+        )
+        .await;
+        assert_eq!(peer.local_endpoints_request_count(), 0);
+        assert!(lane_res.addresses.is_ok());
+        bridge.shutdown().await;
+
+        let mut mixed_cred = peer.credential();
+        mixed_cred.endpoints.push(EndpointAddr {
+            host: "192.0.2.9".to_owned(),
+            port: 7657,
+        });
+        persist_credential(&config_root, &mixed_cred).expect("persist mixed cred");
+        let refresh = VersionRefreshState::new(
+            config_root.clone(),
+            data_root,
+            mixed_cred.instance_id.clone(),
+            &mixed_cred.ca_fp_prefix,
+            lock.identity().clone(),
+        );
+        let bridge = PrivateLinkBridge::start(mixed_cred.clone(), None, refresh)
+            .await
+            .expect("start bridge");
+        let client = JournalClient::bootstrap(&bridge)
+            .await
+            .expect("bootstrap client");
+        let pairing_gen = compute_pairing_generation(&mixed_cred.client_cert_pem);
+        let (store, _) = CredentialStore::new(config_root.clone(), mixed_cred.clone(), pairing_gen);
+
+        peer.enqueue_local_endpoints_response(
+            200,
+            serde_json::to_vec(&json!({
+                "v": 2,
+                "endpoints": [{"ip": "192.0.2.9", "port": 7657}]
+            }))
+            .expect("json"),
+        );
+        let res =
+            run_dial_address_job(&client, &store, bridge.opener(), Duration::from_secs(5)).await;
+        assert!(res.is_ok());
+        assert_eq!(peer.local_endpoints_request_count(), 1);
+
+        peer.enqueue_relay_access_response(
+            200,
+            serde_json::to_vec(&json!({
+                "status": "not_configured",
+                "protocol_version": 2
+            }))
+            .expect("json"),
+        );
+        peer.enqueue_local_endpoints_response(
+            200,
+            serde_json::to_vec(&json!({
+                "v": 2,
+                "endpoints": [{"ip": "192.0.2.9", "port": 7657}]
+            }))
+            .expect("json"),
+        );
+        let lane_res = run_access_lane(
+            &client,
+            &store,
+            bridge.opener(),
+            2,
+            &clock_at(1_700_000_000),
+            Duration::from_secs(5),
+        )
+        .await;
+        assert!(lane_res.addresses.is_ok());
+        assert_eq!(peer.local_endpoints_request_count(), 2);
+
+        bridge.shutdown().await;
+        peer.shutdown().await;
+    });
+}
+
+#[test]
+fn relay_access_dial_address_empty_set_via_relay_server_stores_v2_endpoints() {
+    runtime().block_on(async {
+        let peer = PrivateLinkPeer::start().await;
+        let relay_server = peer.start_relay_server().await;
+        let temporary = TestDirectory::new("dial-address-empty-relay-cred");
+        let config_root = temporary.path().join("config");
+        let data_root = temporary.path().join("data");
+        ensure_private_directory(&config_root).expect("config root");
+        ensure_private_directory(&data_root).expect("data root");
+        let lock = InstanceLock::acquire(&data_root).expect("acquire lock");
+
+        let mut initial_cred = peer.relay_credential(relay_server.origin());
+        initial_cred.local_endpoints = Some(json!({"distinctive_field": "test-empty-set"}));
+        persist_credential(&config_root, &initial_cred).expect("persist initial cred");
+
+        let refresh = VersionRefreshState::new(
+            config_root.clone(),
+            data_root,
+            initial_cred.instance_id.clone(),
+            &initial_cred.ca_fp_prefix,
+            lock.identity().clone(),
+        );
+        let bridge = PrivateLinkBridge::start(initial_cred.clone(), None, refresh)
+            .await
+            .expect("start bridge");
+        let client = JournalClient::bootstrap(&bridge)
+            .await
+            .expect("bootstrap client");
+        let pairing_gen = compute_pairing_generation(&initial_cred.client_cert_pem);
+        let (store, _) =
+            CredentialStore::new(config_root.clone(), initial_cred.clone(), pairing_gen);
+
+        peer.enqueue_local_endpoints_response(
+            200,
+            serde_json::to_vec(&json!({
+                "v": 2,
+                "endpoints": [{"ip": "192.0.2.9", "port": 7657}]
+            }))
+            .expect("json"),
+        );
+
+        let res =
+            run_dial_address_job(&client, &store, bridge.opener(), Duration::from_secs(5)).await;
+        assert!(res.is_ok());
+        assert_eq!(peer.local_endpoints_request_count(), 1);
+
+        let loaded = load_credential(&config_root)
+            .expect("load credential")
+            .expect("credential exists");
+        let live = bridge.opener().live_dial_credential();
+        let expected_endpoints = vec![EndpointAddr {
+            host: "192.0.2.9".to_owned(),
+            port: 7657,
+        }];
+        assert_eq!(loaded.endpoints, expected_endpoints);
+        assert_eq!(live.endpoints, expected_endpoints);
+        assert_eq!(loaded.local_endpoints, initial_cred.local_endpoints);
+        assert_eq!(live.local_endpoints, initial_cred.local_endpoints);
+
+        bridge.shutdown().await;
+        peer.shutdown().await;
+    });
+}
+
+#[test]
+fn relay_access_dial_address_error_responses_preserve_credentials() {
+    runtime().block_on(async {
+        let peer = PrivateLinkPeer::start().await;
+        let temporary = TestDirectory::new("dial-address-error-responses");
+        let config_root = temporary.path().join("config");
+        let data_root = temporary.path().join("data");
+        ensure_private_directory(&config_root).expect("config root");
+        ensure_private_directory(&data_root).expect("data root");
+        let lock = InstanceLock::acquire(&data_root).expect("acquire lock");
+
+        let mut initial_cred = peer.credential();
+        initial_cred.endpoints.push(EndpointAddr {
+            host: "192.0.2.9".to_owned(),
+            port: 7657,
+        });
+        initial_cred.local_endpoints = Some(json!({"distinctive_field": "errors-preserve"}));
+        persist_credential(&config_root, &initial_cred).expect("persist initial cred");
+
+        let refresh = VersionRefreshState::new(
+            config_root.clone(),
+            data_root,
+            initial_cred.instance_id.clone(),
+            &initial_cred.ca_fp_prefix,
+            lock.identity().clone(),
+        );
+        let bridge = PrivateLinkBridge::start(initial_cred.clone(), None, refresh)
+            .await
+            .expect("start bridge");
+        let client = JournalClient::bootstrap(&bridge)
+            .await
+            .expect("bootstrap client");
+        let pairing_gen = compute_pairing_generation(&initial_cred.client_cert_pem);
+        let (store, _) =
+            CredentialStore::new(config_root.clone(), initial_cred.clone(), pairing_gen);
+
+        let cred_path = config_root.join("credentials.json");
+        let initial_bytes = std::fs::read(&cred_path).expect("read cred bytes");
+        let initial_endpoints = initial_cred.endpoints.clone();
+
+        peer.enqueue_raw_local_endpoints_response(
+            b"HTTP/1.1 500 Internal Server Error\r\nContent-Type: text/plain\r\nContent-Length: 5\r\n\r\nerror".to_vec(),
+        );
+        assert!(
+            run_dial_address_job(&client, &store, bridge.opener(), Duration::from_secs(5))
+                .await
+                .is_err()
+        );
+        assert_eq!(peer.local_endpoints_request_count(), 1);
+        assert_eq!(std::fs::read(&cred_path).expect("read bytes"), initial_bytes);
+        assert_eq!(
+            bridge.opener().live_dial_credential().endpoints,
+            initial_endpoints
+        );
+
+        peer.enqueue_local_endpoints_response(302, Vec::new());
+        assert!(
+            run_dial_address_job(&client, &store, bridge.opener(), Duration::from_secs(5))
+                .await
+                .is_err()
+        );
+        assert_eq!(peer.local_endpoints_request_count(), 2);
+        assert_eq!(std::fs::read(&cred_path).expect("read bytes"), initial_bytes);
+        assert_eq!(
+            bridge.opener().live_dial_credential().endpoints,
+            initial_endpoints
+        );
+
+        peer.enqueue_local_endpoints_response(404, Vec::new());
+        assert!(
+            run_dial_address_job(&client, &store, bridge.opener(), Duration::from_secs(5))
+                .await
+                .is_err()
+        );
+        assert_eq!(peer.local_endpoints_request_count(), 3);
+        assert_eq!(std::fs::read(&cred_path).expect("read bytes"), initial_bytes);
+        assert_eq!(
+            bridge.opener().live_dial_credential().endpoints,
+            initial_endpoints
+        );
+
+        peer.enqueue_local_endpoints_response(200, b"not json at all".to_vec());
+        assert!(
+            run_dial_address_job(&client, &store, bridge.opener(), Duration::from_secs(5))
+                .await
+                .is_err()
+        );
+        assert_eq!(peer.local_endpoints_request_count(), 4);
+        assert_eq!(std::fs::read(&cred_path).expect("read bytes"), initial_bytes);
+        assert_eq!(
+            bridge.opener().live_dial_credential().endpoints,
+            initial_endpoints
+        );
+
+        peer.enqueue_local_endpoints_response(
+            200,
+            serde_json::to_vec(&json!({
+                "v": 2,
+                "endpoints": []
+            }))
+            .expect("json"),
+        );
+        assert!(
+            run_dial_address_job(&client, &store, bridge.opener(), Duration::from_secs(5))
+                .await
+                .is_ok()
+        );
+        assert_eq!(peer.local_endpoints_request_count(), 5);
+        assert_eq!(std::fs::read(&cred_path).expect("read bytes"), initial_bytes);
+        assert_eq!(
+            bridge.opener().live_dial_credential().endpoints,
+            initial_endpoints
+        );
+
+        bridge.shutdown().await;
+        peer.shutdown().await;
+    });
+}
+
+#[test]
+fn relay_access_dial_address_version_gate_preserves_on_v1_replaces_on_v2() {
+    runtime().block_on(async {
+        let peer = PrivateLinkPeer::start().await;
+        let temporary = TestDirectory::new("dial-address-version-gate");
+        let config_root = temporary.path().join("config");
+        let data_root = temporary.path().join("data");
+        ensure_private_directory(&config_root).expect("config root");
+        ensure_private_directory(&data_root).expect("data root");
+        let lock = InstanceLock::acquire(&data_root).expect("acquire lock");
+
+        let mut initial_cred = peer.credential();
+        initial_cred.endpoints.push(EndpointAddr {
+            host: "192.0.2.9".to_owned(),
+            port: 7657,
+        });
+        initial_cred.local_endpoints = Some(json!({"distinctive_field": "version-gate"}));
+        persist_credential(&config_root, &initial_cred).expect("persist initial cred");
+
+        let refresh = VersionRefreshState::new(
+            config_root.clone(),
+            data_root,
+            initial_cred.instance_id.clone(),
+            &initial_cred.ca_fp_prefix,
+            lock.identity().clone(),
+        );
+        let bridge = PrivateLinkBridge::start(initial_cred.clone(), None, refresh)
+            .await
+            .expect("start bridge");
+        let client = JournalClient::bootstrap(&bridge)
+            .await
+            .expect("bootstrap client");
+        let pairing_gen = compute_pairing_generation(&initial_cred.client_cert_pem);
+        let (store, _) =
+            CredentialStore::new(config_root.clone(), initial_cred.clone(), pairing_gen);
+
+        let cred_path = config_root.join("credentials.json");
+        let initial_bytes = std::fs::read(&cred_path).expect("read cred bytes");
+        let initial_endpoints = initial_cred.endpoints.clone();
+
+        peer.enqueue_local_endpoints_response(
+            200,
+            serde_json::to_vec(&json!({
+                "v": 1,
+                "endpoints": [{"ip": "192.0.2.10", "port": 7657}]
+            }))
+            .expect("json"),
+        );
+        assert!(
+            run_dial_address_job(&client, &store, bridge.opener(), Duration::from_secs(5))
+                .await
+                .is_ok()
+        );
+        assert_eq!(peer.local_endpoints_request_count(), 1);
+        assert_eq!(
+            std::fs::read(&cred_path).expect("read bytes"),
+            initial_bytes
+        );
+        assert_eq!(
+            bridge.opener().live_dial_credential().endpoints,
+            initial_endpoints
+        );
+
+        peer.enqueue_local_endpoints_response(
+            200,
+            serde_json::to_vec(&json!({
+                "endpoints": [{"ip": "192.0.2.11", "port": 7657}]
+            }))
+            .expect("json"),
+        );
+        assert!(
+            run_dial_address_job(&client, &store, bridge.opener(), Duration::from_secs(5))
+                .await
+                .is_ok()
+        );
+        assert_eq!(peer.local_endpoints_request_count(), 2);
+        assert_eq!(
+            std::fs::read(&cred_path).expect("read bytes"),
+            initial_bytes
+        );
+        assert_eq!(
+            bridge.opener().live_dial_credential().endpoints,
+            initial_endpoints
+        );
+
+        peer.enqueue_local_endpoints_response(
+            200,
+            serde_json::to_vec(&json!({
+                "v": 2,
+                "endpoints": [{"ip": "192.0.2.10", "port": 7657}]
+            }))
+            .expect("json"),
+        );
+        assert!(
+            run_dial_address_job(&client, &store, bridge.opener(), Duration::from_secs(5))
+                .await
+                .is_ok()
+        );
+        assert_eq!(peer.local_endpoints_request_count(), 3);
+
+        let loaded = load_credential(&config_root)
+            .expect("load credential")
+            .expect("credential exists");
+        let live = bridge.opener().live_dial_credential();
+        let expected = vec![
+            EndpointAddr {
+                host: "192.0.2.10".to_owned(),
+                port: 7657,
+            },
+            initial_cred.endpoints[0].clone(),
+            initial_cred.endpoints[1].clone(),
+        ];
+        assert_eq!(loaded.endpoints, expected);
+        assert_eq!(live.endpoints, expected);
+        assert_eq!(loaded.local_endpoints, initial_cred.local_endpoints);
+        assert_eq!(live.local_endpoints, initial_cred.local_endpoints);
+
+        bridge.shutdown().await;
+        peer.shutdown().await;
+    });
+}
+
+#[test]
+fn relay_access_access_lane_runs_address_refresh_despite_relay_outcomes() {
+    runtime().block_on(async {
+        let peer = PrivateLinkPeer::start().await;
+        let temporary = TestDirectory::new("access-lane-relay-outcomes");
+        let config_root = temporary.path().join("config");
+        let data_root = temporary.path().join("data");
+        ensure_private_directory(&config_root).expect("config root");
+        ensure_private_directory(&data_root).expect("data root");
+        let lock = InstanceLock::acquire(&data_root).expect("acquire lock");
+
+        let mut initial_cred = peer.credential();
+        initial_cred.endpoints.push(EndpointAddr {
+            host: "192.0.2.9".to_owned(),
+            port: 7657,
+        });
+        initial_cred.local_endpoints = Some(json!({"distinctive_field": "relay-outcomes"}));
+        persist_credential(&config_root, &initial_cred).expect("persist initial cred");
+
+        let refresh = VersionRefreshState::new(
+            config_root.clone(),
+            data_root,
+            initial_cred.instance_id.clone(),
+            &initial_cred.ca_fp_prefix,
+            lock.identity().clone(),
+        );
+        let bridge = PrivateLinkBridge::start(initial_cred.clone(), None, refresh)
+            .await
+            .expect("start bridge");
+        let client = JournalClient::bootstrap(&bridge)
+            .await
+            .expect("bootstrap client");
+        let pairing_gen = compute_pairing_generation(&initial_cred.client_cert_pem);
+        let (store, _) =
+            CredentialStore::new(config_root.clone(), initial_cred.clone(), pairing_gen);
+
+        let clock = clock_at(1_700_000_000);
+
+        peer.enqueue_relay_access_response(404, Vec::new());
+        peer.enqueue_local_endpoints_response(
+            200,
+            serde_json::to_vec(&json!({
+                "v": 2,
+                "endpoints": [{"ip": "192.0.2.10", "port": 7657}]
+            }))
+            .expect("json"),
+        );
+        let res = run_access_lane(
+            &client,
+            &store,
+            bridge.opener(),
+            1,
+            &clock,
+            Duration::from_secs(5),
+        )
+        .await;
+        assert!(res.relay.is_err());
+        assert!(res.addresses.is_ok());
+        let loaded = load_credential(&config_root).unwrap().unwrap();
+        let live = bridge.opener().live_dial_credential();
+        assert_eq!(loaded.endpoints, live.endpoints);
+        assert_eq!(loaded.local_endpoints, initial_cred.local_endpoints);
+
+        peer.enqueue_relay_access_response(500, Vec::new());
+        peer.enqueue_local_endpoints_response(
+            200,
+            serde_json::to_vec(&json!({
+                "v": 2,
+                "endpoints": [{"ip": "192.0.2.11", "port": 7657}]
+            }))
+            .expect("json"),
+        );
+        let res = run_access_lane(
+            &client,
+            &store,
+            bridge.opener(),
+            2,
+            &clock,
+            Duration::from_secs(5),
+        )
+        .await;
+        assert!(res.relay.is_err());
+        assert!(res.addresses.is_ok());
+        let loaded = load_credential(&config_root).unwrap().unwrap();
+        let live = bridge.opener().live_dial_credential();
+        assert_eq!(loaded.endpoints, live.endpoints);
+        assert_eq!(loaded.local_endpoints, initial_cred.local_endpoints);
+
+        peer.enqueue_relay_access_response(
+            200,
+            serde_json::to_vec(&json!({
+                "status": "not_configured",
+                "protocol_version": 2
+            }))
+            .expect("json"),
+        );
+        peer.enqueue_local_endpoints_response(
+            200,
+            serde_json::to_vec(&json!({
+                "v": 2,
+                "endpoints": [{"ip": "192.0.2.9", "port": 7657}]
+            }))
+            .expect("json"),
+        );
+        let res = run_access_lane(
+            &client,
+            &store,
+            bridge.opener(),
+            3,
+            &clock,
+            Duration::from_secs(5),
+        )
+        .await;
+        assert!(res.relay.is_ok());
+        assert!(res.addresses.is_ok());
+        let loaded = load_credential(&config_root).unwrap().unwrap();
+        let live = bridge.opener().live_dial_credential();
+        assert_eq!(loaded.relay_origin, None);
+        assert_eq!(loaded.device_token, None);
+        assert_eq!(loaded.endpoints, live.endpoints);
+        assert_eq!(loaded.local_endpoints, initial_cred.local_endpoints);
+
+        let exp = 1_900_608_000;
+        let token = create_jwt(&initial_cred.instance_id, exp);
+        store
+            .submit_ready(
+                Arc::clone(bridge.opener()),
+                store.capture_access_attempt(4),
+                "https://relay.solstone.io".to_owned(),
+                token.clone(),
+                exp,
+            )
+            .await
+            .expect("submit ready");
+
+        peer.enqueue_relay_access_response(
+            200,
+            serde_json::to_vec(&json!({
+                "status": "ready",
+                "protocol_version": 2,
+                "relay_origin": "https://relay.solstone.io",
+                "instance_id": initial_cred.instance_id,
+                "device_token": token,
+                "expires_at": "2030-03-24T18:40:00Z"
+            }))
+            .expect("json"),
+        );
+        peer.enqueue_local_endpoints_response(
+            200,
+            serde_json::to_vec(&json!({
+                "v": 2,
+                "endpoints": [{"ip": "192.0.2.10", "port": 7657}]
+            }))
+            .expect("json"),
+        );
+        let res = run_access_lane(
+            &client,
+            &store,
+            bridge.opener(),
+            5,
+            &clock,
+            Duration::from_secs(5),
+        )
+        .await;
+        assert!(res.relay.is_ok());
+        assert!(res.addresses.is_ok());
+        let loaded = load_credential(&config_root).unwrap().unwrap();
+        let live = bridge.opener().live_dial_credential();
+        assert_eq!(loaded.endpoints, live.endpoints);
+        assert_eq!(loaded.local_endpoints, initial_cred.local_endpoints);
+
+        bridge.shutdown().await;
+        peer.shutdown().await;
+    });
+}
+
+#[test]
+fn relay_access_dial_address_three_refreshes_on_open_carrier_merge_and_evict() {
+    runtime().block_on(async {
+        let peer = PrivateLinkPeer::start().await;
+        let temporary = TestDirectory::new("dial-address-three-refreshes");
+        let config_root = temporary.path().join("config");
+        let data_root = temporary.path().join("data");
+        ensure_private_directory(&config_root).expect("config root");
+        ensure_private_directory(&data_root).expect("data root");
+        let lock = InstanceLock::acquire(&data_root).expect("acquire lock");
+
+        let o1 = peer.credential().endpoints[0].clone();
+        let mut initial_cred = peer.credential();
+        initial_cred.local_endpoints = Some(json!({"distinctive_field": "three-refreshes"}));
+        persist_credential(&config_root, &initial_cred).expect("persist initial cred");
+
+        let refresh = VersionRefreshState::new(
+            config_root.clone(),
+            data_root,
+            initial_cred.instance_id.clone(),
+            &initial_cred.ca_fp_prefix,
+            lock.identity().clone(),
+        );
+        let bridge = PrivateLinkBridge::start(initial_cred.clone(), None, refresh)
+            .await
+            .expect("start bridge");
+        let client = JournalClient::bootstrap(&bridge)
+            .await
+            .expect("bootstrap client");
+        let pairing_gen = compute_pairing_generation(&initial_cred.client_cert_pem);
+        let (store, _) =
+            CredentialStore::new(config_root.clone(), initial_cred.clone(), pairing_gen);
+
+        let n1 = EndpointAddr {
+            host: "192.0.2.9".to_owned(),
+            port: 7657,
+        };
+        let n2 = EndpointAddr {
+            host: "192.0.2.10".to_owned(),
+            port: 7657,
+        };
+        let n3 = EndpointAddr {
+            host: "192.0.2.11".to_owned(),
+            port: 7657,
+        };
+
+        peer.enqueue_local_endpoints_response(
+            200,
+            serde_json::to_vec(&json!({
+                "v": 2,
+                "endpoints": [
+                    {"ip": &n1.host, "port": n1.port},
+                    {"ip": &n2.host, "port": n2.port}
+                ]
+            }))
+            .expect("json"),
+        );
+
+        let _ = client
+            .get_local_endpoints(Duration::from_secs(5))
+            .await
+            .expect("open carrier via bridge");
+
+        store
+            .submit_dial_endpoints(Arc::clone(bridge.opener()), vec![n1.clone(), n2.clone()])
+            .await
+            .expect("submit step 1");
+        let step1_expected = vec![n1.clone(), n2.clone(), o1.clone()];
+        let loaded1 = load_credential(&config_root).unwrap().unwrap();
+        let live1 = bridge.opener().live_dial_credential();
+        assert_eq!(loaded1.endpoints, step1_expected);
+        assert_eq!(live1.endpoints, step1_expected);
+        assert_eq!(loaded1.local_endpoints, initial_cred.local_endpoints);
+        assert_eq!(peer.local_endpoints_request_count(), 1);
+
+        let cred_path = config_root.join("credentials.json");
+        let step1_bytes = std::fs::read(&cred_path).expect("read cred bytes");
+        let step1_incarnation = bridge.opener().incarnation();
+        peer.enqueue_local_endpoints_response(
+            200,
+            serde_json::to_vec(&json!({
+                "v": 2,
+                "endpoints": [
+                    {"ip": &n1.host, "port": n1.port},
+                    {"ip": &n2.host, "port": n2.port}
+                ]
+            }))
+            .expect("json"),
+        );
+        let res2 =
+            run_dial_address_job(&client, &store, bridge.opener(), Duration::from_secs(5)).await;
+        assert!(res2.is_ok());
+        assert_eq!(peer.local_endpoints_request_count(), 2);
+        assert_eq!(std::fs::read(&cred_path).expect("read bytes"), step1_bytes);
+        assert_eq!(bridge.opener().incarnation(), step1_incarnation);
+        let loaded2 = load_credential(&config_root).unwrap().unwrap();
+        let live2 = bridge.opener().live_dial_credential();
+        assert_eq!(loaded2.endpoints, step1_expected);
+        assert_eq!(live2.endpoints, step1_expected);
+
+        peer.enqueue_local_endpoints_response(
+            200,
+            serde_json::to_vec(&json!({
+                "v": 2,
+                "endpoints": [{"ip": &n3.host, "port": n3.port}]
+            }))
+            .expect("json"),
+        );
+        let res3 =
+            run_dial_address_job(&client, &store, bridge.opener(), Duration::from_secs(5)).await;
+        assert!(res3.is_ok());
+        assert_eq!(peer.local_endpoints_request_count(), 3);
+        let step3_expected = vec![n3.clone(), n1.clone(), n2.clone()];
+        let loaded3 = load_credential(&config_root).unwrap().unwrap();
+        let live3 = bridge.opener().live_dial_credential();
+        assert_eq!(loaded3.endpoints, step3_expected);
+        assert_eq!(live3.endpoints, step3_expected);
+        assert_eq!(loaded3.local_endpoints, initial_cred.local_endpoints);
+
+        bridge.shutdown().await;
+        peer.shutdown().await;
+    });
+}
+
+#[test]
+fn relay_access_dial_address_unchanged_v2_set_preserves_raw_bytes_and_incarnation() {
+    runtime().block_on(async {
+        let peer = PrivateLinkPeer::start().await;
+        let temporary = TestDirectory::new("dial-address-unchanged-set");
+        let config_root = temporary.path().join("config");
+        let data_root = temporary.path().join("data");
+        ensure_private_directory(&config_root).expect("config root");
+        ensure_private_directory(&data_root).expect("data root");
+        let lock = InstanceLock::acquire(&data_root).expect("acquire lock");
+
+        let mut initial_cred = peer.credential();
+        initial_cred.endpoints.push(EndpointAddr {
+            host: "192.0.2.9".to_owned(),
+            port: 7657,
+        });
+        initial_cred.local_endpoints = Some(json!({"distinctive_field": "unchanged-preserves"}));
+        persist_credential(&config_root, &initial_cred).expect("persist initial cred");
+
+        let refresh = VersionRefreshState::new(
+            config_root.clone(),
+            data_root,
+            initial_cred.instance_id.clone(),
+            &initial_cred.ca_fp_prefix,
+            lock.identity().clone(),
+        );
+        let bridge = PrivateLinkBridge::start(initial_cred.clone(), None, refresh)
+            .await
+            .expect("start bridge");
+        let client = JournalClient::bootstrap(&bridge)
+            .await
+            .expect("bootstrap client");
+        let pairing_gen = compute_pairing_generation(&initial_cred.client_cert_pem);
+        let (store, _) =
+            CredentialStore::new(config_root.clone(), initial_cred.clone(), pairing_gen);
+
+        let peer_endpoint = initial_cred.endpoints[0].clone();
+        peer.enqueue_local_endpoints_response(
+            200,
+            serde_json::to_vec(&json!({
+                "v": 2,
+                "endpoints": [
+                    {"ip": &peer_endpoint.host, "port": peer_endpoint.port},
+                    {"ip": "192.0.2.9", "port": 7657}
+                ]
+            }))
+            .expect("json"),
+        );
+        let cred_path = config_root.join("credentials.json");
+        let before_bytes = std::fs::read(&cred_path).expect("read cred bytes");
+        let before_incarnation = bridge.opener().incarnation();
+
+        let res =
+            run_dial_address_job(&client, &store, bridge.opener(), Duration::from_secs(5)).await;
+        assert!(res.is_ok());
+        assert_eq!(peer.local_endpoints_request_count(), 1);
+        assert_eq!(
+            std::fs::read(&cred_path).expect("read cred bytes"),
+            before_bytes
+        );
+        assert_eq!(bridge.opener().incarnation(), before_incarnation);
+
+        bridge.shutdown().await;
+        peer.shutdown().await;
+    });
+}
+
+#[test]
+fn relay_access_access_lane_ready_token_and_v2_endpoints_both_commit() {
+    runtime().block_on(async {
+        let peer = PrivateLinkPeer::start().await;
+        let temporary = TestDirectory::new("access-lane-ready-and-endpoints");
+        let config_root = temporary.path().join("config");
+        let data_root = temporary.path().join("data");
+        ensure_private_directory(&config_root).expect("config root");
+        ensure_private_directory(&data_root).expect("data root");
+        let lock = InstanceLock::acquire(&data_root).expect("acquire lock");
+
+        let mut initial_cred = peer.credential();
+        initial_cred.endpoints.push(EndpointAddr {
+            host: "192.0.2.9".to_owned(),
+            port: 7657,
+        });
+        initial_cred.local_endpoints = Some(json!({"distinctive_field": "ready-and-endpoints"}));
+        persist_credential(&config_root, &initial_cred).expect("persist initial cred");
+
+        let refresh = VersionRefreshState::new(
+            config_root.clone(),
+            data_root,
+            initial_cred.instance_id.clone(),
+            &initial_cred.ca_fp_prefix,
+            lock.identity().clone(),
+        );
+        let bridge = PrivateLinkBridge::start(initial_cred.clone(), None, refresh)
+            .await
+            .expect("start bridge");
+        let client = JournalClient::bootstrap(&bridge)
+            .await
+            .expect("bootstrap client");
+        let pairing_gen = compute_pairing_generation(&initial_cred.client_cert_pem);
+        let (store, _) =
+            CredentialStore::new(config_root.clone(), initial_cred.clone(), pairing_gen);
+
+        let exp = 1_900_608_000;
+        let token = create_jwt(&initial_cred.instance_id, exp);
+        peer.enqueue_relay_access_response(
+            200,
+            serde_json::to_vec(&json!({
+                "status": "ready",
+                "protocol_version": 2,
+                "relay_origin": "https://relay.solstone.io",
+                "instance_id": initial_cred.instance_id,
+                "device_token": token,
+                "expires_at": "2030-03-24T18:40:00Z"
+            }))
+            .expect("json"),
+        );
+        peer.enqueue_local_endpoints_response(
+            200,
+            serde_json::to_vec(&json!({
+                "v": 2,
+                "endpoints": [{"ip": "192.0.2.10", "port": 7657}]
+            }))
+            .expect("json"),
+        );
+
+        let res = run_access_lane(
+            &client,
+            &store,
+            bridge.opener(),
+            1,
+            &clock_at(1_700_000_000),
+            Duration::from_secs(5),
+        )
+        .await;
+        assert!(res.relay.is_ok());
+        assert!(res.addresses.is_ok());
+
+        let loaded = load_credential(&config_root).unwrap().unwrap();
+        let live = bridge.opener().live_dial_credential();
+        assert_eq!(
+            loaded.relay_origin.as_deref(),
+            Some("https://relay.solstone.io")
+        );
+        assert_eq!(loaded.device_token.as_deref(), Some(token.as_str()));
+        assert_eq!(
+            live.relay_origin.as_deref(),
+            Some("https://relay.solstone.io")
+        );
+        assert_eq!(live.device_token.as_deref(), Some(token.as_str()));
+        assert_eq!(loaded.endpoints, live.endpoints);
+        assert_eq!(
+            loaded.endpoints[0],
+            EndpointAddr {
+                host: "192.0.2.10".to_owned(),
+                port: 7657
+            }
+        );
+        assert_eq!(loaded.local_endpoints, initial_cred.local_endpoints);
+
+        bridge.shutdown().await;
+        peer.shutdown().await;
+    });
+}
+
+#[test]
+fn relay_access_access_lane_sequential_holds_both_commit() {
+    runtime().block_on(async {
+        let peer = PrivateLinkPeer::start().await;
+        let temporary = TestDirectory::new("access-lane-sequential-holds");
+        let config_root = temporary.path().join("config");
+        let data_root = temporary.path().join("data");
+        ensure_private_directory(&config_root).expect("config root");
+        ensure_private_directory(&data_root).expect("data root");
+        let lock = InstanceLock::acquire(&data_root).expect("acquire lock");
+
+        let mut initial_cred = peer.credential();
+        initial_cred.endpoints.push(EndpointAddr {
+            host: "192.0.2.9".to_owned(),
+            port: 7657,
+        });
+        initial_cred.local_endpoints = Some(json!({"distinctive_field": "sequential-holds"}));
+        persist_credential(&config_root, &initial_cred).expect("persist initial cred");
+
+        let refresh = VersionRefreshState::new(
+            config_root.clone(),
+            data_root,
+            initial_cred.instance_id.clone(),
+            &initial_cred.ca_fp_prefix,
+            lock.identity().clone(),
+        );
+        let bridge = PrivateLinkBridge::start(initial_cred.clone(), None, refresh)
+            .await
+            .expect("start bridge");
+        let client = JournalClient::bootstrap(&bridge)
+            .await
+            .expect("bootstrap client");
+        let pairing_gen = compute_pairing_generation(&initial_cred.client_cert_pem);
+        let (store, _) =
+            CredentialStore::new(config_root.clone(), initial_cred.clone(), pairing_gen);
+
+        peer.hold_relay_access();
+        peer.hold_local_endpoints();
+
+        let exp = 1_900_608_000;
+        let token = create_jwt(&initial_cred.instance_id, exp);
+        peer.enqueue_relay_access_response(
+            200,
+            serde_json::to_vec(&json!({
+                "status": "ready",
+                "protocol_version": 2,
+                "relay_origin": "https://relay.solstone.io",
+                "instance_id": initial_cred.instance_id,
+                "device_token": token,
+                "expires_at": "2030-03-24T18:40:00Z"
+            }))
+            .expect("json"),
+        );
+        peer.enqueue_local_endpoints_response(
+            200,
+            serde_json::to_vec(&json!({
+                "v": 2,
+                "endpoints": [{"ip": "192.0.2.10", "port": 7657}]
+            }))
+            .expect("json"),
+        );
+
+        let opener = Arc::clone(bridge.opener());
+        let clock = clock_at(1_700_000_000);
+        let task = tokio::spawn({
+            let store = Arc::clone(&store);
+            async move {
+                run_access_lane(&client, &store, &opener, 1, &clock, Duration::from_secs(5)).await
+            }
+        });
+
+        peer.wait_for_relay_access_hold(Duration::from_secs(5))
+            .await;
+        peer.release_relay_access();
+        peer.wait_for_local_endpoints_hold(Duration::from_secs(5))
+            .await;
+        peer.release_local_endpoints();
+
+        let res = task.await.expect("task join");
+        assert!(res.relay.is_ok());
+        assert!(res.addresses.is_ok());
+
+        let loaded = load_credential(&config_root).unwrap().unwrap();
+        let live = bridge.opener().live_dial_credential();
+        assert_eq!(
+            loaded.relay_origin.as_deref(),
+            Some("https://relay.solstone.io")
+        );
+        assert_eq!(loaded.device_token.as_deref(), Some(token.as_str()));
+        assert_eq!(live.device_token.as_deref(), Some(token.as_str()));
+        assert_eq!(loaded.endpoints, live.endpoints);
+        assert_eq!(
+            loaded.endpoints[0],
+            EndpointAddr {
+                host: "192.0.2.10".to_owned(),
+                port: 7657
+            }
+        );
+        assert_eq!(loaded.local_endpoints, initial_cred.local_endpoints);
+
+        bridge.shutdown().await;
+        peer.shutdown().await;
+    });
+}
+
+#[test]
+fn relay_access_dial_address_commit_preserves_mutation_generation_for_pre_commit_hook() {
+    runtime().block_on(async {
+        let peer = PrivateLinkPeer::start().await;
+        let temporary = TestDirectory::new("dial-address-pre-commit-hook");
+        let config_root = temporary.path().join("config");
+        let data_root = temporary.path().join("data");
+        ensure_private_directory(&config_root).expect("config root");
+        ensure_private_directory(&data_root).expect("data root");
+        let lock = InstanceLock::acquire(&data_root).expect("acquire lock");
+
+        let mut initial_cred = peer.credential();
+        initial_cred.endpoints.push(EndpointAddr {
+            host: "192.0.2.9".to_owned(),
+            port: 7657,
+        });
+        initial_cred.local_endpoints = Some(json!({"distinctive_field": "hook-generation"}));
+        persist_credential(&config_root, &initial_cred).expect("persist initial cred");
+
+        let refresh = VersionRefreshState::new(
+            config_root.clone(),
+            data_root,
+            initial_cred.instance_id.clone(),
+            &initial_cred.ca_fp_prefix,
+            lock.identity().clone(),
+        );
+
+        let pairing_gen = compute_pairing_generation(&initial_cred.client_cert_pem);
+        let (store, hook) =
+            CredentialStore::new(config_root.clone(), initial_cred.clone(), pairing_gen);
+        let bridge = PrivateLinkBridge::start(initial_cred.clone(), Some(hook.clone()), refresh)
+            .await
+            .expect("start bridge");
+        let client = JournalClient::bootstrap(&bridge)
+            .await
+            .expect("bootstrap client");
+
+        peer.enqueue_local_endpoints_response(
+            200,
+            serde_json::to_vec(&json!({
+                "v": 2,
+                "endpoints": [{"ip": "192.0.2.10", "port": 7657}]
+            }))
+            .expect("json"),
+        );
+
+        let res =
+            run_dial_address_job(&client, &store, bridge.opener(), Duration::from_secs(5)).await;
+        assert!(res.is_ok());
+
+        let new_token = "token-from-pre-commit-hook";
+        let new_exp = 1_950_000_000;
+        hook(new_token, new_exp);
+        store.persist_pending().await.expect("persist pending");
+
+        let loaded = load_credential(&config_root).unwrap().unwrap();
+        let live = store.live_credential();
+        assert_eq!(loaded.device_token.as_deref(), Some(new_token));
+        assert_eq!(live.device_token.as_deref(), Some(new_token));
+        assert_eq!(
+            loaded.endpoints[0],
+            EndpointAddr {
+                host: "192.0.2.10".to_owned(),
+                port: 7657
+            }
+        );
+        assert_eq!(
+            live.endpoints[0],
+            EndpointAddr {
+                host: "192.0.2.10".to_owned(),
+                port: 7657
+            }
+        );
+        assert_eq!(
+            bridge.opener().live_dial_credential().endpoints[0],
+            EndpointAddr {
+                host: "192.0.2.10".to_owned(),
+                port: 7657
+            }
+        );
+        assert_eq!(loaded.local_endpoints, initial_cred.local_endpoints);
+
+        bridge.shutdown().await;
+        peer.shutdown().await;
+    });
+}
+
+#[test]
+fn relay_access_session_timeout_budget_independence_allows_address_refresh() {
+    runtime().block_on(async {
+        let peer = PrivateLinkPeer::start().await;
+        let temporary = TestDirectory::new("session-budget-independence");
+        let config_root = temporary.path().join("config");
+        let data_root = temporary.path().join("data");
+        ensure_private_directory(&config_root).expect("config root");
+        ensure_private_directory(&data_root).expect("data root");
+        let lock = InstanceLock::acquire(&data_root).expect("acquire lock");
+
+        let mut credential = peer.credential();
+        credential.endpoints.push(EndpointAddr {
+            host: "192.0.2.9".to_owned(),
+            port: 7657,
+        });
+        credential.local_endpoints = Some(json!({"distinctive_field": "budget-independence"}));
+        persist_credential(&config_root, &credential).expect("persist cred");
+
+        let refresh = VersionRefreshState::new(
+            config_root.clone(),
+            data_root,
+            credential.instance_id.clone(),
+            &credential.ca_fp_prefix,
+            lock.identity().clone(),
+        );
+
+        peer.enqueue_delayed_relay_access_response(
+            Duration::from_secs(5),
+            200,
+            serde_json::to_vec(&json!({
+                "status": "not_configured",
+                "protocol_version": 2
+            }))
+            .expect("json"),
+        );
+        peer.enqueue_local_endpoints_response(
+            200,
+            serde_json::to_vec(&json!({
+                "v": 2,
+                "endpoints": [{"ip": "192.0.2.10", "port": 7657}]
+            }))
+            .expect("json"),
+        );
+
+        let session = JournalSession::start_with(
+            credential.clone(),
+            config_root.clone(),
+            refresh,
+            Duration::from_secs(1),
+            Arc::new(|| Some("budget-host".to_owned())),
+            solstone_tmux::paths::PlatformKind::Linux,
+            Arc::new(solstone_tmux::clock::SystemClock::utc()),
+        )
+        .await
+        .expect("start session");
+
+        session
+            .wait_for_post_connect_quiescence(Duration::from_secs(5))
+            .await;
+
+        assert_eq!(peer.local_endpoints_request_count(), 1);
+        let live = session.opener().live_dial_credential();
+        assert_eq!(
+            live.endpoints[0],
+            EndpointAddr {
+                host: "192.0.2.10".to_owned(),
+                port: 7657
+            }
+        );
+        let loaded = load_credential(&config_root).unwrap().unwrap();
+        assert_eq!(
+            loaded.endpoints[0],
+            EndpointAddr {
+                host: "192.0.2.10".to_owned(),
+                port: 7657
+            }
+        );
+        assert_eq!(loaded.local_endpoints, credential.local_endpoints);
+
+        session.shutdown().await.expect("shutdown session");
+        peer.shutdown().await;
+    });
+}
+
+#[test]
+fn relay_access_dial_address_fault_before_rename_leaves_memory_and_incarnation_clean() {
+    let _fault_guard = FAULT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    runtime().block_on(async {
+        let peer = PrivateLinkPeer::start().await;
+        let temporary = TestDirectory::new("dial-address-fault-before-rename");
+        let config_root = temporary.path().join("config");
+        let data_root = temporary.path().join("data");
+        ensure_private_directory(&config_root).expect("config root");
+        ensure_private_directory(&data_root).expect("data root");
+        let lock = InstanceLock::acquire(&data_root).expect("acquire lock");
+
+        let mut initial_cred = peer.credential();
+        initial_cred.endpoints.push(EndpointAddr {
+            host: "192.0.2.9".to_owned(),
+            port: 7657,
+        });
+        initial_cred.local_endpoints = Some(json!({"distinctive_field": "fault-test"}));
+        persist_credential(&config_root, &initial_cred).expect("persist initial cred");
+
+        let refresh = VersionRefreshState::new(
+            config_root.clone(),
+            data_root,
+            initial_cred.instance_id.clone(),
+            &initial_cred.ca_fp_prefix,
+            lock.identity().clone(),
+        );
+        let bridge = PrivateLinkBridge::start(initial_cred.clone(), None, refresh)
+            .await
+            .expect("start bridge");
+        let client = JournalClient::bootstrap(&bridge)
+            .await
+            .expect("bootstrap client");
+        let pairing_gen = compute_pairing_generation(&initial_cred.client_cert_pem);
+        let (store, _) =
+            CredentialStore::new(config_root.clone(), initial_cred.clone(), pairing_gen);
+
+        let cred_path = config_root.join("credentials.json");
+        let initial_bytes = std::fs::read(&cred_path).expect("read cred bytes");
+        let initial_endpoints = initial_cred.endpoints.clone();
+        let initial_incarnation = bridge.opener().incarnation();
+
+        set_credential_write_fault(
+            &config_root,
+            Some(solstone_tmux::storage::AtomicWriteFault::FailBeforeRename),
+        );
+        peer.enqueue_local_endpoints_response(
+            200,
+            serde_json::to_vec(&json!({
+                "v": 2,
+                "endpoints": [{"ip": "192.0.2.10", "port": 7657}]
+            }))
+            .expect("json"),
+        );
+
+        let res =
+            run_dial_address_job(&client, &store, bridge.opener(), Duration::from_secs(5)).await;
+        set_credential_write_fault(&config_root, None);
+
+        assert!(res.is_err());
+        assert_eq!(
+            std::fs::read(&cred_path).expect("read cred bytes"),
+            initial_bytes
+        );
+        assert_eq!(
+            bridge.opener().live_dial_credential().endpoints,
+            initial_endpoints
+        );
+        assert_eq!(bridge.opener().incarnation(), initial_incarnation);
+        assert!(store.persistence_issue().is_none());
+
+        bridge
+            .opener()
+            .dial_carrier()
+            .await
+            .expect("later dial still works");
+
+        peer.enqueue_local_endpoints_response(
+            200,
+            serde_json::to_vec(&json!({
+                "v": 2,
+                "endpoints": [{"ip": "192.0.2.10", "port": 7657}]
+            }))
+            .expect("json"),
+        );
+        let res2 =
+            run_dial_address_job(&client, &store, bridge.opener(), Duration::from_secs(5)).await;
+        assert!(res2.is_ok());
+        let loaded = load_credential(&config_root).unwrap().unwrap();
+        assert_eq!(
+            loaded.endpoints[0],
+            EndpointAddr {
+                host: "192.0.2.10".to_owned(),
+                port: 7657
+            }
+        );
+        assert_eq!(
+            bridge.opener().live_dial_credential().endpoints,
+            loaded.endpoints
+        );
+
+        bridge.shutdown().await;
+        peer.shutdown().await;
+    });
+}
+
+#[test]
+fn relay_access_dial_address_store_invalidation_and_stale_attempt_isolation() {
+    runtime().block_on(async {
+        let peer = PrivateLinkPeer::start().await;
+        let temporary = TestDirectory::new("dial-address-invalidate-and-stale");
+        let config_root = temporary.path().join("config");
+        let data_root = temporary.path().join("data");
+        ensure_private_directory(&config_root).expect("config root");
+        ensure_private_directory(&data_root).expect("data root");
+        let lock = InstanceLock::acquire(&data_root).expect("acquire lock");
+
+        let mut initial_cred = peer.credential();
+        initial_cred.endpoints.push(EndpointAddr {
+            host: "192.0.2.9".to_owned(),
+            port: 7657,
+        });
+        initial_cred.local_endpoints = Some(json!({"distinctive_field": "stale-isolation"}));
+        persist_credential(&config_root, &initial_cred).expect("persist initial cred");
+
+        let refresh = VersionRefreshState::new(
+            config_root.clone(),
+            data_root,
+            initial_cred.instance_id.clone(),
+            &initial_cred.ca_fp_prefix,
+            lock.identity().clone(),
+        );
+        let bridge = PrivateLinkBridge::start(initial_cred.clone(), None, refresh)
+            .await
+            .expect("start bridge");
+        let client = JournalClient::bootstrap(&bridge)
+            .await
+            .expect("bootstrap client");
+        let pairing_gen = compute_pairing_generation(&initial_cred.client_cert_pem);
+        let (store, _) =
+            CredentialStore::new(config_root.clone(), initial_cred.clone(), pairing_gen);
+
+        let initial_endpoints = initial_cred.endpoints.clone();
+        let initial_incarnation = bridge.opener().incarnation();
+
+        peer.hold_local_endpoints();
+        peer.enqueue_local_endpoints_response(
+            200,
+            serde_json::to_vec(&json!({
+                "v": 2,
+                "endpoints": [{"ip": "192.0.2.10", "port": 7657}]
+            }))
+            .expect("json"),
+        );
+
+        let opener = Arc::clone(bridge.opener());
+        let client_for_task = client.clone();
+        let task = tokio::spawn({
+            let store = Arc::clone(&store);
+            async move {
+                run_dial_address_job(&client_for_task, &store, &opener, Duration::from_secs(5))
+                    .await
+            }
+        });
+
+        peer.wait_for_local_endpoints_hold(Duration::from_secs(5))
+            .await;
+        store.invalidate();
+        peer.release_local_endpoints();
+
+        assert!(task.await.expect("task join").is_err());
+        assert_eq!(
+            bridge.opener().live_dial_credential().endpoints,
+            initial_endpoints
+        );
+        assert_eq!(bridge.opener().incarnation(), initial_incarnation);
+
+        let (fresh_store, _) =
+            CredentialStore::new(config_root.clone(), initial_cred.clone(), pairing_gen);
+        let _att1 = fresh_store.capture_access_attempt(1);
+        let _att2 = fresh_store.capture_access_attempt(2);
+
+        peer.enqueue_local_endpoints_response(
+            200,
+            serde_json::to_vec(&json!({
+                "v": 2,
+                "endpoints": [{"ip": "192.0.2.10", "port": 7657}]
+            }))
+            .expect("json"),
+        );
+
+        let res = run_dial_address_job(
+            &client,
+            &fresh_store,
+            bridge.opener(),
+            Duration::from_secs(5),
+        )
+        .await;
+        assert!(res.is_ok());
+        let loaded = load_credential(&config_root).unwrap().unwrap();
+        assert_eq!(
+            loaded.endpoints[0],
+            EndpointAddr {
+                host: "192.0.2.10".to_owned(),
+                port: 7657
+            }
+        );
+
+        bridge.shutdown().await;
+        peer.shutdown().await;
+    });
+}
+
+#[test]
+fn relay_access_dial_carrier_routes_to_additional_listener_after_address_refresh() {
+    runtime().block_on(async {
+        let peer = PrivateLinkPeer::start().await;
+        let (second_port, additional_accept_count) = peer.bind_additional_listener().await;
+
+        let temporary = TestDirectory::new("dial-carrier-additional-listener");
+        let config_root = temporary.path().join("config");
+        let data_root = temporary.path().join("data");
+        ensure_private_directory(&config_root).expect("config root");
+        ensure_private_directory(&data_root).expect("data root");
+        let lock = InstanceLock::acquire(&data_root).expect("acquire lock");
+
+        let mut initial_cred = peer.credential();
+        initial_cred.endpoints.push(EndpointAddr {
+            host: "192.0.2.9".to_owned(),
+            port: 7657,
+        });
+        initial_cred.local_endpoints = Some(json!({"distinctive_field": "additional-listener"}));
+        persist_credential(&config_root, &initial_cred).expect("persist initial cred");
+
+        let refresh = VersionRefreshState::new(
+            config_root.clone(),
+            data_root,
+            initial_cred.instance_id.clone(),
+            &initial_cred.ca_fp_prefix,
+            lock.identity().clone(),
+        );
+        let bridge = PrivateLinkBridge::start(initial_cred.clone(), None, refresh)
+            .await
+            .expect("start bridge");
+        let client = JournalClient::bootstrap(&bridge)
+            .await
+            .expect("bootstrap client");
+        let pairing_gen = compute_pairing_generation(&initial_cred.client_cert_pem);
+        let (store, _) =
+            CredentialStore::new(config_root.clone(), initial_cred.clone(), pairing_gen);
+
+        peer.enqueue_local_endpoints_response(
+            200,
+            serde_json::to_vec(&json!({
+                "v": 2,
+                "endpoints": [{"ip": "127.0.0.1", "port": second_port}]
+            }))
+            .expect("json"),
+        );
+
+        let res =
+            run_dial_address_job(&client, &store, bridge.opener(), Duration::from_secs(5)).await;
+        assert!(res.is_ok());
+
+        let accepted_before = peer.accepted_carriers();
+        let additional_before = additional_accept_count.load(std::sync::atomic::Ordering::SeqCst);
+
+        peer.close_accepted_carriers();
+        bridge
+            .opener()
+            .dial_carrier()
+            .await
+            .expect("dial carrier to second listener");
+
+        assert_eq!(
+            additional_accept_count.load(std::sync::atomic::Ordering::SeqCst),
+            additional_before + 1
+        );
+        assert_eq!(peer.accepted_carriers(), accepted_before + 1);
+
+        bridge.shutdown().await;
         peer.shutdown().await;
     });
 }

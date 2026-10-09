@@ -133,6 +133,11 @@ impl PrivateLinkOpener {
             }
         }
     }
+
+    pub fn incarnation(&self) -> u64 {
+        let state = self.state.read().unwrap_or_else(|e| e.into_inner());
+        state.incarnation
+    }
 }
 
 impl CarrierOpener for PrivateLinkOpener {

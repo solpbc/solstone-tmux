@@ -186,15 +186,18 @@ struct PeerState {
     clients_self_responses: Arc<Mutex<VecDeque<PeerResponse>>>,
     about_responses: Arc<Mutex<VecDeque<PeerResponse>>>,
     relay_access_responses: Arc<Mutex<VecDeque<PeerResponse>>>,
+    local_endpoints_responses: Arc<Mutex<VecDeque<PeerResponse>>>,
     requests: Arc<Mutex<Vec<PeerRequest>>>,
     request_count: Arc<AtomicUsize>,
     clients_self_request_count: Arc<AtomicUsize>,
     relay_access_request_count: Arc<AtomicUsize>,
+    local_endpoints_request_count: Arc<AtomicUsize>,
     system_status_request_count: Arc<AtomicUsize>,
     request_arrived: Arc<Notify>,
     clients_self_hold: Arc<PathHold>,
     handshake_hold: Arc<PathHold>,
     relay_access_hold: Arc<PathHold>,
+    local_endpoints_hold: Arc<PathHold>,
     system_status_hold: Arc<PathHold>,
     answer_uploads_with_descriptors: Arc<AtomicBool>,
     withhold_credit: Arc<AtomicBool>,
@@ -231,6 +234,8 @@ pub struct PrivateLinkPeer {
     credential: Credential,
     state: PeerState,
     controls: tokio::sync::broadcast::Sender<Control>,
+    acceptor: TlsAcceptor,
+    additional_tasks: Arc<Mutex<Vec<JoinHandle<()>>>>,
     task: JoinHandle<()>,
 }
 
@@ -267,15 +272,18 @@ impl PrivateLinkPeer {
             clients_self_responses: Arc::new(Mutex::new(VecDeque::new())),
             about_responses: Arc::new(Mutex::new(VecDeque::new())),
             relay_access_responses: Arc::new(Mutex::new(VecDeque::new())),
+            local_endpoints_responses: Arc::new(Mutex::new(VecDeque::new())),
             requests: Arc::new(Mutex::new(Vec::new())),
             request_count: Arc::new(AtomicUsize::new(0)),
             clients_self_request_count: Arc::new(AtomicUsize::new(0)),
             relay_access_request_count: Arc::new(AtomicUsize::new(0)),
+            local_endpoints_request_count: Arc::new(AtomicUsize::new(0)),
             system_status_request_count: Arc::new(AtomicUsize::new(0)),
             request_arrived: Arc::new(Notify::new()),
             clients_self_hold: Arc::new(PathHold::default()),
             handshake_hold: Arc::new(PathHold::default()),
             relay_access_hold: Arc::new(PathHold::default()),
+            local_endpoints_hold: Arc::new(PathHold::default()),
             system_status_hold: Arc::new(PathHold::default()),
             answer_uploads_with_descriptors: Arc::new(AtomicBool::new(false)),
             withhold_credit: Arc::new(AtomicBool::new(false)),
@@ -287,12 +295,21 @@ impl PrivateLinkPeer {
             expected_client_sha256: Arc::new(Mutex::new(Some(client_sha256))),
         };
         let (controls, _) = tokio::sync::broadcast::channel(16);
-        let task = tokio::spawn(serve(listener, acceptor, state.clone(), controls.clone()));
+        let additional_tasks = Arc::new(Mutex::new(Vec::new()));
+        let task = tokio::spawn(serve(
+            listener,
+            acceptor.clone(),
+            state.clone(),
+            controls.clone(),
+            None,
+        ));
 
         Self {
             credential,
             state,
             controls,
+            acceptor,
+            additional_tasks,
             task,
         }
     }
@@ -469,6 +486,31 @@ impl PrivateLinkPeer {
         });
     }
 
+    pub fn enqueue_local_endpoints_response(&self, status: u16, body: impl Into<Vec<u8>>) {
+        lock(&self.state.local_endpoints_responses).push_back(PeerResponse::Structured {
+            status,
+            body: body.into(),
+            delay: None,
+        });
+    }
+
+    pub fn enqueue_delayed_local_endpoints_response(
+        &self,
+        delay: std::time::Duration,
+        status: u16,
+        body: impl Into<Vec<u8>>,
+    ) {
+        lock(&self.state.local_endpoints_responses).push_back(PeerResponse::Structured {
+            status,
+            body: body.into(),
+            delay: Some(delay),
+        });
+    }
+
+    pub fn enqueue_raw_local_endpoints_response(&self, response: impl Into<Vec<u8>>) {
+        lock(&self.state.local_endpoints_responses).push_back(PeerResponse::Raw(response.into()));
+    }
+
     pub fn enqueue_raw_response(&self, response: impl Into<Vec<u8>>) {
         lock(&self.state.responses).push_back(PeerResponse::Raw(response.into()));
     }
@@ -540,6 +582,31 @@ impl PrivateLinkPeer {
         })
         .await
         .expect("relay access request receipt timed out");
+    }
+
+    pub fn local_endpoints_request_count(&self) -> usize {
+        self.state
+            .local_endpoints_request_count
+            .load(Ordering::SeqCst)
+    }
+
+    pub async fn wait_for_local_endpoints_request_count(
+        &self,
+        target: usize,
+        timeout: std::time::Duration,
+    ) {
+        tokio::time::timeout(timeout, async {
+            while self.local_endpoints_request_count() < target {
+                let notified = self.state.request_arrived.notified();
+                tokio::pin!(notified);
+                notified.as_mut().enable();
+                if self.local_endpoints_request_count() < target {
+                    notified.await;
+                }
+            }
+        })
+        .await
+        .expect("local endpoints request receipt timed out");
     }
 
     pub fn system_status_request_count(&self) -> usize {
@@ -625,6 +692,21 @@ impl PrivateLinkPeer {
         self.state.relay_access_hold.release();
     }
 
+    pub fn hold_local_endpoints(&self) {
+        self.state.local_endpoints_hold.hold();
+    }
+
+    pub async fn wait_for_local_endpoints_hold(&self, timeout: std::time::Duration) {
+        self.state
+            .local_endpoints_hold
+            .wait_for_arrivals(1, timeout)
+            .await;
+    }
+
+    pub fn release_local_endpoints(&self) {
+        self.state.local_endpoints_hold.release();
+    }
+
     pub fn hold_system_status(&self) {
         self.state.system_status_hold.hold();
     }
@@ -672,7 +754,32 @@ impl PrivateLinkPeer {
         self.state.active_carrier_handlers.load(Ordering::SeqCst)
     }
 
+    pub async fn bind_additional_listener(&self) -> (u16, Arc<AtomicUsize>) {
+        let listener = TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("bind additional listener");
+        let port = listener.local_addr().expect("read additional port").port();
+        let counter = Arc::new(AtomicUsize::new(0));
+        let task = tokio::spawn(serve(
+            listener,
+            self.acceptor.clone(),
+            self.state.clone(),
+            self.controls.clone(),
+            Some(counter.clone()),
+        ));
+        lock(&self.additional_tasks).push(task);
+        (port, counter)
+    }
+
     pub async fn shutdown(self) {
+        let additional = {
+            let mut tasks = lock(&self.additional_tasks);
+            std::mem::take(&mut *tasks)
+        };
+        for task in additional {
+            task.abort();
+            let _ = task.await;
+        }
         self.task.abort();
         let _ = self.task.await;
     }
@@ -834,12 +941,16 @@ async fn serve(
     acceptor: TlsAcceptor,
     state: PeerState,
     controls: tokio::sync::broadcast::Sender<Control>,
+    additional_accepted: Option<Arc<AtomicUsize>>,
 ) {
     loop {
         let Ok((tcp, _)) = listener.accept().await else {
             return;
         };
         state.accepted.fetch_add(1, Ordering::SeqCst);
+        if let Some(ref counter) = additional_accepted {
+            counter.fetch_add(1, Ordering::SeqCst);
+        }
         state.handshake_hold.wait_if_held().await;
         let Ok(tls) = acceptor.accept(tcp).await else {
             continue;
@@ -959,6 +1070,7 @@ async fn handle_carrier(
                         let is_clients_self = path.as_deref() == Some("/app/network/api/clients/self");
                         let is_about = path.as_deref() == Some("/api/system/about");
                         let is_relay_access = path.as_deref() == Some("/app/network/api/relay/access");
+                        let is_local_endpoints = path.as_deref() == Some("/app/network/local-endpoints");
                         state.request_count.fetch_add(1, Ordering::SeqCst);
                         if is_clients_self {
                             state
@@ -967,6 +1079,10 @@ async fn handle_carrier(
                         } else if is_relay_access {
                             state
                                 .relay_access_request_count
+                                .fetch_add(1, Ordering::SeqCst);
+                        } else if is_local_endpoints {
+                            state
+                                .local_endpoints_request_count
                                 .fetch_add(1, Ordering::SeqCst);
                         } else if is_system_status {
                             state
@@ -978,6 +1094,8 @@ async fn handle_carrier(
                             state.clients_self_hold.wait_if_held().await;
                         } else if is_relay_access {
                             state.relay_access_hold.wait_if_held().await;
+                        } else if is_local_endpoints {
+                            state.local_endpoints_hold.wait_if_held().await;
                         } else if is_system_status {
                             state.system_status_hold.wait_if_held().await;
                         }
@@ -1076,6 +1194,14 @@ async fn handle_carrier(
                                 })
                         } else if is_relay_access {
                             lock(&state.relay_access_responses)
+                                .pop_front()
+                                .unwrap_or(PeerResponse::Structured {
+                                    status: 404,
+                                    body: Vec::new(),
+                                    delay: None,
+                                })
+                        } else if is_local_endpoints {
+                            lock(&state.local_endpoints_responses)
                                 .pop_front()
                                 .unwrap_or(PeerResponse::Structured {
                                     status: 404,

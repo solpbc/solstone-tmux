@@ -203,8 +203,9 @@ server-issued ingest URL or read `observer.json`.
 
 Optional post-connection publication (`GET`/`PUT /app/network/api/clients/self`)
 and optional relay access (`GET /app/network/api/relay/access`) share one finite
-two-pass burst. Bootstrap and a later external reconnect start a burst;
-job-induced bridge dials do not. Hostname is resampled only for a pass, never
+two-pass burst. That access lane then reads `GET /app/network/local-endpoints`
+and stores the journal's current dial endpoints on the paired credential. Bootstrap
+and a later external reconnect start a burst; job-induced bridge dials do not. Hostname is resampled only for a pass, never
 polled. CredentialStore is the ordered mutation owner: it publishes accepted
 ready, renewal, and disable state before installing the next opener transport.
 `not_configured` immediately blocks relay dials while retaining any LAN path,

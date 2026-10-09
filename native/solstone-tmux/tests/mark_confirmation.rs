@@ -54,6 +54,7 @@ fn assert_journal_retire(
     assert_eq!(peer.system_status_request_count(), 0);
     assert_eq!(peer.clients_self_request_count(), 0);
     assert_eq!(peer.relay_access_request_count(), 0);
+    assert_eq!(peer.local_endpoints_request_count(), 0);
     assert_eq!(peer.accepted_carriers(), index + 1);
 }
 
@@ -1154,6 +1155,7 @@ fn mark_argument_words() {
                 assert_eq!(fresh_peer.system_status_request_count(), 0);
                 assert_eq!(fresh_peer.clients_self_request_count(), 0);
                 assert_eq!(fresh_peer.relay_access_request_count(), 0);
+                assert_eq!(fresh_peer.local_endpoints_request_count(), 0);
                 assert_eq!(fresh_peer.accepted_carriers(), 0);
             }
 
@@ -1217,6 +1219,7 @@ fn mark_argument_words() {
             assert_eq!(fresh_peer.system_status_request_count(), 0);
             assert_eq!(fresh_peer.clients_self_request_count(), 0);
             assert_eq!(fresh_peer.relay_access_request_count(), 0);
+            assert_eq!(fresh_peer.local_endpoints_request_count(), 0);
             assert_eq!(fresh_peer.accepted_carriers(), 0);
             fresh_peer.shutdown().await;
         }
@@ -1315,6 +1318,7 @@ fn repair_keeps_confirmed_credential() {
             assert_eq!(peer_x.system_status_request_count(), 0);
             assert_eq!(peer_x.clients_self_request_count(), 0);
             assert_eq!(peer_x.relay_access_request_count(), 0);
+            assert_eq!(peer_x.local_endpoints_request_count(), 0);
         }
 
         // 2. Re-pairing with confirmed cred X: "cancel" leaves X bytes identical and confirmed
@@ -1360,6 +1364,7 @@ fn repair_keeps_confirmed_credential() {
             assert_eq!(peer_x.system_status_request_count(), 0);
             assert_eq!(peer_x.clients_self_request_count(), 0);
             assert_eq!(peer_x.relay_access_request_count(), 0);
+            assert_eq!(peer_x.local_endpoints_request_count(), 0);
         }
 
         // 3. Re-pairing with confirmed cred X: mismatch --mark leaves X bytes identical and confirmed
@@ -1404,6 +1409,7 @@ fn repair_keeps_confirmed_credential() {
             assert_eq!(peer_x.system_status_request_count(), 0);
             assert_eq!(peer_x.clients_self_request_count(), 0);
             assert_eq!(peer_x.relay_access_request_count(), 0);
+            assert_eq!(peer_x.local_endpoints_request_count(), 0);
         }
 
         // 4. Re-pairing with confirmed cred X: EOF (walk away) leaves X confirmed and prints CANCEL, exit 1
@@ -1448,6 +1454,7 @@ fn repair_keeps_confirmed_credential() {
             assert_eq!(peer_x.system_status_request_count(), 0);
             assert_eq!(peer_x.clients_self_request_count(), 0);
             assert_eq!(peer_x.relay_access_request_count(), 0);
+            assert_eq!(peer_x.local_endpoints_request_count(), 0);
         }
 
         // 5. Re-pairing with confirmed cred X: ceremony Err leaves X bytes identical and confirmed
@@ -1483,6 +1490,7 @@ fn repair_keeps_confirmed_credential() {
             assert_eq!(peer_x.system_status_request_count(), 0);
             assert_eq!(peer_x.clients_self_request_count(), 0);
             assert_eq!(peer_x.relay_access_request_count(), 0);
+            assert_eq!(peer_x.local_endpoints_request_count(), 0);
         }
 
         // 5b. Absent answer file + EOF: grandfathering writes X's generation, X confirmed & byte-identical, DELETE sent for new cert to peer_new, 0 to peer_x
@@ -1528,6 +1536,7 @@ fn repair_keeps_confirmed_credential() {
             assert_eq!(peer_x.system_status_request_count(), 0);
             assert_eq!(peer_x.clients_self_request_count(), 0);
             assert_eq!(peer_x.relay_access_request_count(), 0);
+            assert_eq!(peer_x.local_endpoints_request_count(), 0);
         }
 
         // 5c. Absent answer file + "no": grandfathering writes X's generation, X confirmed & byte-identical, DELETE sent for new cert to peer_new, 0 to peer_x
@@ -1573,6 +1582,7 @@ fn repair_keeps_confirmed_credential() {
             assert_eq!(peer_x.system_status_request_count(), 0);
             assert_eq!(peer_x.clients_self_request_count(), 0);
             assert_eq!(peer_x.relay_access_request_count(), 0);
+            assert_eq!(peer_x.local_endpoints_request_count(), 0);
         }
 
         // 5d. Held-only walk-away with two fresh peers: credential H stored, answer file "", pairer returns N -> exit 5 HELD, RUN_LINE, N stored, is_status_held true, no DELETE
@@ -2160,6 +2170,11 @@ fn pairing_gate_uploads_after_confirm() {
 
         let mut cred = peer.credential();
         cred.instance_id = test_jid();
+        cred.endpoints
+            .push(spl_transport::credential::EndpointAddr {
+                host: "192.0.2.9".to_string(),
+                port: 7657,
+            });
         persist_credential(&roots.config_root(), &cred).expect("persist");
 
         let generation = hex_encode(&compute_pairing_generation(&cred.client_cert_pem));
@@ -2228,6 +2243,7 @@ fn pairing_gate_uploads_after_confirm() {
         let health_val: serde_json::Value =
             serde_json::from_slice(&health_raw).expect("health json");
         assert_eq!(health_val["state"], "held");
+        assert_eq!(peer.local_endpoints_request_count(), 0);
 
         // Removing the answer file during the held wait does not recreate it
         fs::remove_file(roots.config_root().join(ANSWER_FILENAME)).ok();
@@ -2239,6 +2255,7 @@ fn pairing_gate_uploads_after_confirm() {
         let health_val: serde_json::Value =
             serde_json::from_slice(&health_raw).expect("health json");
         assert_eq!(health_val["state"], "held");
+        assert_eq!(peer.local_endpoints_request_count(), 0);
         write_answer_file(&roots.config_root(), "").expect("write answer");
 
         // Spawn real binary confirm --mark "<words>" with SOLSTONE_TMUX_TERMINAL=- (while locks held)
@@ -2262,7 +2279,7 @@ fn pairing_gate_uploads_after_confirm() {
                 .into_iter()
                 .filter(|r| r.path_without_query() == "/app/devices/ingest")
                 .count();
-            if count >= 2 {
+            if count >= 2 && peer.local_endpoints_request_count() >= 1 {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
@@ -2273,6 +2290,7 @@ fn pairing_gate_uploads_after_confirm() {
             .filter(|r| r.path_without_query() == "/app/devices/ingest")
             .count();
         assert_eq!(ingest_requests, 2);
+        assert_eq!(peer.local_endpoints_request_count(), 1);
 
         // Shutdown finishes within 2s
         let start = std::time::Instant::now();
@@ -2538,6 +2556,7 @@ fn retire_through_setup_and_confirm() {
                 assert_eq!(peer_x.system_status_request_count(), 0);
                 assert_eq!(peer_x.clients_self_request_count(), 0);
                 assert_eq!(peer_x.relay_access_request_count(), 0);
+                assert_eq!(peer_x.local_endpoints_request_count(), 0);
                 assert_journal_retire(&ctx_y.peer, &expected_sha_y, 200, 0);
                 if relay {
                     assert_eq!(
