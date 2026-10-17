@@ -323,11 +323,11 @@ fn mark_wording_owner_transcript() {
     assert_eq!(NOT_PAIRED, "not paired.");
     assert_eq!(
         MISMATCH_BODY,
-        "you said this mark doesn't match the one your journal shows, so this computer isn't paired, and nothing it has kept went to that journal through this link. you may have pasted the wrong link, or something isn't right. get a fresh pair link from your journal and run setup again, or email support@solstone.app and we'll help."
+        "you said this mark doesn't match the one your journal shows, so this computer isn't paired, and nothing it has kept went to that journal through this link. you may have pasted the wrong link, or something isn't right. get a fresh pairing link from your journal and run setup again, or email support@solstone.app and we'll help."
     );
     assert_eq!(
         CANCEL,
-        "pairing cancelled. nothing this computer has kept went to that journal through this link. get a fresh pair link from your journal and run setup again when you're ready."
+        "pairing cancelled. nothing this computer has kept went to that journal through this link. get a fresh pairing link from your journal and run setup again when you're ready."
     );
     assert_eq!(
         HELD,
@@ -360,11 +360,11 @@ fn mark_wording_owner_transcript() {
     );
     assert_eq!(
         MARK_MISMATCH,
-        "the mark words you gave don't match the journal's mark, so this computer isn't paired, and nothing it has kept went to that journal through this link. check the words, get a fresh pair link from your journal and run setup again."
+        "the mark words you gave don't match the journal's mark, so this computer isn't paired, and nothing it has kept went to that journal through this link. check the words, get a fresh pairing link from your journal and run setup again."
     );
     assert_eq!(
         MARK_UNVERIFIABLE_SETUP,
-        "this computer couldn't work out the journal's mark, so the words you gave can't be matched. this computer isn't paired, and nothing it has kept went to that journal through this link. get a fresh pair link from your journal and run setup in a terminal to decide for yourself."
+        "this computer couldn't work out the journal's mark, so the words you gave can't be matched. this computer isn't paired, and nothing it has kept went to that journal through this link. get a fresh pairing link from your journal and run setup in a terminal to decide for yourself."
     );
     assert_eq!(
         MARK_UNVERIFIABLE_CONFIRM,
@@ -2235,11 +2235,18 @@ fn pairing_gate_uploads_after_confirm() {
             let _ = task.run(shutdown_rx).await;
         });
 
-        // Across two intervals, peer.requests() is empty and peer accepted no carrier
+        // Across two intervals, peer.requests() is empty and peer accepted no carrier.
+        // Wait for the held state to be written rather than a fixed interval:
+        // a loaded host can take longer than two intervals to reach it.
         tokio::time::sleep(Duration::from_millis(150)).await;
+        let health_path = roots.data_root().join("sync-health.json");
+        let wait_start = Instant::now();
+        while !health_path.exists() && wait_start.elapsed() < Duration::from_secs(5) {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
         assert_eq!(peer.requests().len(), 0);
         assert_eq!(peer.accepted_carriers(), 0);
-        let health_raw = fs::read(roots.data_root().join("sync-health.json")).expect("health file");
+        let health_raw = fs::read(&health_path).expect("health file");
         let health_val: serde_json::Value =
             serde_json::from_slice(&health_raw).expect("health json");
         assert_eq!(health_val["state"], "held");
