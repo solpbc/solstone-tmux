@@ -197,19 +197,19 @@ impl FileStorage {
                 rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
             )
             .map_err(|source| StorageError::Io {
-                stage: "open JSONL",
+                stage: crate::i18n::MessageId::CliStorageHandleOpenJsonl.text(),
                 path: path.clone(),
                 source: source.into(),
             })?;
             let file = File::from(descriptor);
             file.set_permissions(fs::Permissions::from_mode(0o600))
                 .map_err(|source| StorageError::Io {
-                    stage: "set JSONL permissions",
+                    stage: crate::i18n::MessageId::CliStorageHandleSetJsonlPermissions.text(),
                     path: path.clone(),
                     source,
                 })?;
             let metadata = file.metadata().map_err(|source| StorageError::Io {
-                stage: "inspect JSONL",
+                stage: crate::i18n::MessageId::CliStorageHandleInspectJsonl.text(),
                 path: path.clone(),
                 source,
             })?;
@@ -228,7 +228,7 @@ impl FileStorage {
         self.faults
             .fail(StorageStage::Rollback)
             .map_err(|source| StorageError::Io {
-                stage: "rollback injection",
+                stage: crate::i18n::MessageId::CliStorageRollbackRollbackInjection.text(),
                 path: self.segment_dir.join(filename),
                 source,
             })?;
@@ -237,23 +237,23 @@ impl FileStorage {
             return Ok(());
         };
         file.set_len(offset).map_err(|source| StorageError::Io {
-            stage: "truncate rollback",
+            stage: crate::i18n::MessageId::CliStorageRollbackTruncateRollback.text(),
             path: path.clone(),
             source,
         })?;
         file.seek(SeekFrom::Start(offset))
             .map_err(|source| StorageError::Io {
-                stage: "seek rollback",
+                stage: crate::i18n::MessageId::CliStorageRollbackSeekRollback.text(),
                 path: path.clone(),
                 source,
             })?;
         file.flush().map_err(|source| StorageError::Io {
-            stage: "flush rollback",
+            stage: crate::i18n::MessageId::CliStorageRollbackFlushRollback.text(),
             path: path.clone(),
             source,
         })?;
         file.sync_all().map_err(|source| StorageError::Io {
-            stage: "fsync rollback",
+            stage: crate::i18n::MessageId::CliStorageRollbackFsyncRollback.text(),
             path,
             source,
         })
@@ -266,7 +266,7 @@ impl FileStorage {
         let fsync_fault = self.faults.fail(StorageStage::JsonFsync).err();
         let file = self.handle(frame.filename)?;
         let length = file.metadata().map_err(|source| StorageError::Io {
-            stage: "inspect append offset",
+            stage: crate::i18n::MessageId::CliStorageAppendInnerInspectAppendOffset.text(),
             path: path.clone(),
             source,
         })?;
@@ -279,7 +279,7 @@ impl FileStorage {
         }
         file.seek(SeekFrom::Start(frame.previous_offset))
             .map_err(|source| StorageError::Io {
-                stage: "seek append",
+                stage: crate::i18n::MessageId::CliStorageAppendInnerSeekAppend.text(),
                 path: path.clone(),
                 source,
             })?;
@@ -287,12 +287,12 @@ impl FileStorage {
             let partial = frame.bytes.len().div_ceil(2);
             file.write_all(&frame.bytes[..partial])
                 .map_err(|write_source| StorageError::Io {
-                    stage: "partial append",
+                    stage: crate::i18n::MessageId::CliStorageAppendInnerPartialAppend.text(),
                     path: path.clone(),
                     source: write_source,
                 })?;
             return Err(StorageError::Io {
-                stage: "append injection",
+                stage: crate::i18n::MessageId::CliStorageAppendInnerAppendInjection.text(),
                 path,
                 source,
             });
@@ -305,7 +305,7 @@ impl FileStorage {
             })?;
         if let Some(source) = flush_fault {
             return Err(StorageError::Io {
-                stage: "flush injection",
+                stage: crate::i18n::MessageId::CliStorageAppendInnerFlushInjection.text(),
                 path: path.clone(),
                 source,
             });
@@ -317,13 +317,13 @@ impl FileStorage {
         })?;
         if let Some(source) = fsync_fault {
             return Err(StorageError::Io {
-                stage: "JSONL fsync injection",
+                stage: crate::i18n::MessageId::CliStorageAppendInnerJsonlFsyncInjection.text(),
                 path: path.clone(),
                 source,
             });
         }
         file.sync_all().map_err(|source| StorageError::Io {
-            stage: "fsync JSONL",
+            stage: crate::i18n::MessageId::CliStorageAppendInnerFsyncJsonl.text(),
             path: path.clone(),
             source,
         })?;
@@ -355,7 +355,7 @@ fn open_regular_readonly_from(
         rustix::fs::Mode::empty(),
     )
     .map_err(|source| StorageError::Io {
-        stage: "open regular file",
+        stage: crate::i18n::MessageId::CliStorageOpenRegularReadonlyFromOpenRegularFile.text(),
         path: path.to_owned(),
         source: source.into(),
     })?;
@@ -364,7 +364,7 @@ fn open_regular_readonly_from(
 
 fn validate_regular_file(file: File, path: &Path) -> Result<File, StorageError> {
     let metadata = file.metadata().map_err(|source| StorageError::Io {
-        stage: "inspect regular file",
+        stage: crate::i18n::MessageId::CliStorageValidateRegularFileInspectRegularFile.text(),
         path: path.to_owned(),
         source,
     })?;
@@ -384,13 +384,13 @@ pub fn open_directory_readonly(path: &Path) -> Result<File, StorageError> {
         rustix::fs::Mode::empty(),
     )
     .map_err(|source| StorageError::Io {
-        stage: "open directory",
+        stage: crate::i18n::MessageId::CliStorageOpenDirectoryReadonlyOpenDirectory.text(),
         path: path.to_owned(),
         source: source.into(),
     })?;
     let file = File::from(descriptor);
     let metadata = file.metadata().map_err(|source| StorageError::Io {
-        stage: "inspect directory",
+        stage: crate::i18n::MessageId::CliStorageOpenDirectoryReadonlyInspectDirectory.text(),
         path: path.to_owned(),
         source,
     })?;
@@ -404,7 +404,7 @@ impl DurableStorage for FileStorage {
     fn append_frame(&mut self, frame: AppendFrame<'_>) -> Result<DurableAppend, StorageError> {
         let previous_metadata =
             fs::read(&self.metadata_path).map_err(|source| StorageError::Io {
-                stage: "read previous metadata",
+                stage: crate::i18n::MessageId::CliStorageAppendFrameReadPreviousMetadata.text(),
                 path: self.metadata_path.clone(),
                 source,
             })?;
@@ -423,7 +423,7 @@ impl DurableStorage for FileStorage {
             .faults
             .fail(StorageStage::Metadata)
             .map_err(|source| StorageError::Io {
-                stage: "metadata injection",
+                stage: crate::i18n::MessageId::CliStorageAppendFrameMetadataInjection.text(),
                 path: self.metadata_path.clone(),
                 source,
             })
@@ -462,12 +462,12 @@ impl DurableStorage for FileStorage {
         for (filename, mut file) in handles {
             let path = self.segment_dir.join(filename);
             file.flush().map_err(|source| StorageError::Io {
-                stage: "final flush",
+                stage: crate::i18n::MessageId::CliStorageSyncAndCloseFinalFlush.text(),
                 path: path.clone(),
                 source,
             })?;
             file.sync_all().map_err(|source| StorageError::Io {
-                stage: "final fsync",
+                stage: crate::i18n::MessageId::CliStorageSyncAndCloseFinalFsync.text(),
                 path,
                 source,
             })?;
@@ -514,44 +514,32 @@ impl StorageError {
 impl fmt::Display for StorageError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Serialize(error) => write!(formatter, "metadata serialization failed: {error}"),
+            Self::Serialize(error) => write!(formatter, "{}", crate::i18n::render(crate::i18n::MessageId::CliStorageFmtMetadataSerializationFailed, &[("error", crate::i18n::ArgValue::Text((error).to_string()))])),
             Self::InvalidTarget(path) => {
-                write!(formatter, "invalid file target: {}", path.display())
+                write!(formatter, "{}", crate::i18n::render(crate::i18n::MessageId::CliStorageFmtInvalidFileTarget, &[("arg0", crate::i18n::ArgValue::Text((path.display()).to_string()))]))
             }
             Self::OffsetMismatch {
                 path,
                 expected,
                 actual,
-            } => write!(
-                formatter,
-                "{} has length {actual}, expected durable offset {expected}",
-                path.display()
-            ),
+            } => write!(formatter, "{}", crate::i18n::render(crate::i18n::MessageId::CliStorageFmtHasLengthExpectedDurableOffset, &[("arg0", crate::i18n::ArgValue::Text((path.display()).to_string())), ("actual", crate::i18n::ArgValue::Text((actual).to_string())), ("expected", crate::i18n::ArgValue::Text((expected).to_string()))])),
             Self::Io {
                 stage,
                 path,
                 source,
-            } => write!(formatter, "{stage} failed for {}: {source}", path.display()),
-            Self::Recoverable(error) => write!(formatter, "append rolled back: {error}"),
+            } => write!(formatter, "{}", crate::i18n::render(crate::i18n::MessageId::CliStorageFmtFailedFor, &[("stage", crate::i18n::ArgValue::Text((stage).to_string())), ("arg0", crate::i18n::ArgValue::Text((path.display()).to_string())), ("source", crate::i18n::ArgValue::Text((source).to_string()))])),
+            Self::Recoverable(error) => write!(formatter, "{}", crate::i18n::render(crate::i18n::MessageId::CliStorageFmtAppendRolledBack, &[("error", crate::i18n::ArgValue::Text((error).to_string()))])),
             Self::Poisoned {
                 operation,
                 rollback,
-            } => write!(
-                formatter,
-                "append failed and rollback failed: operation={operation}; rollback={rollback}"
-            ),
+            } => write!(formatter, "{}", crate::i18n::render(crate::i18n::MessageId::CliStorageFmtAppendFailedAndRollbackFailedOperationRollback, &[("operation", crate::i18n::ArgValue::Text((operation).to_string())), ("rollback", crate::i18n::ArgValue::Text((rollback).to_string()))])),
             Self::RollbackGroup { json, metadata } => {
-                write!(
-                    formatter,
-                    "rollback group failed (JSONL={}, metadata={})",
-                    json.as_deref()
+                write!(formatter, "{}", crate::i18n::render(crate::i18n::MessageId::CliStorageFmtRollbackGroupFailedJsonlMetadata, &[("arg0", crate::i18n::ArgValue::Text((json.as_deref()
                         .map(ToString::to_string)
-                        .unwrap_or_else(|| "ok".to_owned()),
-                    metadata
+                        .unwrap_or_else(|| "ok".to_owned())).to_string())), ("arg1", crate::i18n::ArgValue::Text((metadata
                         .as_deref()
                         .map(ToString::to_string)
-                        .unwrap_or_else(|| "ok".to_owned())
-                )
+                        .unwrap_or_else(|| "ok".to_owned())).to_string()))]))
             }
         }
     }
@@ -578,7 +566,8 @@ pub fn atomic_write_bytes(path: &Path, parent: &Path, bytes: &[u8]) -> Result<()
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(source) => {
             return Err(StorageError::Io {
-                stage: "inspect atomic write target",
+                stage: crate::i18n::MessageId::CliStorageAtomicWriteBytesInspectAtomicWriteTarget
+                    .text(),
                 path: path.to_owned(),
                 source,
             });
@@ -641,29 +630,30 @@ pub fn atomic_write_bytes(path: &Path, parent: &Path, bytes: &[u8]) -> Result<()
             rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
         )
         .map_err(|source| StorageError::Io {
-            stage: "create metadata temporary",
+            stage: crate::i18n::MessageId::CliStorageAtomicWriteBytesCreateMetadataTemporary.text(),
             path: temporary.clone(),
             source: source.into(),
         })?;
         let mut file = File::from(descriptor);
         file.set_permissions(fs::Permissions::from_mode(0o600))
             .map_err(|source| StorageError::Io {
-                stage: "set metadata permissions",
+                stage: crate::i18n::MessageId::CliStorageAtomicWriteBytesSetMetadataPermissions
+                    .text(),
                 path: temporary.clone(),
                 source,
             })?;
         file.write_all(bytes).map_err(|source| StorageError::Io {
-            stage: "write metadata",
+            stage: crate::i18n::MessageId::CliStorageAtomicWriteBytesWriteMetadata.text(),
             path: temporary.clone(),
             source,
         })?;
         file.flush().map_err(|source| StorageError::Io {
-            stage: "flush metadata",
+            stage: crate::i18n::MessageId::CliStorageAtomicWriteBytesFlushMetadata.text(),
             path: temporary.clone(),
             source,
         })?;
         file.sync_all().map_err(|source| StorageError::Io {
-            stage: "fsync metadata",
+            stage: crate::i18n::MessageId::CliStorageAtomicWriteBytesFsyncMetadata.text(),
             path: temporary.clone(),
             source,
         })?;
@@ -675,7 +665,7 @@ pub fn atomic_write_bytes(path: &Path, parent: &Path, bytes: &[u8]) -> Result<()
             });
         }
         fs::rename(&temporary, path).map_err(|source| StorageError::Io {
-            stage: "rename metadata",
+            stage: crate::i18n::MessageId::CliStorageAtomicWriteBytesRenameMetadata.text(),
             path: path.to_owned(),
             source,
         })?;
@@ -746,7 +736,7 @@ pub fn sync_directory(path: &Path) -> Result<(), StorageError> {
     File::open(path)
         .and_then(|directory| directory.sync_all())
         .map_err(|source| StorageError::Io {
-            stage: "fsync directory",
+            stage: crate::i18n::MessageId::CliStorageSyncDirectoryFsyncDirectory.text(),
             path: path.to_owned(),
             source,
         })

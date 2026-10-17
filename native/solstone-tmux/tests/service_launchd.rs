@@ -1426,7 +1426,7 @@ fn minimal_path_missing_tmux_is_actionable() {
     let error = runtime()
         .block_on(fixture.controller(&runner).0.install())
         .expect_err("tmux must be required");
-    assert_eq!(error.to_string(), TMUX_NOT_FOUND);
+    assert_eq!(error.to_string(), TMUX_NOT_FOUND.text());
     assert!(runner.calls().is_empty());
 }
 

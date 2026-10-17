@@ -176,7 +176,9 @@ fn production_run_refuses_private_state_locked_by_setup() {
     let output = fixture.run_output();
 
     assert_eq!(output.status.code(), Some(1));
-    assert!(String::from_utf8_lossy(&output.stderr).contains("private state is already in use"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains(
+        solstone_tmux::i18n::MessageId::CliMainRunNativePrivateStateIsAlreadyInUse.text()
+    ));
     assert!(!fixture.data_root().join("captures").exists());
 }
 
@@ -254,6 +256,8 @@ impl RunFixture {
         fs::write(
             &self.tmux,
             br#"#!/bin/sh
+[ "$1" = "-u" ] || exit 99
+shift
 printf '%s\n' "$1" >> "$SOLSTONE_TMUX_TMUX_LOG"
 case "$1:$2:$3" in
   show-options:-gv:status-left) cat "$SOLSTONE_TMUX_STATUS_LEFT" ;;

@@ -49,7 +49,9 @@ impl<R: CommandRunner> CommandIndicatorIo<R> {
     pub fn new(runner: R, tmux: PathBuf) -> Result<Self, IndicatorError> {
         if !tmux.is_absolute() {
             return Err(IndicatorError::Protocol(
-                "tmux executable must be absolute".to_owned(),
+                crate::i18n::MessageId::CliIndicatorNewTmuxExecutableMustBeAbsolute
+                    .text()
+                    .to_owned(),
             ));
         }
         Ok(Self { runner, tmux })
@@ -67,7 +69,7 @@ impl<R: CommandRunner> IndicatorIo for CommandIndicatorIo<R> {
                 .run(CommandInvocation {
                     operation: CommandOperation::Tmux(TmuxOperation::ShowOption(name.to_owned())),
                     executable: self.tmux.clone(),
-                    args: ["show-options", "-gv", name]
+                    args: ["-u", "show-options", "-gv", name]
                         .into_iter()
                         .map(OsString::from)
                         .collect(),
@@ -103,7 +105,7 @@ impl<R: CommandRunner> IndicatorIo for CommandIndicatorIo<R> {
                 .run(CommandInvocation {
                     operation: CommandOperation::Tmux(TmuxOperation::SetOption(name.to_owned())),
                     executable: self.tmux.clone(),
-                    args: ["set-option", "-g", name, value]
+                    args: ["-u", "set-option", "-g", name, value]
                         .into_iter()
                         .map(OsString::from)
                         .collect(),
@@ -132,7 +134,7 @@ impl<R: CommandRunner> IndicatorIo for CommandIndicatorIo<R> {
                 .run(CommandInvocation {
                     operation: CommandOperation::Tmux(TmuxOperation::UnsetOption(name.to_owned())),
                     executable: self.tmux.clone(),
-                    args: ["set-option", "-gu", name]
+                    args: ["-u", "set-option", "-gu", name]
                         .into_iter()
                         .map(OsString::from)
                         .collect(),
@@ -206,9 +208,7 @@ impl<I: IndicatorIo> IndicatorOwnership<I> {
         io.write(STATUS_LEFT, &written_status_left).await?;
         if let Err(error) = io.write(SOLSTONE_OPTION, &written_solstone).await {
             if let Err(rollback) = restore_value(&io, STATUS_LEFT, &original_status_left).await {
-                return Err(IndicatorError::Protocol(format!(
-                    "{error}; status-left rollback also failed: {rollback}"
-                )));
+                return Err(IndicatorError::Protocol(crate::i18n::render(crate::i18n::MessageId::CliIndicatorInstallWithOriginalsStatusLeftRollbackAlsoFailed, &[("error", crate::i18n::ArgValue::Text((error).to_string())), ("rollback", crate::i18n::ArgValue::Text((rollback).to_string()))])));
             }
             return Err(error);
         }
@@ -247,11 +247,29 @@ impl<I: IndicatorIo> IndicatorOwnership<I> {
                 if let Err(error) =
                     restore_value(&self.io, STATUS_LEFT, &self.original_status_left).await
                 {
-                    failures.push(format!("{STATUS_LEFT}: {error}"));
+                    failures.push(crate::i18n::render(
+                        crate::i18n::MessageId::CliIndicatorRestoreMessage,
+                        &[
+                            (
+                                "STATUS_LEFT",
+                                crate::i18n::ArgValue::Text((STATUS_LEFT).to_string()),
+                            ),
+                            ("error", crate::i18n::ArgValue::Text((error).to_string())),
+                        ],
+                    ));
                 }
             }
             Ok(_) => {}
-            Err(error) => failures.push(format!("{STATUS_LEFT} read: {error}")),
+            Err(error) => failures.push(crate::i18n::render(
+                crate::i18n::MessageId::CliIndicatorRestoreRead,
+                &[
+                    (
+                        "STATUS_LEFT",
+                        crate::i18n::ArgValue::Text((STATUS_LEFT).to_string()),
+                    ),
+                    ("error", crate::i18n::ArgValue::Text((error).to_string())),
+                ],
+            )),
         }
         if self.solstone_owned {
             match self.io.read(SOLSTONE_OPTION).await {
@@ -259,11 +277,29 @@ impl<I: IndicatorIo> IndicatorOwnership<I> {
                     if let Err(error) =
                         restore_value(&self.io, SOLSTONE_OPTION, &self.original_solstone).await
                     {
-                        failures.push(format!("{SOLSTONE_OPTION}: {error}"));
+                        failures.push(crate::i18n::render(
+                            crate::i18n::MessageId::CliIndicatorRestoreMessage2,
+                            &[
+                                (
+                                    "SOLSTONE_OPTION",
+                                    crate::i18n::ArgValue::Text((SOLSTONE_OPTION).to_string()),
+                                ),
+                                ("error", crate::i18n::ArgValue::Text((error).to_string())),
+                            ],
+                        ));
                     }
                 }
                 Ok(_) => {}
-                Err(error) => failures.push(format!("{SOLSTONE_OPTION} read: {error}")),
+                Err(error) => failures.push(crate::i18n::render(
+                    crate::i18n::MessageId::CliIndicatorRestoreRead2,
+                    &[
+                        (
+                            "SOLSTONE_OPTION",
+                            crate::i18n::ArgValue::Text((SOLSTONE_OPTION).to_string()),
+                        ),
+                        ("error", crate::i18n::ArgValue::Text((error).to_string())),
+                    ],
+                )),
             }
         }
         if failures.is_empty() {
@@ -321,7 +357,17 @@ impl fmt::Display for IndicatorError {
         match self {
             Self::Command(error) => error.fmt(formatter),
             Self::Nonzero { name, status } => {
-                write!(formatter, "tmux option command for {name} exited {status}")
+                write!(
+                    formatter,
+                    "{}",
+                    crate::i18n::render(
+                        crate::i18n::MessageId::CliIndicatorFmtTmuxOptionCommandForExited,
+                        &[
+                            ("name", crate::i18n::ArgValue::Text((name).to_string())),
+                            ("status", crate::i18n::ArgValue::Text((status).to_string()))
+                        ]
+                    )
+                )
             }
             Self::Protocol(error) => formatter.write_str(error),
         }
@@ -337,8 +383,14 @@ impl fmt::Display for IndicatorRestoreError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             formatter,
-            "indicator restoration failed: {}",
-            self.0.join("; ")
+            "{}",
+            crate::i18n::render(
+                crate::i18n::MessageId::CliIndicatorFmtIndicatorRestorationFailed,
+                &[(
+                    "arg0",
+                    crate::i18n::ArgValue::Text((self.0.join("; ")).to_string())
+                )]
+            )
         )
     }
 }

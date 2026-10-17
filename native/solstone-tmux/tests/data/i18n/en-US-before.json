@@ -1,0 +1,5084 @@
+[
+  {
+    "args": {},
+    "id": "cli.about.snapshot.tmux-app",
+    "output": "tmux app"
+  },
+  {
+    "args": {},
+    "id": "cli.about.snapshot.tmux-app",
+    "output": "tmux app"
+  },
+  {
+    "args": {},
+    "id": "cli.about.snapshot.tmux-app",
+    "output": "tmux app"
+  },
+  {
+    "args": {},
+    "id": "cli.about.snapshot.journal-unknown",
+    "output": "journal unknown"
+  },
+  {
+    "args": {},
+    "id": "cli.about.snapshot.journal-unknown",
+    "output": "journal unknown"
+  },
+  {
+    "args": {},
+    "id": "cli.about.snapshot.journal-unknown",
+    "output": "journal unknown"
+  },
+  {
+    "args": {},
+    "id": "cli.about.journal-line.just-now",
+    "output": "just now"
+  },
+  {
+    "args": {},
+    "id": "cli.about.journal-line.just-now",
+    "output": "just now"
+  },
+  {
+    "args": {},
+    "id": "cli.about.journal-line.just-now",
+    "output": "just now"
+  },
+  {
+    "args": {
+      "SEPARATOR": "fixture-SEPARATOR",
+      "age": "fixture-age"
+    },
+    "id": "cli.about.journal-line.last-seen",
+    "output": "fixture-SEPARATORlast seen fixture-age"
+  },
+  {
+    "args": {
+      "SEPARATOR": "日本語-SEPARATOR",
+      "age": "日本語-age"
+    },
+    "id": "cli.about.journal-line.last-seen",
+    "output": "日本語-SEPARATORlast seen 日本語-age"
+  },
+  {
+    "args": {
+      "SEPARATOR": "{value} yes --mark",
+      "age": "{value} yes --mark"
+    },
+    "id": "cli.about.journal-line.last-seen",
+    "output": "{value} yes --marklast seen {value} yes --mark"
+  },
+  {
+    "args": {
+      "arg0": "fixture-arg0",
+      "arg1": "fixture-arg1"
+    },
+    "id": "cli.cli.parse-args.unknown-command",
+    "output": "unknown command 'fixture-arg0'\nfixture-arg1"
+  },
+  {
+    "args": {
+      "arg0": "日本語-arg0",
+      "arg1": "日本語-arg1"
+    },
+    "id": "cli.cli.parse-args.unknown-command",
+    "output": "unknown command '日本語-arg0'\n日本語-arg1"
+  },
+  {
+    "args": {
+      "arg0": "{value} yes --mark",
+      "arg1": "{value} yes --mark"
+    },
+    "id": "cli.cli.parse-args.unknown-command",
+    "output": "unknown command '{value} yes --mark'\n{value} yes --mark"
+  },
+  {
+    "args": {
+      "arg0": "fixture-arg0",
+      "arg1": "fixture-arg1"
+    },
+    "id": "cli.cli.parse-args.unexpected-argument",
+    "output": "unexpected argument 'fixture-arg0'\nfixture-arg1"
+  },
+  {
+    "args": {
+      "arg0": "日本語-arg0",
+      "arg1": "日本語-arg1"
+    },
+    "id": "cli.cli.parse-args.unexpected-argument",
+    "output": "unexpected argument '日本語-arg0'\n日本語-arg1"
+  },
+  {
+    "args": {
+      "arg0": "{value} yes --mark",
+      "arg1": "{value} yes --mark"
+    },
+    "id": "cli.cli.parse-args.unexpected-argument",
+    "output": "unexpected argument '{value} yes --mark'\n{value} yes --mark"
+  },
+  {
+    "args": {
+      "arg0": "fixture-arg0"
+    },
+    "id": "cli.cli.usage.usage-solstone-tmux-run-setup-confirm-status-about",
+    "output": "usage: solstone-tmux [run|setup|confirm|status|about|install-service|uninstall-service|--help|--version]\n       solstone-tmux setup [--mark <words>]\n       solstone-tmux confirm [--mark <words>]\n--mark  fixture-arg0\nexit 0 paired or already confirmed; exit 1 not paired, nothing changed, or no terminal; exit 2 usage; exit 5 held. status still uses exit 3 and 4."
+  },
+  {
+    "args": {
+      "arg0": "日本語-arg0"
+    },
+    "id": "cli.cli.usage.usage-solstone-tmux-run-setup-confirm-status-about",
+    "output": "usage: solstone-tmux [run|setup|confirm|status|about|install-service|uninstall-service|--help|--version]\n       solstone-tmux setup [--mark <words>]\n       solstone-tmux confirm [--mark <words>]\n--mark  日本語-arg0\nexit 0 paired or already confirmed; exit 1 not paired, nothing changed, or no terminal; exit 2 usage; exit 5 held. status still uses exit 3 and 4."
+  },
+  {
+    "args": {
+      "arg0": "{value} yes --mark"
+    },
+    "id": "cli.cli.usage.usage-solstone-tmux-run-setup-confirm-status-about",
+    "output": "usage: solstone-tmux [run|setup|confirm|status|about|install-service|uninstall-service|--help|--version]\n       solstone-tmux setup [--mark <words>]\n       solstone-tmux confirm [--mark <words>]\n--mark  {value} yes --mark\nexit 0 paired or already confirmed; exit 1 not paired, nothing changed, or no terminal; exit 2 usage; exit 5 held. status still uses exit 3 and 4."
+  },
+  {
+    "args": {
+      "arg0": "fixture-arg0",
+      "source": "fixture-source"
+    },
+    "id": "cli.cli.version.solstone-tmux-source",
+    "output": "solstone-tmux fixture-arg0 (source fixture-source)"
+  },
+  {
+    "args": {
+      "arg0": "日本語-arg0",
+      "source": "日本語-source"
+    },
+    "id": "cli.cli.version.solstone-tmux-source",
+    "output": "solstone-tmux 日本語-arg0 (source 日本語-source)"
+  },
+  {
+    "args": {
+      "arg0": "{value} yes --mark",
+      "source": "{value} yes --mark"
+    },
+    "id": "cli.cli.version.solstone-tmux-source",
+    "output": "solstone-tmux {value} yes --mark (source {value} yes --mark)"
+  },
+  {
+    "args": {
+      "cause": "fixture-cause"
+    },
+    "id": "cli.clock.from-resolved.could-not-load-the-local-time-zone-set",
+    "output": "could not load the local time zone (fixture-cause); set TZ or repair /etc/localtime"
+  },
+  {
+    "args": {
+      "cause": "日本語-cause"
+    },
+    "id": "cli.clock.from-resolved.could-not-load-the-local-time-zone-set",
+    "output": "could not load the local time zone (日本語-cause); set TZ or repair /etc/localtime"
+  },
+  {
+    "args": {
+      "cause": "{value} yes --mark"
+    },
+    "id": "cli.clock.from-resolved.could-not-load-the-local-time-zone-set",
+    "output": "could not load the local time zone ({value} yes --mark); set TZ or repair /etc/localtime"
+  },
+  {
+    "args": {
+      "error": "fixture-error"
+    },
+    "id": "cli.command.fmt.could-not-start-command",
+    "output": "could not start command: fixture-error"
+  },
+  {
+    "args": {
+      "error": "日本語-error"
+    },
+    "id": "cli.command.fmt.could-not-start-command",
+    "output": "could not start command: 日本語-error"
+  },
+  {
+    "args": {
+      "error": "{value} yes --mark"
+    },
+    "id": "cli.command.fmt.could-not-start-command",
+    "output": "could not start command: {value} yes --mark"
+  },
+  {
+    "args": {
+      "arg0": "fixture-arg0",
+      "operation": "fixture-operation"
+    },
+    "id": "cli.command.fmt.exceeded-its-second-timeout",
+    "output": "\"fixture-operation\" exceeded its fixture-arg0 second timeout"
+  },
+  {
+    "args": {
+      "arg0": "日本語-arg0",
+      "operation": "日本語-operation"
+    },
+    "id": "cli.command.fmt.exceeded-its-second-timeout",
+    "output": "\"日本語-operation\" exceeded its 日本語-arg0 second timeout"
+  },
+  {
+    "args": {
+      "arg0": "{value} yes --mark",
+      "operation": "{value} yes --mark"
+    },
+    "id": "cli.command.fmt.exceeded-its-second-timeout",
+    "output": "\"{value} yes --mark\" exceeded its {value} yes --mark second timeout"
+  },
+  {
+    "args": {},
+    "id": "cli.config.load.set-native-config-permissions",
+    "output": "set native config permissions"
+  },
+  {
+    "args": {},
+    "id": "cli.config.load.set-native-config-permissions",
+    "output": "set native config permissions"
+  },
+  {
+    "args": {},
+    "id": "cli.config.load.set-native-config-permissions",
+    "output": "set native config permissions"
+  },
+  {
+    "args": {},
+    "id": "cli.config.load.read-native-config",
+    "output": "read native config"
+  },
+  {
+    "args": {},
+    "id": "cli.config.load.read-native-config",
+    "output": "read native config"
+  },
+  {
+    "args": {},
+    "id": "cli.config.load.read-native-config",
+    "output": "read native config"
+  },
+  {
+    "args": {},
+    "id": "cli.config.load.inspect-native-config",
+    "output": "inspect native config"
+  },
+  {
+    "args": {},
+    "id": "cli.config.load.inspect-native-config",
+    "output": "inspect native config"
+  },
+  {
+    "args": {},
+    "id": "cli.config.load.inspect-native-config",
+    "output": "inspect native config"
+  },
+  {
+    "args": {
+      "hostname": "fixture-hostname"
+    },
+    "id": "cli.config.default-stream.hostname-cannot-form-a-native-stream-name",
+    "output": "hostname \"fixture-hostname\" cannot form a native stream name"
+  },
+  {
+    "args": {
+      "hostname": "日本語-hostname"
+    },
+    "id": "cli.config.default-stream.hostname-cannot-form-a-native-stream-name",
+    "output": "hostname \"日本語-hostname\" cannot form a native stream name"
+  },
+  {
+    "args": {
+      "hostname": "{value} yes --mark"
+    },
+    "id": "cli.config.default-stream.hostname-cannot-form-a-native-stream-name",
+    "output": "hostname \"{value} yes --mark\" cannot form a native stream name"
+  },
+  {
+    "args": {
+      "arg0": "fixture-arg0"
+    },
+    "id": "cli.config.fmt.native-config-must-be-a-regular-file-not",
+    "output": "native config fixture-arg0 must be a regular file, not a symlink or special target"
+  },
+  {
+    "args": {
+      "arg0": "日本語-arg0"
+    },
+    "id": "cli.config.fmt.native-config-must-be-a-regular-file-not",
+    "output": "native config 日本語-arg0 must be a regular file, not a symlink or special target"
+  },
+  {
+    "args": {
+      "arg0": "{value} yes --mark"
+    },
+    "id": "cli.config.fmt.native-config-must-be-a-regular-file-not",
+    "output": "native config {value} yes --mark must be a regular file, not a symlink or special target"
+  },
+  {
+    "args": {
+      "arg0": "fixture-arg0",
+      "detail": "fixture-detail"
+    },
+    "id": "cli.config.fmt.native-config-is-invalid",
+    "output": "native config fixture-arg0 is invalid: fixture-detail"
+  },
+  {
+    "args": {
+      "arg0": "日本語-arg0",
+      "detail": "日本語-detail"
+    },
+    "id": "cli.config.fmt.native-config-is-invalid",
+    "output": "native config 日本語-arg0 is invalid: 日本語-detail"
+  },
+  {
+    "args": {
+      "arg0": "{value} yes --mark",
+      "detail": "{value} yes --mark"
+    },
+    "id": "cli.config.fmt.native-config-is-invalid",
+    "output": "native config {value} yes --mark is invalid: {value} yes --mark"
+  },
+  {
+    "args": {
+      "identity": "fixture-identity",
+      "source": "fixture-source"
+    },
+    "id": "cli.config.fmt.native-stream-name-is-invalid-update-stream-in",
+    "output": "native stream name \"fixture-identity\" is invalid: fixture-source; update stream in config.json"
+  },
+  {
+    "args": {
+      "identity": "日本語-identity",
+      "source": "日本語-source"
+    },
+    "id": "cli.config.fmt.native-stream-name-is-invalid-update-stream-in",
+    "output": "native stream name \"日本語-identity\" is invalid: 日本語-source; update stream in config.json"
+  },
+  {
+    "args": {
+      "identity": "{value} yes --mark",
+      "source": "{value} yes --mark"
+    },
+    "id": "cli.config.fmt.native-stream-name-is-invalid-update-stream-in",
+    "output": "native stream name \"{value} yes --mark\" is invalid: {value} yes --mark; update stream in config.json"
+  },
+  {
+    "args": {
+      "field": "fixture-field"
+    },
+    "id": "cli.config.fmt.native-config-must-be-greater-than-zero-seconds",
+    "output": "native config fixture-field must be greater than zero seconds"
+  },
+  {
+    "args": {
+      "field": "日本語-field"
+    },
+    "id": "cli.config.fmt.native-config-must-be-greater-than-zero-seconds",
+    "output": "native config 日本語-field must be greater than zero seconds"
+  },
+  {
+    "args": {
+      "field": "{value} yes --mark"
+    },
+    "id": "cli.config.fmt.native-config-must-be-greater-than-zero-seconds",
+    "output": "native config {value} yes --mark must be greater than zero seconds"
+  },
+  {
+    "args": {},
+    "id": "cli.config.fmt.native-config-source-must-be-a-nonempty-string",
+    "output": "native config source must be a nonempty string matching [a-z0-9][a-z0-9_-]* and at most 64 bytes; update source in config.json"
+  },
+  {
+    "args": {},
+    "id": "cli.config.fmt.native-config-source-must-be-a-nonempty-string",
+    "output": "native config source must be a nonempty string matching [a-z0-9][a-z0-9_-]* and at most 64 bytes; update source in config.json"
+  },
+  {
+    "args": {},
+    "id": "cli.config.fmt.native-config-source-must-be-a-nonempty-string",
+    "output": "native config source must be a nonempty string matching [a-z0-9][a-z0-9_-]* and at most 64 bytes; update source in config.json"
+  },
+  {
+    "args": {
+      "detail": "fixture-detail"
+    },
+    "id": "cli.config.fmt.could-not-derive-the-default-native-stream-from",
+    "output": "could not derive the default native stream from this hostname: fixture-detail; set stream in config.json"
+  },
+  {
+    "args": {
+      "detail": "日本語-detail"
+    },
+    "id": "cli.config.fmt.could-not-derive-the-default-native-stream-from",
+    "output": "could not derive the default native stream from this hostname: 日本語-detail; set stream in config.json"
+  },
+  {
+    "args": {
+      "detail": "{value} yes --mark"
+    },
+    "id": "cli.config.fmt.could-not-derive-the-default-native-stream-from",
+    "output": "could not derive the default native stream from this hostname: {value} yes --mark; set stream in config.json"
+  },
+  {
+    "args": {
+      "arg0": "fixture-arg0",
+      "operation": "fixture-operation",
+      "source": "fixture-source"
+    },
+    "id": "cli.config.fmt.failed-for",
+    "output": "fixture-operation failed for fixture-arg0: fixture-source"
+  },
+  {
+    "args": {
+      "arg0": "日本語-arg0",
+      "operation": "日本語-operation",
+      "source": "日本語-source"
+    },
+    "id": "cli.config.fmt.failed-for",
+    "output": "日本語-operation failed for 日本語-arg0: 日本語-source"
+  },
+  {
+    "args": {
+      "arg0": "{value} yes --mark",
+      "operation": "{value} yes --mark",
+      "source": "{value} yes --mark"
+    },
+    "id": "cli.config.fmt.failed-for",
+    "output": "{value} yes --mark failed for {value} yes --mark: {value} yes --mark"
+  },
+  {
+    "args": {},
+    "id": "cli.health.message.setup-input-is-invalid",
+    "output": "setup input is invalid"
+  },
+  {
+    "args": {},
+    "id": "cli.health.message.setup-input-is-invalid",
+    "output": "setup input is invalid"
+  },
+  {
+    "args": {},
+    "id": "cli.health.message.setup-input-is-invalid",
+    "output": "setup input is invalid"
+  },
+  {
+    "args": {},
+    "id": "cli.health.message.setup-is-unavailable-stop-solstone-tmux-and-try",
+    "output": "setup is unavailable; stop solstone-tmux and try again"
+  },
+  {
+    "args": {},
+    "id": "cli.health.message.setup-is-unavailable-stop-solstone-tmux-and-try",
+    "output": "setup is unavailable; stop solstone-tmux and try again"
+  },
+  {
+    "args": {},
+    "id": "cli.health.message.setup-is-unavailable-stop-solstone-tmux-and-try",
+    "output": "setup is unavailable; stop solstone-tmux and try again"
+  },
+  {
+    "args": {},
+    "id": "cli.health.message.private-network-pairing-failed-check-the-pairing-link",
+    "output": "private network pairing failed; check the pairing link and try setup again"
+  },
+  {
+    "args": {},
+    "id": "cli.health.message.private-network-pairing-failed-check-the-pairing-link",
+    "output": "private network pairing failed; check the pairing link and try setup again"
+  },
+  {
+    "args": {},
+    "id": "cli.health.message.private-network-pairing-failed-check-the-pairing-link",
+    "output": "private network pairing failed; check the pairing link and try setup again"
+  },
+  {
+    "args": {},
+    "id": "cli.health.message.private-network-state-is-invalid",
+    "output": "private network state is invalid"
+  },
+  {
+    "args": {},
+    "id": "cli.health.message.private-network-state-is-invalid",
+    "output": "private network state is invalid"
+  },
+  {
+    "args": {},
+    "id": "cli.health.message.private-network-state-is-invalid",
+    "output": "private network state is invalid"
+  },
+  {
+    "args": {},
+    "id": "cli.health.message.private-network-state-could-not-be-accessed",
+    "output": "private network state could not be accessed"
+  },
+  {
+    "args": {},
+    "id": "cli.health.message.private-network-state-could-not-be-accessed",
+    "output": "private network state could not be accessed"
+  },
+  {
+    "args": {},
+    "id": "cli.health.message.private-network-state-could-not-be-accessed",
+    "output": "private network state could not be accessed"
+  },
+  {
+    "args": {},
+    "id": "cli.health.message.sync-health-snapshot-could-not-be-written",
+    "output": "sync health snapshot could not be written"
+  },
+  {
+    "args": {},
+    "id": "cli.health.message.sync-health-snapshot-could-not-be-written",
+    "output": "sync health snapshot could not be written"
+  },
+  {
+    "args": {},
+    "id": "cli.health.message.sync-health-snapshot-could-not-be-written",
+    "output": "sync health snapshot could not be written"
+  },
+  {
+    "args": {},
+    "id": "cli.health.message.the-private-network-is-unavailable",
+    "output": "the private network is unavailable"
+  },
+  {
+    "args": {},
+    "id": "cli.health.message.the-private-network-is-unavailable",
+    "output": "the private network is unavailable"
+  },
+  {
+    "args": {},
+    "id": "cli.health.message.the-private-network-is-unavailable",
+    "output": "the private network is unavailable"
+  },
+  {
+    "args": {},
+    "id": "cli.health.message.paired-journal-is-unavailable",
+    "output": "paired journal is unavailable"
+  },
+  {
+    "args": {},
+    "id": "cli.health.message.paired-journal-is-unavailable",
+    "output": "paired journal is unavailable"
+  },
+  {
+    "args": {},
+    "id": "cli.health.message.paired-journal-is-unavailable",
+    "output": "paired journal is unavailable"
+  },
+  {
+    "args": {},
+    "id": "cli.health.message.paired-journal-request-timed-out",
+    "output": "paired journal request timed out"
+  },
+  {
+    "args": {},
+    "id": "cli.health.message.paired-journal-request-timed-out",
+    "output": "paired journal request timed out"
+  },
+  {
+    "args": {},
+    "id": "cli.health.message.paired-journal-request-timed-out",
+    "output": "paired journal request timed out"
+  },
+  {
+    "args": {},
+    "id": "cli.health.message.paired-journal-response-exceeds-the-supported-size",
+    "output": "paired journal response exceeds the supported size"
+  },
+  {
+    "args": {},
+    "id": "cli.health.message.paired-journal-response-exceeds-the-supported-size",
+    "output": "paired journal response exceeds the supported size"
+  },
+  {
+    "args": {},
+    "id": "cli.health.message.paired-journal-response-exceeds-the-supported-size",
+    "output": "paired journal response exceeds the supported size"
+  },
+  {
+    "args": {},
+    "id": "cli.health.message.journal-response-did-not-match-the-contract",
+    "output": "journal response did not match the contract"
+  },
+  {
+    "args": {},
+    "id": "cli.health.message.journal-response-did-not-match-the-contract",
+    "output": "journal response did not match the contract"
+  },
+  {
+    "args": {},
+    "id": "cli.health.message.journal-response-did-not-match-the-contract",
+    "output": "journal response did not match the contract"
+  },
+  {
+    "args": {},
+    "id": "cli.health.message.set-stream-to-the-hostname-derived-tmux-name",
+    "output": "set stream to the hostname-derived tmux name and restart"
+  },
+  {
+    "args": {},
+    "id": "cli.health.message.set-stream-to-the-hostname-derived-tmux-name",
+    "output": "set stream to the hostname-derived tmux name and restart"
+  },
+  {
+    "args": {},
+    "id": "cli.health.message.set-stream-to-the-hostname-derived-tmux-name",
+    "output": "set stream to the hostname-derived tmux name and restart"
+  },
+  {
+    "args": {},
+    "id": "cli.health.message.local-segment-is-invalid",
+    "output": "local segment is invalid"
+  },
+  {
+    "args": {},
+    "id": "cli.health.message.local-segment-is-invalid",
+    "output": "local segment is invalid"
+  },
+  {
+    "args": {},
+    "id": "cli.health.message.local-segment-is-invalid",
+    "output": "local segment is invalid"
+  },
+  {
+    "args": {},
+    "id": "cli.health.message.local-request-exceeds-the-bridge-limit",
+    "output": "local request exceeds the bridge limit"
+  },
+  {
+    "args": {},
+    "id": "cli.health.message.local-request-exceeds-the-bridge-limit",
+    "output": "local request exceeds the bridge limit"
+  },
+  {
+    "args": {},
+    "id": "cli.health.message.local-request-exceeds-the-bridge-limit",
+    "output": "local request exceeds the bridge limit"
+  },
+  {
+    "args": {},
+    "id": "cli.health.message.journal-request-was-rejected",
+    "output": "journal request was rejected"
+  },
+  {
+    "args": {},
+    "id": "cli.health.message.journal-request-was-rejected",
+    "output": "journal request was rejected"
+  },
+  {
+    "args": {},
+    "id": "cli.health.message.journal-request-was-rejected",
+    "output": "journal request was rejected"
+  },
+  {
+    "args": {},
+    "id": "cli.health.message.this-device-can-t-connect-to-your-journal",
+    "output": "this device can't connect to your journal with its saved pairing; run setup with a new pairing link"
+  },
+  {
+    "args": {},
+    "id": "cli.health.message.this-device-can-t-connect-to-your-journal",
+    "output": "this device can't connect to your journal with its saved pairing; run setup with a new pairing link"
+  },
+  {
+    "args": {},
+    "id": "cli.health.message.this-device-can-t-connect-to-your-journal",
+    "output": "this device can't connect to your journal with its saved pairing; run setup with a new pairing link"
+  },
+  {
+    "args": {},
+    "id": "cli.health.message.sync-task-exited-unexpectedly",
+    "output": "sync task exited unexpectedly"
+  },
+  {
+    "args": {},
+    "id": "cli.health.message.sync-task-exited-unexpectedly",
+    "output": "sync task exited unexpectedly"
+  },
+  {
+    "args": {},
+    "id": "cli.health.message.sync-task-exited-unexpectedly",
+    "output": "sync task exited unexpectedly"
+  },
+  {
+    "args": {},
+    "id": "cli.health.message.sync-task-failed-panic",
+    "output": "sync task failed: panic"
+  },
+  {
+    "args": {},
+    "id": "cli.health.message.sync-task-failed-panic",
+    "output": "sync task failed: panic"
+  },
+  {
+    "args": {},
+    "id": "cli.health.message.sync-task-failed-panic",
+    "output": "sync task failed: panic"
+  },
+  {
+    "args": {},
+    "id": "cli.health.message.sync-task-failed-task-was-cancelled",
+    "output": "sync task failed: task was cancelled"
+  },
+  {
+    "args": {},
+    "id": "cli.health.message.sync-task-failed-task-was-cancelled",
+    "output": "sync task failed: task was cancelled"
+  },
+  {
+    "args": {},
+    "id": "cli.health.message.sync-task-failed-task-was-cancelled",
+    "output": "sync task failed: task was cancelled"
+  },
+  {
+    "args": {},
+    "id": "cli.health.message.sync-task-did-not-stop-within-the-shutdown",
+    "output": "sync task did not stop within the shutdown deadline"
+  },
+  {
+    "args": {},
+    "id": "cli.health.message.sync-task-did-not-stop-within-the-shutdown",
+    "output": "sync task did not stop within the shutdown deadline"
+  },
+  {
+    "args": {},
+    "id": "cli.health.message.sync-task-did-not-stop-within-the-shutdown",
+    "output": "sync task did not stop within the shutdown deadline"
+  },
+  {
+    "args": {},
+    "id": "cli.health.message.indicator-update-failed",
+    "output": "indicator update failed"
+  },
+  {
+    "args": {},
+    "id": "cli.health.message.indicator-update-failed",
+    "output": "indicator update failed"
+  },
+  {
+    "args": {},
+    "id": "cli.health.message.indicator-update-failed",
+    "output": "indicator update failed"
+  },
+  {
+    "args": {
+      "arg0": "fixture-arg0"
+    },
+    "id": "cli.health.emit-diagnostic.solstone-tmux",
+    "output": "solstone-tmux: fixture-arg0"
+  },
+  {
+    "args": {
+      "arg0": "日本語-arg0"
+    },
+    "id": "cli.health.emit-diagnostic.solstone-tmux",
+    "output": "solstone-tmux: 日本語-arg0"
+  },
+  {
+    "args": {
+      "arg0": "{value} yes --mark"
+    },
+    "id": "cli.health.emit-diagnostic.solstone-tmux",
+    "output": "solstone-tmux: {value} yes --mark"
+  },
+  {
+    "args": {},
+    "id": "cli.indicator.new.tmux-executable-must-be-absolute",
+    "output": "tmux executable must be absolute"
+  },
+  {
+    "args": {},
+    "id": "cli.indicator.new.tmux-executable-must-be-absolute",
+    "output": "tmux executable must be absolute"
+  },
+  {
+    "args": {},
+    "id": "cli.indicator.new.tmux-executable-must-be-absolute",
+    "output": "tmux executable must be absolute"
+  },
+  {
+    "args": {
+      "error": "fixture-error",
+      "rollback": "fixture-rollback"
+    },
+    "id": "cli.indicator.install-with-originals.status-left-rollback-also-failed",
+    "output": "fixture-error; status-left rollback also failed: fixture-rollback"
+  },
+  {
+    "args": {
+      "error": "日本語-error",
+      "rollback": "日本語-rollback"
+    },
+    "id": "cli.indicator.install-with-originals.status-left-rollback-also-failed",
+    "output": "日本語-error; status-left rollback also failed: 日本語-rollback"
+  },
+  {
+    "args": {
+      "error": "{value} yes --mark",
+      "rollback": "{value} yes --mark"
+    },
+    "id": "cli.indicator.install-with-originals.status-left-rollback-also-failed",
+    "output": "{value} yes --mark; status-left rollback also failed: {value} yes --mark"
+  },
+  {
+    "args": {
+      "STATUS_LEFT": "fixture-STATUS_LEFT",
+      "error": "fixture-error"
+    },
+    "id": "cli.indicator.restore.message",
+    "output": "fixture-STATUS_LEFT: fixture-error"
+  },
+  {
+    "args": {
+      "STATUS_LEFT": "日本語-STATUS_LEFT",
+      "error": "日本語-error"
+    },
+    "id": "cli.indicator.restore.message",
+    "output": "日本語-STATUS_LEFT: 日本語-error"
+  },
+  {
+    "args": {
+      "STATUS_LEFT": "{value} yes --mark",
+      "error": "{value} yes --mark"
+    },
+    "id": "cli.indicator.restore.message",
+    "output": "{value} yes --mark: {value} yes --mark"
+  },
+  {
+    "args": {
+      "STATUS_LEFT": "fixture-STATUS_LEFT",
+      "error": "fixture-error"
+    },
+    "id": "cli.indicator.restore.read",
+    "output": "fixture-STATUS_LEFT read: fixture-error"
+  },
+  {
+    "args": {
+      "STATUS_LEFT": "日本語-STATUS_LEFT",
+      "error": "日本語-error"
+    },
+    "id": "cli.indicator.restore.read",
+    "output": "日本語-STATUS_LEFT read: 日本語-error"
+  },
+  {
+    "args": {
+      "STATUS_LEFT": "{value} yes --mark",
+      "error": "{value} yes --mark"
+    },
+    "id": "cli.indicator.restore.read",
+    "output": "{value} yes --mark read: {value} yes --mark"
+  },
+  {
+    "args": {
+      "SOLSTONE_OPTION": "fixture-SOLSTONE_OPTION",
+      "error": "fixture-error"
+    },
+    "id": "cli.indicator.restore.message-2",
+    "output": "fixture-SOLSTONE_OPTION: fixture-error"
+  },
+  {
+    "args": {
+      "SOLSTONE_OPTION": "日本語-SOLSTONE_OPTION",
+      "error": "日本語-error"
+    },
+    "id": "cli.indicator.restore.message-2",
+    "output": "日本語-SOLSTONE_OPTION: 日本語-error"
+  },
+  {
+    "args": {
+      "SOLSTONE_OPTION": "{value} yes --mark",
+      "error": "{value} yes --mark"
+    },
+    "id": "cli.indicator.restore.message-2",
+    "output": "{value} yes --mark: {value} yes --mark"
+  },
+  {
+    "args": {
+      "SOLSTONE_OPTION": "fixture-SOLSTONE_OPTION",
+      "error": "fixture-error"
+    },
+    "id": "cli.indicator.restore.read-2",
+    "output": "fixture-SOLSTONE_OPTION read: fixture-error"
+  },
+  {
+    "args": {
+      "SOLSTONE_OPTION": "日本語-SOLSTONE_OPTION",
+      "error": "日本語-error"
+    },
+    "id": "cli.indicator.restore.read-2",
+    "output": "日本語-SOLSTONE_OPTION read: 日本語-error"
+  },
+  {
+    "args": {
+      "SOLSTONE_OPTION": "{value} yes --mark",
+      "error": "{value} yes --mark"
+    },
+    "id": "cli.indicator.restore.read-2",
+    "output": "{value} yes --mark read: {value} yes --mark"
+  },
+  {
+    "args": {
+      "name": "fixture-name",
+      "status": "fixture-status"
+    },
+    "id": "cli.indicator.fmt.tmux-option-command-for-exited",
+    "output": "tmux option command for fixture-name exited fixture-status"
+  },
+  {
+    "args": {
+      "name": "日本語-name",
+      "status": "日本語-status"
+    },
+    "id": "cli.indicator.fmt.tmux-option-command-for-exited",
+    "output": "tmux option command for 日本語-name exited 日本語-status"
+  },
+  {
+    "args": {
+      "name": "{value} yes --mark",
+      "status": "{value} yes --mark"
+    },
+    "id": "cli.indicator.fmt.tmux-option-command-for-exited",
+    "output": "tmux option command for {value} yes --mark exited {value} yes --mark"
+  },
+  {
+    "args": {
+      "arg0": "fixture-arg0"
+    },
+    "id": "cli.indicator.fmt.indicator-restoration-failed",
+    "output": "indicator restoration failed: fixture-arg0"
+  },
+  {
+    "args": {
+      "arg0": "日本語-arg0"
+    },
+    "id": "cli.indicator.fmt.indicator-restoration-failed",
+    "output": "indicator restoration failed: 日本語-arg0"
+  },
+  {
+    "args": {
+      "arg0": "{value} yes --mark"
+    },
+    "id": "cli.indicator.fmt.indicator-restoration-failed",
+    "output": "indicator restoration failed: {value} yes --mark"
+  },
+  {
+    "args": {},
+    "id": "cli.instance-lock.acquire-existing.inspect-data-root",
+    "output": "inspect data root"
+  },
+  {
+    "args": {},
+    "id": "cli.instance-lock.acquire-existing.inspect-data-root",
+    "output": "inspect data root"
+  },
+  {
+    "args": {},
+    "id": "cli.instance-lock.acquire-existing.inspect-data-root",
+    "output": "inspect data root"
+  },
+  {
+    "args": {},
+    "id": "cli.instance-lock.acquire-existing.inspect-instance-lock",
+    "output": "inspect instance lock"
+  },
+  {
+    "args": {},
+    "id": "cli.instance-lock.acquire-existing.inspect-instance-lock",
+    "output": "inspect instance lock"
+  },
+  {
+    "args": {},
+    "id": "cli.instance-lock.acquire-existing.inspect-instance-lock",
+    "output": "inspect instance lock"
+  },
+  {
+    "args": {},
+    "id": "cli.instance-lock.open.open-instance-lock",
+    "output": "open instance lock"
+  },
+  {
+    "args": {},
+    "id": "cli.instance-lock.open.open-instance-lock",
+    "output": "open instance lock"
+  },
+  {
+    "args": {},
+    "id": "cli.instance-lock.open.open-instance-lock",
+    "output": "open instance lock"
+  },
+  {
+    "args": {},
+    "id": "cli.instance-lock.open.set-instance-lock-permissions",
+    "output": "set instance lock permissions"
+  },
+  {
+    "args": {},
+    "id": "cli.instance-lock.open.set-instance-lock-permissions",
+    "output": "set instance lock permissions"
+  },
+  {
+    "args": {},
+    "id": "cli.instance-lock.open.set-instance-lock-permissions",
+    "output": "set instance lock permissions"
+  },
+  {
+    "args": {},
+    "id": "cli.instance-lock.open.acquire-instance-lock",
+    "output": "acquire instance lock"
+  },
+  {
+    "args": {},
+    "id": "cli.instance-lock.open.acquire-instance-lock",
+    "output": "acquire instance lock"
+  },
+  {
+    "args": {},
+    "id": "cli.instance-lock.open.acquire-instance-lock",
+    "output": "acquire instance lock"
+  },
+  {
+    "args": {},
+    "id": "cli.instance-lock.write-identity.serialize-instance-identity",
+    "output": "serialize instance identity"
+  },
+  {
+    "args": {},
+    "id": "cli.instance-lock.write-identity.serialize-instance-identity",
+    "output": "serialize instance identity"
+  },
+  {
+    "args": {},
+    "id": "cli.instance-lock.write-identity.serialize-instance-identity",
+    "output": "serialize instance identity"
+  },
+  {
+    "args": {},
+    "id": "cli.instance-lock.write-identity.truncate-instance-identity",
+    "output": "truncate instance identity"
+  },
+  {
+    "args": {},
+    "id": "cli.instance-lock.write-identity.truncate-instance-identity",
+    "output": "truncate instance identity"
+  },
+  {
+    "args": {},
+    "id": "cli.instance-lock.write-identity.truncate-instance-identity",
+    "output": "truncate instance identity"
+  },
+  {
+    "args": {},
+    "id": "cli.instance-lock.write-identity.write-instance-identity",
+    "output": "write instance identity"
+  },
+  {
+    "args": {},
+    "id": "cli.instance-lock.write-identity.write-instance-identity",
+    "output": "write instance identity"
+  },
+  {
+    "args": {},
+    "id": "cli.instance-lock.write-identity.write-instance-identity",
+    "output": "write instance identity"
+  },
+  {
+    "args": {
+      "arg0": "fixture-arg0"
+    },
+    "id": "cli.instance-lock.fmt.another-solstone-tmux-process-is-already-using-this",
+    "output": "another solstone-tmux process is already using this data folder (lock: fixture-arg0)"
+  },
+  {
+    "args": {
+      "arg0": "日本語-arg0"
+    },
+    "id": "cli.instance-lock.fmt.another-solstone-tmux-process-is-already-using-this",
+    "output": "another solstone-tmux process is already using this data folder (lock: 日本語-arg0)"
+  },
+  {
+    "args": {
+      "arg0": "{value} yes --mark"
+    },
+    "id": "cli.instance-lock.fmt.another-solstone-tmux-process-is-already-using-this",
+    "output": "another solstone-tmux process is already using this data folder (lock: {value} yes --mark)"
+  },
+  {
+    "args": {
+      "arg0": "fixture-arg0"
+    },
+    "id": "cli.instance-lock.fmt.instance-lock-target-is-not-a-regular-file",
+    "output": "instance lock target is not a regular file: fixture-arg0"
+  },
+  {
+    "args": {
+      "arg0": "日本語-arg0"
+    },
+    "id": "cli.instance-lock.fmt.instance-lock-target-is-not-a-regular-file",
+    "output": "instance lock target is not a regular file: 日本語-arg0"
+  },
+  {
+    "args": {
+      "arg0": "{value} yes --mark"
+    },
+    "id": "cli.instance-lock.fmt.instance-lock-target-is-not-a-regular-file",
+    "output": "instance lock target is not a regular file: {value} yes --mark"
+  },
+  {
+    "args": {},
+    "id": "cli.journal.spawn-file-producer.local-file-stream-failed",
+    "output": "local file stream failed"
+  },
+  {
+    "args": {},
+    "id": "cli.journal.spawn-file-producer.local-file-stream-failed",
+    "output": "local file stream failed"
+  },
+  {
+    "args": {},
+    "id": "cli.journal.spawn-file-producer.local-file-stream-failed",
+    "output": "local file stream failed"
+  },
+  {
+    "args": {
+      "error": "fixture-error"
+    },
+    "id": "cli.main.main.solstone-tmux",
+    "output": "solstone-tmux: fixture-error"
+  },
+  {
+    "args": {
+      "error": "日本語-error"
+    },
+    "id": "cli.main.main.solstone-tmux",
+    "output": "solstone-tmux: 日本語-error"
+  },
+  {
+    "args": {
+      "error": "{value} yes --mark"
+    },
+    "id": "cli.main.main.solstone-tmux",
+    "output": "solstone-tmux: {value} yes --mark"
+  },
+  {
+    "args": {
+      "error": "fixture-error"
+    },
+    "id": "cli.main.run.could-not-find-the-solstone-tmux-executable",
+    "output": "could not find the solstone-tmux executable: fixture-error"
+  },
+  {
+    "args": {
+      "error": "日本語-error"
+    },
+    "id": "cli.main.run.could-not-find-the-solstone-tmux-executable",
+    "output": "could not find the solstone-tmux executable: 日本語-error"
+  },
+  {
+    "args": {
+      "error": "{value} yes --mark"
+    },
+    "id": "cli.main.run.could-not-find-the-solstone-tmux-executable",
+    "output": "could not find the solstone-tmux executable: {value} yes --mark"
+  },
+  {
+    "args": {
+      "arg0": "fixture-arg0"
+    },
+    "id": "cli.main.run.get-help",
+    "output": "get help: fixture-arg0"
+  },
+  {
+    "args": {
+      "arg0": "日本語-arg0"
+    },
+    "id": "cli.main.run.get-help",
+    "output": "get help: 日本語-arg0"
+  },
+  {
+    "args": {
+      "arg0": "{value} yes --mark"
+    },
+    "id": "cli.main.run.get-help",
+    "output": "get help: {value} yes --mark"
+  },
+  {
+    "args": {
+      "arg0": "fixture-arg0"
+    },
+    "id": "cli.main.run.report-a-problem",
+    "output": "report a problem: fixture-arg0"
+  },
+  {
+    "args": {
+      "arg0": "日本語-arg0"
+    },
+    "id": "cli.main.run.report-a-problem",
+    "output": "report a problem: 日本語-arg0"
+  },
+  {
+    "args": {
+      "arg0": "{value} yes --mark"
+    },
+    "id": "cli.main.run.report-a-problem",
+    "output": "report a problem: {value} yes --mark"
+  },
+  {
+    "args": {},
+    "id": "cli.main.run-native.private-state-is-already-in-use",
+    "output": "private state is already in use"
+  },
+  {
+    "args": {},
+    "id": "cli.main.run-native.private-state-is-already-in-use",
+    "output": "private state is already in use"
+  },
+  {
+    "args": {},
+    "id": "cli.main.run-native.private-state-is-already-in-use",
+    "output": "private state is already in use"
+  },
+  {
+    "args": {
+      "arg0": "fixture-arg0",
+      "arg1": "fixture-arg1",
+      "arg2": "fixture-arg2"
+    },
+    "id": "cli.main.run-native.solstone-tmux-warning-recovery-for",
+    "output": "solstone-tmux: warning: recovery \"fixture-arg0\" for fixture-arg1: fixture-arg2"
+  },
+  {
+    "args": {
+      "arg0": "日本語-arg0",
+      "arg1": "日本語-arg1",
+      "arg2": "日本語-arg2"
+    },
+    "id": "cli.main.run-native.solstone-tmux-warning-recovery-for",
+    "output": "solstone-tmux: warning: recovery \"日本語-arg0\" for 日本語-arg1: 日本語-arg2"
+  },
+  {
+    "args": {
+      "arg0": "{value} yes --mark",
+      "arg1": "{value} yes --mark",
+      "arg2": "{value} yes --mark"
+    },
+    "id": "cli.main.run-native.solstone-tmux-warning-recovery-for",
+    "output": "solstone-tmux: warning: recovery \"{value} yes --mark\" for {value} yes --mark: {value} yes --mark"
+  },
+  {
+    "args": {
+      "failure": "fixture-failure"
+    },
+    "id": "cli.main.run-native.solstone-tmux",
+    "output": "solstone-tmux: fixture-failure"
+  },
+  {
+    "args": {
+      "failure": "日本語-failure"
+    },
+    "id": "cli.main.run-native.solstone-tmux",
+    "output": "solstone-tmux: 日本語-failure"
+  },
+  {
+    "args": {
+      "failure": "{value} yes --mark"
+    },
+    "id": "cli.main.run-native.solstone-tmux",
+    "output": "solstone-tmux: {value} yes --mark"
+  },
+  {
+    "args": {
+      "cleanup": "fixture-cleanup",
+      "error": "fixture-error"
+    },
+    "id": "cli.main.startup-error.removing-the-empty-startup-segment-also-failed",
+    "output": "fixture-error; removing the empty startup segment also failed: fixture-cleanup"
+  },
+  {
+    "args": {
+      "cleanup": "日本語-cleanup",
+      "error": "日本語-error"
+    },
+    "id": "cli.main.startup-error.removing-the-empty-startup-segment-also-failed",
+    "output": "日本語-error; removing the empty startup segment also failed: 日本語-cleanup"
+  },
+  {
+    "args": {
+      "cleanup": "{value} yes --mark",
+      "error": "{value} yes --mark"
+    },
+    "id": "cli.main.startup-error.removing-the-empty-startup-segment-also-failed",
+    "output": "{value} yes --mark; removing the empty startup segment also failed: {value} yes --mark"
+  },
+  {
+    "args": {
+      "error": "fixture-error"
+    },
+    "id": "cli.main.runtime.could-not-start-the-async-runtime",
+    "output": "could not start the async runtime: fixture-error"
+  },
+  {
+    "args": {
+      "error": "日本語-error"
+    },
+    "id": "cli.main.runtime.could-not-start-the-async-runtime",
+    "output": "could not start the async runtime: 日本語-error"
+  },
+  {
+    "args": {
+      "error": "{value} yes --mark"
+    },
+    "id": "cli.main.runtime.could-not-start-the-async-runtime",
+    "output": "could not start the async runtime: {value} yes --mark"
+  },
+  {
+    "args": {},
+    "id": "cli.name.fmt.identity-must-not-be-empty",
+    "output": "identity must not be empty"
+  },
+  {
+    "args": {},
+    "id": "cli.name.fmt.identity-must-not-be-empty",
+    "output": "identity must not be empty"
+  },
+  {
+    "args": {},
+    "id": "cli.name.fmt.identity-must-not-be-empty",
+    "output": "identity must not be empty"
+  },
+  {
+    "args": {},
+    "id": "cli.name.fmt.identity-must-not-contain-nul",
+    "output": "identity must not contain NUL"
+  },
+  {
+    "args": {},
+    "id": "cli.name.fmt.identity-must-not-contain-nul",
+    "output": "identity must not contain NUL"
+  },
+  {
+    "args": {},
+    "id": "cli.name.fmt.identity-must-not-contain-nul",
+    "output": "identity must not contain NUL"
+  },
+  {
+    "args": {},
+    "id": "cli.name.fmt.identity-must-not-be-an-absolute-path",
+    "output": "identity must not be an absolute path"
+  },
+  {
+    "args": {},
+    "id": "cli.name.fmt.identity-must-not-be-an-absolute-path",
+    "output": "identity must not be an absolute path"
+  },
+  {
+    "args": {},
+    "id": "cli.name.fmt.identity-must-not-be-an-absolute-path",
+    "output": "identity must not be an absolute path"
+  },
+  {
+    "args": {},
+    "id": "cli.name.fmt.identity-must-not-contain-path-traversal",
+    "output": "identity must not contain path traversal"
+  },
+  {
+    "args": {},
+    "id": "cli.name.fmt.identity-must-not-contain-path-traversal",
+    "output": "identity must not contain path traversal"
+  },
+  {
+    "args": {},
+    "id": "cli.name.fmt.identity-must-not-contain-path-traversal",
+    "output": "identity must not contain path traversal"
+  },
+  {
+    "args": {
+      "actual": "fixture-actual",
+      "limit": "fixture-limit"
+    },
+    "id": "cli.name.fmt.derived-identity-is-bytes-the-limit-is-bytes",
+    "output": "derived identity is fixture-actual bytes; the limit is fixture-limit bytes"
+  },
+  {
+    "args": {
+      "actual": "日本語-actual",
+      "limit": "日本語-limit"
+    },
+    "id": "cli.name.fmt.derived-identity-is-bytes-the-limit-is-bytes",
+    "output": "derived identity is 日本語-actual bytes; the limit is 日本語-limit bytes"
+  },
+  {
+    "args": {
+      "actual": "{value} yes --mark",
+      "limit": "{value} yes --mark"
+    },
+    "id": "cli.name.fmt.derived-identity-is-bytes-the-limit-is-bytes",
+    "output": "derived identity is {value} yes --mark bytes; the limit is {value} yes --mark bytes"
+  },
+  {
+    "args": {},
+    "id": "cli.name.fmt.derived-identity-escapes-its-parent",
+    "output": "derived identity escapes its parent"
+  },
+  {
+    "args": {},
+    "id": "cli.name.fmt.derived-identity-escapes-its-parent",
+    "output": "derived identity escapes its parent"
+  },
+  {
+    "args": {},
+    "id": "cli.name.fmt.derived-identity-escapes-its-parent",
+    "output": "derived identity escapes its parent"
+  },
+  {
+    "args": {
+      "arg0": "fixture-arg0",
+      "error": "fixture-error"
+    },
+    "id": "cli.observer.process-poll.solstone-tmux-warning-durable-append-for-session-rolled",
+    "output": "solstone-tmux: warning: durable append for session \"fixture-arg0\" rolled back and will retry: fixture-error"
+  },
+  {
+    "args": {
+      "arg0": "日本語-arg0",
+      "error": "日本語-error"
+    },
+    "id": "cli.observer.process-poll.solstone-tmux-warning-durable-append-for-session-rolled",
+    "output": "solstone-tmux: warning: durable append for session \"日本語-arg0\" rolled back and will retry: 日本語-error"
+  },
+  {
+    "args": {
+      "arg0": "{value} yes --mark",
+      "error": "{value} yes --mark"
+    },
+    "id": "cli.observer.process-poll.solstone-tmux-warning-durable-append-for-session-rolled",
+    "output": "solstone-tmux: warning: durable append for session \"{value} yes --mark\" rolled back and will retry: {value} yes --mark"
+  },
+  {
+    "args": {
+      "error": "fixture-error"
+    },
+    "id": "cli.observer.run-observer.capture-task-exited",
+    "output": "capture task exited: fixture-error"
+  },
+  {
+    "args": {
+      "error": "日本語-error"
+    },
+    "id": "cli.observer.run-observer.capture-task-exited",
+    "output": "capture task exited: 日本語-error"
+  },
+  {
+    "args": {
+      "error": "{value} yes --mark"
+    },
+    "id": "cli.observer.run-observer.capture-task-exited",
+    "output": "capture task exited: {value} yes --mark"
+  },
+  {
+    "args": {
+      "arg0": "fixture-arg0"
+    },
+    "id": "cli.observer.run-observer.capture-task-failed",
+    "output": "capture task failed: fixture-arg0"
+  },
+  {
+    "args": {
+      "arg0": "日本語-arg0"
+    },
+    "id": "cli.observer.run-observer.capture-task-failed",
+    "output": "capture task failed: 日本語-arg0"
+  },
+  {
+    "args": {
+      "arg0": "{value} yes --mark"
+    },
+    "id": "cli.observer.run-observer.capture-task-failed",
+    "output": "capture task failed: {value} yes --mark"
+  },
+  {
+    "args": {},
+    "id": "cli.observer.run-observer.capture-task-exited-without-a-result",
+    "output": "capture task exited without a result"
+  },
+  {
+    "args": {},
+    "id": "cli.observer.run-observer.capture-task-exited-without-a-result",
+    "output": "capture task exited without a result"
+  },
+  {
+    "args": {},
+    "id": "cli.observer.run-observer.capture-task-exited-without-a-result",
+    "output": "capture task exited without a result"
+  },
+  {
+    "args": {
+      "error": "fixture-error"
+    },
+    "id": "cli.observer.run-observer.segment-poll-failed",
+    "output": "segment poll failed: fixture-error"
+  },
+  {
+    "args": {
+      "error": "日本語-error"
+    },
+    "id": "cli.observer.run-observer.segment-poll-failed",
+    "output": "segment poll failed: 日本語-error"
+  },
+  {
+    "args": {
+      "error": "{value} yes --mark"
+    },
+    "id": "cli.observer.run-observer.segment-poll-failed",
+    "output": "segment poll failed: {value} yes --mark"
+  },
+  {
+    "args": {
+      "arg0": "fixture-arg0"
+    },
+    "id": "cli.observer.run-observer.blocking-segment-task-failed",
+    "output": "blocking segment task failed: fixture-arg0"
+  },
+  {
+    "args": {
+      "arg0": "日本語-arg0"
+    },
+    "id": "cli.observer.run-observer.blocking-segment-task-failed",
+    "output": "blocking segment task failed: 日本語-arg0"
+  },
+  {
+    "args": {
+      "arg0": "{value} yes --mark"
+    },
+    "id": "cli.observer.run-observer.blocking-segment-task-failed",
+    "output": "blocking segment task failed: {value} yes --mark"
+  },
+  {
+    "args": {
+      "error": "fixture-error"
+    },
+    "id": "cli.observer.run-observer.segment-shutdown-failed",
+    "output": "segment shutdown failed: fixture-error"
+  },
+  {
+    "args": {
+      "error": "日本語-error"
+    },
+    "id": "cli.observer.run-observer.segment-shutdown-failed",
+    "output": "segment shutdown failed: 日本語-error"
+  },
+  {
+    "args": {
+      "error": "{value} yes --mark"
+    },
+    "id": "cli.observer.run-observer.segment-shutdown-failed",
+    "output": "segment shutdown failed: {value} yes --mark"
+  },
+  {
+    "args": {
+      "arg0": "fixture-arg0"
+    },
+    "id": "cli.observer.run-observer.blocking-segment-shutdown-failed",
+    "output": "blocking segment shutdown failed: fixture-arg0"
+  },
+  {
+    "args": {
+      "arg0": "日本語-arg0"
+    },
+    "id": "cli.observer.run-observer.blocking-segment-shutdown-failed",
+    "output": "blocking segment shutdown failed: 日本語-arg0"
+  },
+  {
+    "args": {
+      "arg0": "{value} yes --mark"
+    },
+    "id": "cli.observer.run-observer.blocking-segment-shutdown-failed",
+    "output": "blocking segment shutdown failed: {value} yes --mark"
+  },
+  {
+    "args": {
+      "arg0": "fixture-arg0"
+    },
+    "id": "cli.observer.observer-join-result.solstone-tmux-stopped-unexpectedly",
+    "output": "solstone-tmux stopped unexpectedly: fixture-arg0"
+  },
+  {
+    "args": {
+      "arg0": "日本語-arg0"
+    },
+    "id": "cli.observer.observer-join-result.solstone-tmux-stopped-unexpectedly",
+    "output": "solstone-tmux stopped unexpectedly: 日本語-arg0"
+  },
+  {
+    "args": {
+      "arg0": "{value} yes --mark"
+    },
+    "id": "cli.observer.observer-join-result.solstone-tmux-stopped-unexpectedly",
+    "output": "solstone-tmux stopped unexpectedly: {value} yes --mark"
+  },
+  {
+    "args": {
+      "arg0": "fixture-arg0"
+    },
+    "id": "cli.observer.append-authorized-sync-outcome.sync-task-failed",
+    "output": "sync task failed: fixture-arg0"
+  },
+  {
+    "args": {
+      "arg0": "日本語-arg0"
+    },
+    "id": "cli.observer.append-authorized-sync-outcome.sync-task-failed",
+    "output": "sync task failed: 日本語-arg0"
+  },
+  {
+    "args": {
+      "arg0": "{value} yes --mark"
+    },
+    "id": "cli.observer.append-authorized-sync-outcome.sync-task-failed",
+    "output": "sync task failed: {value} yes --mark"
+  },
+  {
+    "args": {
+      "error": "fixture-error"
+    },
+    "id": "cli.observer.finish-supervision.indicator-shutdown-failed",
+    "output": "indicator shutdown failed: fixture-error"
+  },
+  {
+    "args": {
+      "error": "日本語-error"
+    },
+    "id": "cli.observer.finish-supervision.indicator-shutdown-failed",
+    "output": "indicator shutdown failed: 日本語-error"
+  },
+  {
+    "args": {
+      "error": "{value} yes --mark"
+    },
+    "id": "cli.observer.finish-supervision.indicator-shutdown-failed",
+    "output": "indicator shutdown failed: {value} yes --mark"
+  },
+  {
+    "args": {
+      "error": "fixture-error"
+    },
+    "id": "cli.observer.production-shutdown-future.could-not-install-sigint-handler",
+    "output": "could not install SIGINT handler: fixture-error"
+  },
+  {
+    "args": {
+      "error": "日本語-error"
+    },
+    "id": "cli.observer.production-shutdown-future.could-not-install-sigint-handler",
+    "output": "could not install SIGINT handler: 日本語-error"
+  },
+  {
+    "args": {
+      "error": "{value} yes --mark"
+    },
+    "id": "cli.observer.production-shutdown-future.could-not-install-sigint-handler",
+    "output": "could not install SIGINT handler: {value} yes --mark"
+  },
+  {
+    "args": {
+      "error": "fixture-error"
+    },
+    "id": "cli.observer.production-shutdown-future.could-not-install-sigterm-handler",
+    "output": "could not install SIGTERM handler: fixture-error"
+  },
+  {
+    "args": {
+      "error": "日本語-error"
+    },
+    "id": "cli.observer.production-shutdown-future.could-not-install-sigterm-handler",
+    "output": "could not install SIGTERM handler: 日本語-error"
+  },
+  {
+    "args": {
+      "error": "{value} yes --mark"
+    },
+    "id": "cli.observer.production-shutdown-future.could-not-install-sigterm-handler",
+    "output": "could not install SIGTERM handler: {value} yes --mark"
+  },
+  {
+    "args": {
+      "message": "fixture-message"
+    },
+    "id": "cli.observer.join-error-message.panic",
+    "output": "panic: fixture-message"
+  },
+  {
+    "args": {
+      "message": "日本語-message"
+    },
+    "id": "cli.observer.join-error-message.panic",
+    "output": "panic: 日本語-message"
+  },
+  {
+    "args": {
+      "message": "{value} yes --mark"
+    },
+    "id": "cli.observer.join-error-message.panic",
+    "output": "panic: {value} yes --mark"
+  },
+  {
+    "args": {},
+    "id": "cli.observer.join-error-message.panic-non-string-panic-payload",
+    "output": "panic: non-string panic payload"
+  },
+  {
+    "args": {},
+    "id": "cli.observer.join-error-message.panic-non-string-panic-payload",
+    "output": "panic: non-string panic payload"
+  },
+  {
+    "args": {},
+    "id": "cli.observer.join-error-message.panic-non-string-panic-payload",
+    "output": "panic: non-string panic payload"
+  },
+  {
+    "args": {},
+    "id": "cli.observer.join-error-message.task-was-cancelled",
+    "output": "task was cancelled"
+  },
+  {
+    "args": {},
+    "id": "cli.observer.join-error-message.task-was-cancelled",
+    "output": "task was cancelled"
+  },
+  {
+    "args": {},
+    "id": "cli.observer.join-error-message.task-was-cancelled",
+    "output": "task was cancelled"
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.step",
+    "output": "one more step: check your journal's mark."
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.step",
+    "output": "one more step: check your journal's mark."
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.step",
+    "output": "one more step: check your journal's mark."
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.mark-prefix",
+    "output": "  your journal's mark: "
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.mark-prefix",
+    "output": "  your journal's mark: "
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.mark-prefix",
+    "output": "  your journal's mark: "
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.mark-unavailable",
+    "output": "  your journal's mark: unavailable right now"
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.mark-unavailable",
+    "output": "  your journal's mark: unavailable right now"
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.mark-unavailable",
+    "output": "  your journal's mark: unavailable right now"
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.subtext",
+    "output": "your journal shows this same mark in its network app. it should match, exactly."
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.subtext",
+    "output": "your journal shows this same mark in its network app. it should match, exactly."
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.subtext",
+    "output": "your journal shows this same mark in its network app. it should match, exactly."
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.ask-identified",
+    "output": "does this match your journal? type yes or no:"
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.ask-identified",
+    "output": "does this match your journal? type yes or no:"
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.ask-identified",
+    "output": "does this match your journal? type yes or no:"
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.couldnt-verify",
+    "output": "couldn't verify."
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.couldnt-verify",
+    "output": "couldn't verify."
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.couldnt-verify",
+    "output": "couldn't verify."
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.body-unavailable",
+    "output": "this computer couldn't work out your journal's mark, so there's nothing to compare. continue only if you're sure the link came from your journal."
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.body-unavailable",
+    "output": "this computer couldn't work out your journal's mark, so there's nothing to compare. continue only if you're sure the link came from your journal."
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.body-unavailable",
+    "output": "this computer couldn't work out your journal's mark, so there's nothing to compare. continue only if you're sure the link came from your journal."
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.ask-unavailable",
+    "output": "type continue to pair anyway, or cancel to stop:"
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.ask-unavailable",
+    "output": "type continue to pair anyway, or cancel to stop:"
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.ask-unavailable",
+    "output": "type continue to pair anyway, or cancel to stop:"
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.paired",
+    "output": "paired."
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.paired",
+    "output": "paired."
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.paired",
+    "output": "paired."
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.not-paired",
+    "output": "not paired."
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.not-paired",
+    "output": "not paired."
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.not-paired",
+    "output": "not paired."
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.mismatch-body",
+    "output": "you said this mark doesn't match the one your journal shows, so this computer isn't paired, and nothing it has kept went to that journal through this link. you may have pasted the wrong link, or something isn't right. get a fresh pair link from your journal and run setup again, or email support@solstone.app and we'll help."
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.mismatch-body",
+    "output": "you said this mark doesn't match the one your journal shows, so this computer isn't paired, and nothing it has kept went to that journal through this link. you may have pasted the wrong link, or something isn't right. get a fresh pair link from your journal and run setup again, or email support@solstone.app and we'll help."
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.mismatch-body",
+    "output": "you said this mark doesn't match the one your journal shows, so this computer isn't paired, and nothing it has kept went to that journal through this link. you may have pasted the wrong link, or something isn't right. get a fresh pair link from your journal and run setup again, or email support@solstone.app and we'll help."
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.cancel",
+    "output": "pairing cancelled. nothing this computer has kept went to that journal through this link. get a fresh pair link from your journal and run setup again when you're ready."
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.cancel",
+    "output": "pairing cancelled. nothing this computer has kept went to that journal through this link. get a fresh pair link from your journal and run setup again when you're ready."
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.cancel",
+    "output": "pairing cancelled. nothing this computer has kept went to that journal through this link. get a fresh pair link from your journal and run setup again when you're ready."
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.held",
+    "output": "waiting for you to confirm your journal's mark. nothing waiting goes into your journal until you do."
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.held",
+    "output": "waiting for you to confirm your journal's mark. nothing waiting goes into your journal until you do."
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.held",
+    "output": "waiting for you to confirm your journal's mark. nothing waiting goes into your journal until you do."
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.run-line",
+    "output": "when you're ready, run: solstone-tmux confirm"
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.run-line",
+    "output": "when you're ready, run: solstone-tmux confirm"
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.run-line",
+    "output": "when you're ready, run: solstone-tmux confirm"
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.confirm-done",
+    "output": "your journal's mark is already confirmed. nothing to do."
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.confirm-done",
+    "output": "your journal's mark is already confirmed. nothing to do."
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.confirm-done",
+    "output": "your journal's mark is already confirmed. nothing to do."
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.confirm-unpaired",
+    "output": "not paired. to pair, run: solstone-tmux setup"
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.confirm-unpaired",
+    "output": "not paired. to pair, run: solstone-tmux setup"
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.confirm-unpaired",
+    "output": "not paired. to pair, run: solstone-tmux setup"
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.setup-no-terminal",
+    "output": "setup can't ask you about your journal's mark here. run it in a terminal, or give the mark's two words with --mark \"word word\"."
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.setup-no-terminal",
+    "output": "setup can't ask you about your journal's mark here. run it in a terminal, or give the mark's two words with --mark \"word word\"."
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.setup-no-terminal",
+    "output": "setup can't ask you about your journal's mark here. run it in a terminal, or give the mark's two words with --mark \"word word\"."
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.confirm-no-terminal",
+    "output": "confirm can't ask you about your journal's mark here. run it in a terminal, or give the mark's two words with --mark \"word word\"."
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.confirm-no-terminal",
+    "output": "confirm can't ask you about your journal's mark here. run it in a terminal, or give the mark's two words with --mark \"word word\"."
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.confirm-no-terminal",
+    "output": "confirm can't ask you about your journal's mark here. run it in a terminal, or give the mark's two words with --mark \"word word\"."
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.mark-help",
+    "output": "the two words of the mark your journal's network app shows. needed when there's no terminal to ask you on."
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.mark-help",
+    "output": "the two words of the mark your journal's network app shows. needed when there's no terminal to ask you on."
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.mark-help",
+    "output": "the two words of the mark your journal's network app shows. needed when there's no terminal to ask you on."
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.mark-usage",
+    "output": "give the two words of your journal's mark, like --mark \"bramble quokka\"."
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.mark-usage",
+    "output": "give the two words of your journal's mark, like --mark \"bramble quokka\"."
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.mark-usage",
+    "output": "give the two words of your journal's mark, like --mark \"bramble quokka\"."
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.mark-mismatch",
+    "output": "the mark words you gave don't match the journal's mark, so this computer isn't paired, and nothing it has kept went to that journal through this link. check the words, get a fresh pair link from your journal and run setup again."
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.mark-mismatch",
+    "output": "the mark words you gave don't match the journal's mark, so this computer isn't paired, and nothing it has kept went to that journal through this link. check the words, get a fresh pair link from your journal and run setup again."
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.mark-mismatch",
+    "output": "the mark words you gave don't match the journal's mark, so this computer isn't paired, and nothing it has kept went to that journal through this link. check the words, get a fresh pair link from your journal and run setup again."
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.mark-unverifiable-setup",
+    "output": "this computer couldn't work out the journal's mark, so the words you gave can't be matched. this computer isn't paired, and nothing it has kept went to that journal through this link. get a fresh pair link from your journal and run setup in a terminal to decide for yourself."
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.mark-unverifiable-setup",
+    "output": "this computer couldn't work out the journal's mark, so the words you gave can't be matched. this computer isn't paired, and nothing it has kept went to that journal through this link. get a fresh pair link from your journal and run setup in a terminal to decide for yourself."
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.mark-unverifiable-setup",
+    "output": "this computer couldn't work out the journal's mark, so the words you gave can't be matched. this computer isn't paired, and nothing it has kept went to that journal through this link. get a fresh pair link from your journal and run setup in a terminal to decide for yourself."
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.mark-unverifiable-confirm",
+    "output": "this computer couldn't work out the journal's mark, so the words you gave can't be matched. waiting for you to confirm your journal's mark. nothing waiting goes into your journal until you do. run solstone-tmux confirm in a terminal to decide for yourself."
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.mark-unverifiable-confirm",
+    "output": "this computer couldn't work out the journal's mark, so the words you gave can't be matched. waiting for you to confirm your journal's mark. nothing waiting goes into your journal until you do. run solstone-tmux confirm in a terminal to decide for yourself."
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.mark-unverifiable-confirm",
+    "output": "this computer couldn't work out the journal's mark, so the words you gave can't be matched. waiting for you to confirm your journal's mark. nothing waiting goes into your journal until you do. run solstone-tmux confirm in a terminal to decide for yourself."
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.status-held-pairing",
+    "output": "pairing: waiting for you to confirm your journal's mark"
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.status-held-pairing",
+    "output": "pairing: waiting for you to confirm your journal's mark"
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.status-held-pairing",
+    "output": "pairing: waiting for you to confirm your journal's mark"
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.status-held-confirm",
+    "output": "confirm with: solstone-tmux confirm"
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.status-held-confirm",
+    "output": "confirm with: solstone-tmux confirm"
+  },
+  {
+    "args": {},
+    "id": "cli.pairing-answer.copy.status-held-confirm",
+    "output": "confirm with: solstone-tmux confirm"
+  },
+  {
+    "args": {},
+    "id": "cli.paths.fmt.home-is-not-set-refusing-to-use-a",
+    "output": "HOME is not set; refusing to use a system-wide location"
+  },
+  {
+    "args": {},
+    "id": "cli.paths.fmt.home-is-not-set-refusing-to-use-a",
+    "output": "HOME is not set; refusing to use a system-wide location"
+  },
+  {
+    "args": {},
+    "id": "cli.paths.fmt.home-is-not-set-refusing-to-use-a",
+    "output": "HOME is not set; refusing to use a system-wide location"
+  },
+  {
+    "args": {
+      "error": "fixture-error"
+    },
+    "id": "cli.paths.fmt.invalid-stream-name",
+    "output": "invalid stream name: fixture-error"
+  },
+  {
+    "args": {
+      "error": "日本語-error"
+    },
+    "id": "cli.paths.fmt.invalid-stream-name",
+    "output": "invalid stream name: 日本語-error"
+  },
+  {
+    "args": {
+      "error": "{value} yes --mark"
+    },
+    "id": "cli.paths.fmt.invalid-stream-name",
+    "output": "invalid stream name: {value} yes --mark"
+  },
+  {
+    "args": {
+      "arg0": "fixture-arg0"
+    },
+    "id": "cli.paths.fmt.is-a-symlink-or-wrong-file-type",
+    "output": "fixture-arg0 is a symlink or wrong file type"
+  },
+  {
+    "args": {
+      "arg0": "日本語-arg0"
+    },
+    "id": "cli.paths.fmt.is-a-symlink-or-wrong-file-type",
+    "output": "日本語-arg0 is a symlink or wrong file type"
+  },
+  {
+    "args": {
+      "arg0": "{value} yes --mark"
+    },
+    "id": "cli.paths.fmt.is-a-symlink-or-wrong-file-type",
+    "output": "{value} yes --mark is a symlink or wrong file type"
+  },
+  {
+    "args": {
+      "arg0": "fixture-arg0",
+      "source": "fixture-source"
+    },
+    "id": "cli.paths.fmt.message",
+    "output": "fixture-arg0: fixture-source"
+  },
+  {
+    "args": {
+      "arg0": "日本語-arg0",
+      "source": "日本語-source"
+    },
+    "id": "cli.paths.fmt.message",
+    "output": "日本語-arg0: 日本語-source"
+  },
+  {
+    "args": {
+      "arg0": "{value} yes --mark",
+      "source": "{value} yes --mark"
+    },
+    "id": "cli.paths.fmt.message",
+    "output": "{value} yes --mark: {value} yes --mark"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-capture-streams.inspect-captures-directory",
+    "output": "inspect captures directory"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-capture-streams.inspect-captures-directory",
+    "output": "inspect captures directory"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-capture-streams.inspect-captures-directory",
+    "output": "inspect captures directory"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-capture-streams.scan-capture-dates",
+    "output": "scan capture dates"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-capture-streams.scan-capture-dates",
+    "output": "scan capture dates"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-capture-streams.scan-capture-dates",
+    "output": "scan capture dates"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-capture-streams.read-capture-date-entry",
+    "output": "read capture date entry"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-capture-streams.read-capture-date-entry",
+    "output": "read capture date entry"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-capture-streams.read-capture-date-entry",
+    "output": "read capture date entry"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-capture-streams.inspect-capture-date-entry",
+    "output": "inspect capture date entry"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-capture-streams.inspect-capture-date-entry",
+    "output": "inspect capture date entry"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-capture-streams.inspect-capture-date-entry",
+    "output": "inspect capture date entry"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-capture-streams.scan-capture-streams",
+    "output": "scan capture streams"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-capture-streams.scan-capture-streams",
+    "output": "scan capture streams"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-capture-streams.scan-capture-streams",
+    "output": "scan capture streams"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-capture-streams.read-capture-stream-entry",
+    "output": "read capture stream entry"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-capture-streams.read-capture-stream-entry",
+    "output": "read capture stream entry"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-capture-streams.read-capture-stream-entry",
+    "output": "read capture stream entry"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-stream-inner.scan-stream-directory",
+    "output": "scan stream directory"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-stream-inner.scan-stream-directory",
+    "output": "scan stream directory"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-stream-inner.scan-stream-directory",
+    "output": "scan stream directory"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-stream-inner.read-stream-entry",
+    "output": "read stream entry"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-stream-inner.read-stream-entry",
+    "output": "read stream entry"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-stream-inner.read-stream-entry",
+    "output": "read stream entry"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-candidate.candidate-stem-is-not-a-well-formed-hhmmss",
+    "output": "candidate stem is not a well-formed HHMMSS"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-candidate.candidate-stem-is-not-a-well-formed-hhmmss",
+    "output": "candidate stem is not a well-formed HHMMSS"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-candidate.candidate-stem-is-not-a-well-formed-hhmmss",
+    "output": "candidate stem is not a well-formed HHMMSS"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-candidate.read-segment-metadata",
+    "output": "read segment metadata"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-candidate.read-segment-metadata",
+    "output": "read segment metadata"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-candidate.read-segment-metadata",
+    "output": "read segment metadata"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-candidate.missing-metadata-with-non-empty-jsonl",
+    "output": "missing metadata with non-empty JSONL"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-candidate.missing-metadata-with-non-empty-jsonl",
+    "output": "missing metadata with non-empty JSONL"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-candidate.missing-metadata-with-non-empty-jsonl",
+    "output": "missing metadata with non-empty JSONL"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-candidate.missing-metadata-cannot-prove-an-empty-segment",
+    "output": "missing metadata cannot prove an empty segment"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-candidate.missing-metadata-cannot-prove-an-empty-segment",
+    "output": "missing metadata cannot prove an empty segment"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-candidate.missing-metadata-cannot-prove-an-empty-segment",
+    "output": "missing metadata cannot prove an empty segment"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-candidate.metadata-is-torn-or-contradictory",
+    "output": "metadata is torn or contradictory"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-candidate.metadata-is-torn-or-contradictory",
+    "output": "metadata is torn or contradictory"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-candidate.metadata-is-torn-or-contradictory",
+    "output": "metadata is torn or contradictory"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-candidate.remove-orphan-creating-metadata",
+    "output": "remove orphan creating metadata"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-candidate.remove-orphan-creating-metadata",
+    "output": "remove orphan creating metadata"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-candidate.remove-orphan-creating-metadata",
+    "output": "remove orphan creating metadata"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-candidate.removed-orphan-creating-metadata",
+    "output": "removed orphan creating metadata"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-candidate.removed-orphan-creating-metadata",
+    "output": "removed orphan creating metadata"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-candidate.removed-orphan-creating-metadata",
+    "output": "removed orphan creating metadata"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-candidate.inspect-orphan-finalized-target",
+    "output": "inspect orphan finalized target"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-candidate.inspect-orphan-finalized-target",
+    "output": "inspect orphan finalized target"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-candidate.inspect-orphan-finalized-target",
+    "output": "inspect orphan finalized target"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-candidate.remove-orphan-finalized-metadata",
+    "output": "remove orphan finalized metadata"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-candidate.remove-orphan-finalized-metadata",
+    "output": "remove orphan finalized metadata"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-candidate.remove-orphan-finalized-metadata",
+    "output": "remove orphan finalized metadata"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-candidate.removed-metadata-left-after-finalized-rename",
+    "output": "removed metadata left after finalized rename"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-candidate.removed-metadata-left-after-finalized-rename",
+    "output": "removed metadata left after finalized rename"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-candidate.removed-metadata-left-after-finalized-rename",
+    "output": "removed metadata left after finalized rename"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-candidate.metadata-has-no-matching-source-or-validated-finalized",
+    "output": "metadata has no matching source or validated finalized target"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-candidate.metadata-has-no-matching-source-or-validated-finalized",
+    "output": "metadata has no matching source or validated finalized target"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-candidate.metadata-has-no-matching-source-or-validated-finalized",
+    "output": "metadata has no matching source or validated finalized target"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-candidate.finalized-target-collision-source-and-metadata-retained",
+    "output": "finalized target collision; source and metadata retained"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-candidate.finalized-target-collision-source-and-metadata-retained",
+    "output": "finalized target collision; source and metadata retained"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-candidate.finalized-target-collision-source-and-metadata-retained",
+    "output": "finalized target collision; source and metadata retained"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-candidate.run-confirmed-empty-pre-removal-hook",
+    "output": "run confirmed-empty pre-removal hook"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-candidate.run-confirmed-empty-pre-removal-hook",
+    "output": "run confirmed-empty pre-removal hook"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-candidate.run-confirmed-empty-pre-removal-hook",
+    "output": "run confirmed-empty pre-removal hook"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-candidate.confirmed-empty-segment-changed-before-removal-retained-without",
+    "output": "confirmed-empty segment changed before removal; retained without deleting unvalidated entries"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-candidate.confirmed-empty-segment-changed-before-removal-retained-without",
+    "output": "confirmed-empty segment changed before removal; retained without deleting unvalidated entries"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-candidate.confirmed-empty-segment-changed-before-removal-retained-without",
+    "output": "confirmed-empty segment changed before removal; retained without deleting unvalidated entries"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-candidate.remove-confirmed-empty-segment",
+    "output": "remove confirmed-empty segment"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-candidate.remove-confirmed-empty-segment",
+    "output": "remove confirmed-empty segment"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-candidate.remove-confirmed-empty-segment",
+    "output": "remove confirmed-empty segment"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-candidate.remove-confirmed-empty-metadata",
+    "output": "remove confirmed-empty metadata"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-candidate.remove-confirmed-empty-metadata",
+    "output": "remove confirmed-empty metadata"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-candidate.remove-confirmed-empty-metadata",
+    "output": "remove confirmed-empty metadata"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-candidate.valid-metadata-positively-confirmed-an-empty-segment",
+    "output": "valid metadata positively confirmed an empty segment"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-candidate.valid-metadata-positively-confirmed-an-empty-segment",
+    "output": "valid metadata positively confirmed an empty segment"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-candidate.valid-metadata-positively-confirmed-an-empty-segment",
+    "output": "valid metadata positively confirmed an empty segment"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-candidate.empty-metadata-contradicts-jsonl-bytes",
+    "output": "empty metadata contradicts JSONL bytes"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-candidate.empty-metadata-contradicts-jsonl-bytes",
+    "output": "empty metadata contradicts JSONL bytes"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-candidate.empty-metadata-contradicts-jsonl-bytes",
+    "output": "empty metadata contradicts JSONL bytes"
+  },
+  {
+    "args": {
+      "source_error": "fixture-source_error"
+    },
+    "id": "cli.recovery.recover-candidate.source-rename-failed-and-was-retained",
+    "output": "source rename failed and was retained: fixture-source_error"
+  },
+  {
+    "args": {
+      "source_error": "日本語-source_error"
+    },
+    "id": "cli.recovery.recover-candidate.source-rename-failed-and-was-retained",
+    "output": "source rename failed and was retained: 日本語-source_error"
+  },
+  {
+    "args": {
+      "source_error": "{value} yes --mark"
+    },
+    "id": "cli.recovery.recover-candidate.source-rename-failed-and-was-retained",
+    "output": "source rename failed and was retained: {value} yes --mark"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-candidate.fsync-recovered-rename-parent",
+    "output": "fsync recovered rename parent"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-candidate.fsync-recovered-rename-parent",
+    "output": "fsync recovered rename parent"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-candidate.fsync-recovered-rename-parent",
+    "output": "fsync recovered rename parent"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-candidate.remove-recovered-metadata",
+    "output": "remove recovered metadata"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-candidate.remove-recovered-metadata",
+    "output": "remove recovered metadata"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-candidate.remove-recovered-metadata",
+    "output": "remove recovered metadata"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-candidate.repaired-only-a-torn-final-line-and-finalized",
+    "output": "repaired only a torn final line and finalized"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-candidate.repaired-only-a-torn-final-line-and-finalized",
+    "output": "repaired only a torn final line and finalized"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-candidate.repaired-only-a-torn-final-line-and-finalized",
+    "output": "repaired only a torn final line and finalized"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-candidate.validated-durable-bytes-and-finalized",
+    "output": "validated durable bytes and finalized"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-candidate.validated-durable-bytes-and-finalized",
+    "output": "validated durable bytes and finalized"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.recover-candidate.validated-durable-bytes-and-finalized",
+    "output": "validated durable bytes and finalized"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.validate-stream.canonicalize-data-root",
+    "output": "canonicalize data root"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.validate-stream.canonicalize-data-root",
+    "output": "canonicalize data root"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.validate-stream.canonicalize-data-root",
+    "output": "canonicalize data root"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.validate-stream.inspect-stream-directory",
+    "output": "inspect stream directory"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.validate-stream.inspect-stream-directory",
+    "output": "inspect stream directory"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.validate-stream.inspect-stream-directory",
+    "output": "inspect stream directory"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.validate-stream.canonicalize-stream-directory",
+    "output": "canonicalize stream directory"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.validate-stream.canonicalize-stream-directory",
+    "output": "canonicalize stream directory"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.validate-stream.canonicalize-stream-directory",
+    "output": "canonicalize stream directory"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.reject-special-target.inspect-recovery-target",
+    "output": "inspect recovery target"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.reject-special-target.inspect-recovery-target",
+    "output": "inspect recovery target"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.reject-special-target.inspect-recovery-target",
+    "output": "inspect recovery target"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.validate-files.scan-incomplete-segment",
+    "output": "scan incomplete segment"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.validate-files.scan-incomplete-segment",
+    "output": "scan incomplete segment"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.validate-files.scan-incomplete-segment",
+    "output": "scan incomplete segment"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.validate-files.read-incomplete-segment-entry",
+    "output": "read incomplete segment entry"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.validate-files.read-incomplete-segment-entry",
+    "output": "read incomplete segment entry"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.validate-files.read-incomplete-segment-entry",
+    "output": "read incomplete segment entry"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.validate-files.inspect-incomplete-segment-entry",
+    "output": "inspect incomplete segment entry"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.validate-files.inspect-incomplete-segment-entry",
+    "output": "inspect incomplete segment entry"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.validate-files.inspect-incomplete-segment-entry",
+    "output": "inspect incomplete segment entry"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.validate-files.non-utf-filename-in-segment",
+    "output": "non-UTF-8 filename in segment"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.validate-files.non-utf-filename-in-segment",
+    "output": "non-UTF-8 filename in segment"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.validate-files.non-utf-filename-in-segment",
+    "output": "non-UTF-8 filename in segment"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.validate-files.unknown-or-non-regular-file-in-segment",
+    "output": "unknown or non-regular file in segment"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.validate-files.unknown-or-non-regular-file-in-segment",
+    "output": "unknown or non-regular file in segment"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.validate-files.unknown-or-non-regular-file-in-segment",
+    "output": "unknown or non-regular file in segment"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.validate-files.referenced-jsonl-file-is-missing",
+    "output": "referenced JSONL file is missing"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.validate-files.referenced-jsonl-file-is-missing",
+    "output": "referenced JSONL file is missing"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.validate-files.referenced-jsonl-file-is-missing",
+    "output": "referenced JSONL file is missing"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.validate-files.read-jsonl-during-recovery",
+    "output": "read JSONL during recovery"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.validate-files.read-jsonl-during-recovery",
+    "output": "read JSONL during recovery"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.validate-files.read-jsonl-during-recovery",
+    "output": "read JSONL during recovery"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.validate-files.jsonl-is-shorter-than-its-durable-offset",
+    "output": "JSONL is shorter than its durable offset"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.validate-files.jsonl-is-shorter-than-its-durable-offset",
+    "output": "JSONL is shorter than its durable offset"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.validate-files.jsonl-is-shorter-than-its-durable-offset",
+    "output": "JSONL is shorter than its durable offset"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.validate-files.earlier-jsonl-corruption",
+    "output": "earlier JSONL corruption"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.validate-files.earlier-jsonl-corruption",
+    "output": "earlier JSONL corruption"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.validate-files.earlier-jsonl-corruption",
+    "output": "earlier JSONL corruption"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.validate-files.session-frame-ids-disagree-with-metadata",
+    "output": "session frame IDs disagree with metadata"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.validate-files.session-frame-ids-disagree-with-metadata",
+    "output": "session frame IDs disagree with metadata"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.validate-files.session-frame-ids-disagree-with-metadata",
+    "output": "session frame IDs disagree with metadata"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.validate-files.complete-or-multiline-bytes-exist-beyond-the-durable",
+    "output": "complete or multiline bytes exist beyond the durable offset"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.validate-files.complete-or-multiline-bytes-exist-beyond-the-durable",
+    "output": "complete or multiline bytes exist beyond the durable offset"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.validate-files.complete-or-multiline-bytes-exist-beyond-the-durable",
+    "output": "complete or multiline bytes exist beyond the durable offset"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.validate-files.global-frame-ids-are-duplicated-or-nonconsecutive",
+    "output": "global frame IDs are duplicated or nonconsecutive"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.validate-files.global-frame-ids-are-duplicated-or-nonconsecutive",
+    "output": "global frame IDs are duplicated or nonconsecutive"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.validate-files.global-frame-ids-are-duplicated-or-nonconsecutive",
+    "output": "global frame IDs are duplicated or nonconsecutive"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.validate-files.global-frame-ids-disagree-with-metadata",
+    "output": "global frame IDs disagree with metadata"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.validate-files.global-frame-ids-disagree-with-metadata",
+    "output": "global frame IDs disagree with metadata"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.validate-files.global-frame-ids-disagree-with-metadata",
+    "output": "global frame IDs disagree with metadata"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.apply-repairs.open-jsonl-repair",
+    "output": "open JSONL repair"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.apply-repairs.open-jsonl-repair",
+    "output": "open JSONL repair"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.apply-repairs.open-jsonl-repair",
+    "output": "open JSONL repair"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.apply-repairs.truncate-and-fsync-jsonl-repair",
+    "output": "truncate and fsync JSONL repair"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.apply-repairs.truncate-and-fsync-jsonl-repair",
+    "output": "truncate and fsync JSONL repair"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.apply-repairs.truncate-and-fsync-jsonl-repair",
+    "output": "truncate and fsync JSONL repair"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.validated-empty-files.scan-empty-segment",
+    "output": "scan empty segment"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.validated-empty-files.scan-empty-segment",
+    "output": "scan empty segment"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.validated-empty-files.scan-empty-segment",
+    "output": "scan empty segment"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.validated-empty-files.read-empty-segment-entry",
+    "output": "read empty segment entry"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.validated-empty-files.read-empty-segment-entry",
+    "output": "read empty segment entry"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.validated-empty-files.read-empty-segment-entry",
+    "output": "read empty segment entry"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.validated-empty-files.inspect-empty-segment-entry",
+    "output": "inspect empty segment entry"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.validated-empty-files.inspect-empty-segment-entry",
+    "output": "inspect empty segment entry"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.validated-empty-files.inspect-empty-segment-entry",
+    "output": "inspect empty segment entry"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.remove-validated-empty-files.scan-zero-length-files",
+    "output": "scan zero-length files"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.remove-validated-empty-files.scan-zero-length-files",
+    "output": "scan zero-length files"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.remove-validated-empty-files.scan-zero-length-files",
+    "output": "scan zero-length files"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.remove-validated-empty-files.read-zero-length-entry",
+    "output": "read zero-length entry"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.remove-validated-empty-files.read-zero-length-entry",
+    "output": "read zero-length entry"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.remove-validated-empty-files.read-zero-length-entry",
+    "output": "read zero-length entry"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.remove-validated-empty-files.reinspect-zero-length-jsonl",
+    "output": "reinspect zero-length JSONL"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.remove-validated-empty-files.reinspect-zero-length-jsonl",
+    "output": "reinspect zero-length JSONL"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.remove-validated-empty-files.reinspect-zero-length-jsonl",
+    "output": "reinspect zero-length JSONL"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.remove-validated-empty-files.remove-zero-length-jsonl",
+    "output": "remove zero-length JSONL"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.remove-validated-empty-files.remove-zero-length-jsonl",
+    "output": "remove zero-length JSONL"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.remove-validated-empty-files.remove-zero-length-jsonl",
+    "output": "remove zero-length JSONL"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.source-has-nonempty-jsonl.scan-metadata-less-segment",
+    "output": "scan metadata-less segment"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.source-has-nonempty-jsonl.scan-metadata-less-segment",
+    "output": "scan metadata-less segment"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.source-has-nonempty-jsonl.scan-metadata-less-segment",
+    "output": "scan metadata-less segment"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.source-has-nonempty-jsonl.read-metadata-less-segment-entry",
+    "output": "read metadata-less segment entry"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.source-has-nonempty-jsonl.read-metadata-less-segment-entry",
+    "output": "read metadata-less segment entry"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.source-has-nonempty-jsonl.read-metadata-less-segment-entry",
+    "output": "read metadata-less segment entry"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.quarantine.quarantine-segment",
+    "output": "quarantine segment"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.quarantine.quarantine-segment",
+    "output": "quarantine segment"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.quarantine.quarantine-segment",
+    "output": "quarantine segment"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.quarantine.quarantine-metadata",
+    "output": "quarantine metadata"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.quarantine.quarantine-metadata",
+    "output": "quarantine metadata"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.quarantine.quarantine-metadata",
+    "output": "quarantine metadata"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.entry-exists.inspect-recovery-collision-target",
+    "output": "inspect recovery collision target"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.entry-exists.inspect-recovery-collision-target",
+    "output": "inspect recovery collision target"
+  },
+  {
+    "args": {},
+    "id": "cli.recovery.entry-exists.inspect-recovery-collision-target",
+    "output": "inspect recovery collision target"
+  },
+  {
+    "args": {
+      "arg0": "fixture-arg0"
+    },
+    "id": "cli.recovery.fmt.recovery-candidate-escapes-the-configured-data-root",
+    "output": "recovery candidate escapes the configured data root: fixture-arg0"
+  },
+  {
+    "args": {
+      "arg0": "日本語-arg0"
+    },
+    "id": "cli.recovery.fmt.recovery-candidate-escapes-the-configured-data-root",
+    "output": "recovery candidate escapes the configured data root: 日本語-arg0"
+  },
+  {
+    "args": {
+      "arg0": "{value} yes --mark"
+    },
+    "id": "cli.recovery.fmt.recovery-candidate-escapes-the-configured-data-root",
+    "output": "recovery candidate escapes the configured data root: {value} yes --mark"
+  },
+  {
+    "args": {
+      "arg0": "fixture-arg0"
+    },
+    "id": "cli.recovery.fmt.recovery-candidate-is-a-symlink-or-wrong-file",
+    "output": "recovery candidate is a symlink or wrong file type: fixture-arg0"
+  },
+  {
+    "args": {
+      "arg0": "日本語-arg0"
+    },
+    "id": "cli.recovery.fmt.recovery-candidate-is-a-symlink-or-wrong-file",
+    "output": "recovery candidate is a symlink or wrong file type: 日本語-arg0"
+  },
+  {
+    "args": {
+      "arg0": "{value} yes --mark"
+    },
+    "id": "cli.recovery.fmt.recovery-candidate-is-a-symlink-or-wrong-file",
+    "output": "recovery candidate is a symlink or wrong file type: {value} yes --mark"
+  },
+  {
+    "args": {},
+    "id": "cli.relay-access.copy.failure-line",
+    "output": "solstone-tmux: journal dial addresses were not refreshed"
+  },
+  {
+    "args": {},
+    "id": "cli.relay-access.copy.failure-line",
+    "output": "solstone-tmux: journal dial addresses were not refreshed"
+  },
+  {
+    "args": {},
+    "id": "cli.relay-access.copy.failure-line",
+    "output": "solstone-tmux: journal dial addresses were not refreshed"
+  },
+  {
+    "args": {},
+    "id": "cli.segment.finalize.rename-finalized-segment",
+    "output": "rename finalized segment"
+  },
+  {
+    "args": {},
+    "id": "cli.segment.finalize.rename-finalized-segment",
+    "output": "rename finalized segment"
+  },
+  {
+    "args": {},
+    "id": "cli.segment.finalize.rename-finalized-segment",
+    "output": "rename finalized segment"
+  },
+  {
+    "args": {},
+    "id": "cli.segment.finalize.remove-finalized-metadata",
+    "output": "remove finalized metadata"
+  },
+  {
+    "args": {},
+    "id": "cli.segment.finalize.remove-finalized-metadata",
+    "output": "remove finalized metadata"
+  },
+  {
+    "args": {},
+    "id": "cli.segment.finalize.remove-finalized-metadata",
+    "output": "remove finalized metadata"
+  },
+  {
+    "args": {},
+    "id": "cli.segment.remove-confirmed-empty.scan-confirmed-empty-segment",
+    "output": "scan confirmed-empty segment"
+  },
+  {
+    "args": {},
+    "id": "cli.segment.remove-confirmed-empty.scan-confirmed-empty-segment",
+    "output": "scan confirmed-empty segment"
+  },
+  {
+    "args": {},
+    "id": "cli.segment.remove-confirmed-empty.scan-confirmed-empty-segment",
+    "output": "scan confirmed-empty segment"
+  },
+  {
+    "args": {},
+    "id": "cli.segment.remove-confirmed-empty.read-confirmed-empty-entry",
+    "output": "read confirmed-empty entry"
+  },
+  {
+    "args": {},
+    "id": "cli.segment.remove-confirmed-empty.read-confirmed-empty-entry",
+    "output": "read confirmed-empty entry"
+  },
+  {
+    "args": {},
+    "id": "cli.segment.remove-confirmed-empty.read-confirmed-empty-entry",
+    "output": "read confirmed-empty entry"
+  },
+  {
+    "args": {},
+    "id": "cli.segment.remove-confirmed-empty.inspect-confirmed-empty-entry",
+    "output": "inspect confirmed-empty entry"
+  },
+  {
+    "args": {},
+    "id": "cli.segment.remove-confirmed-empty.inspect-confirmed-empty-entry",
+    "output": "inspect confirmed-empty entry"
+  },
+  {
+    "args": {},
+    "id": "cli.segment.remove-confirmed-empty.inspect-confirmed-empty-entry",
+    "output": "inspect confirmed-empty entry"
+  },
+  {
+    "args": {},
+    "id": "cli.segment.remove-confirmed-empty.inspect-confirmed-empty-file",
+    "output": "inspect confirmed-empty file"
+  },
+  {
+    "args": {},
+    "id": "cli.segment.remove-confirmed-empty.inspect-confirmed-empty-file",
+    "output": "inspect confirmed-empty file"
+  },
+  {
+    "args": {},
+    "id": "cli.segment.remove-confirmed-empty.inspect-confirmed-empty-file",
+    "output": "inspect confirmed-empty file"
+  },
+  {
+    "args": {
+      "error": "fixture-error"
+    },
+    "id": "cli.segment.fmt.frame-serialization-failed",
+    "output": "frame serialization failed: fixture-error"
+  },
+  {
+    "args": {
+      "error": "日本語-error"
+    },
+    "id": "cli.segment.fmt.frame-serialization-failed",
+    "output": "frame serialization failed: 日本語-error"
+  },
+  {
+    "args": {
+      "error": "{value} yes --mark"
+    },
+    "id": "cli.segment.fmt.frame-serialization-failed",
+    "output": "frame serialization failed: {value} yes --mark"
+  },
+  {
+    "args": {
+      "arg0": "fixture-arg0"
+    },
+    "id": "cli.segment.fmt.segment-path-already-exists",
+    "output": "segment path already exists: fixture-arg0"
+  },
+  {
+    "args": {
+      "arg0": "日本語-arg0"
+    },
+    "id": "cli.segment.fmt.segment-path-already-exists",
+    "output": "segment path already exists: 日本語-arg0"
+  },
+  {
+    "args": {
+      "arg0": "{value} yes --mark"
+    },
+    "id": "cli.segment.fmt.segment-path-already-exists",
+    "output": "segment path already exists: {value} yes --mark"
+  },
+  {
+    "args": {},
+    "id": "cli.segment.fmt.segment-is-poisoned-after-a-failed-rollback",
+    "output": "segment is poisoned after a failed rollback"
+  },
+  {
+    "args": {},
+    "id": "cli.segment.fmt.segment-is-poisoned-after-a-failed-rollback",
+    "output": "segment is poisoned after a failed rollback"
+  },
+  {
+    "args": {},
+    "id": "cli.segment.fmt.segment-is-poisoned-after-a-failed-rollback",
+    "output": "segment is poisoned after a failed rollback"
+  },
+  {
+    "args": {},
+    "id": "cli.segment.fmt.segment-is-already-closed",
+    "output": "segment is already closed"
+  },
+  {
+    "args": {},
+    "id": "cli.segment.fmt.segment-is-already-closed",
+    "output": "segment is already closed"
+  },
+  {
+    "args": {},
+    "id": "cli.segment.fmt.segment-is-already-closed",
+    "output": "segment is already closed"
+  },
+  {
+    "args": {},
+    "id": "cli.segment.fmt.segment-is-not-metadata-confirmed-empty",
+    "output": "segment is not metadata-confirmed empty"
+  },
+  {
+    "args": {},
+    "id": "cli.segment.fmt.segment-is-not-metadata-confirmed-empty",
+    "output": "segment is not metadata-confirmed empty"
+  },
+  {
+    "args": {},
+    "id": "cli.segment.fmt.segment-is-not-metadata-confirmed-empty",
+    "output": "segment is not metadata-confirmed empty"
+  },
+  {
+    "args": {},
+    "id": "cli.segment.fmt.segment-frame-id-overflow",
+    "output": "segment frame_id overflow"
+  },
+  {
+    "args": {},
+    "id": "cli.segment.fmt.segment-frame-id-overflow",
+    "output": "segment frame_id overflow"
+  },
+  {
+    "args": {},
+    "id": "cli.segment.fmt.segment-frame-id-overflow",
+    "output": "segment frame_id overflow"
+  },
+  {
+    "args": {},
+    "id": "cli.service-launchd.activate.launchd-loaded-check",
+    "output": "launchd loaded check"
+  },
+  {
+    "args": {},
+    "id": "cli.service-launchd.activate.launchd-loaded-check",
+    "output": "launchd loaded check"
+  },
+  {
+    "args": {},
+    "id": "cli.service-launchd.activate.launchd-loaded-check",
+    "output": "launchd loaded check"
+  },
+  {
+    "args": {},
+    "id": "cli.service-launchd.status.launchd-status",
+    "output": "launchd status"
+  },
+  {
+    "args": {},
+    "id": "cli.service-launchd.status.launchd-status",
+    "output": "launchd status"
+  },
+  {
+    "args": {},
+    "id": "cli.service-launchd.status.launchd-status",
+    "output": "launchd status"
+  },
+  {
+    "args": {},
+    "id": "cli.service-launchd.graceful-stop.launchd-stop-inspection",
+    "output": "launchd stop inspection"
+  },
+  {
+    "args": {},
+    "id": "cli.service-launchd.graceful-stop.launchd-stop-inspection",
+    "output": "launchd stop inspection"
+  },
+  {
+    "args": {},
+    "id": "cli.service-launchd.graceful-stop.launchd-stop-inspection",
+    "output": "launchd stop inspection"
+  },
+  {
+    "args": {},
+    "id": "cli.service-launchd.unload.launchd-kill",
+    "output": "launchd kill"
+  },
+  {
+    "args": {},
+    "id": "cli.service-launchd.unload.launchd-kill",
+    "output": "launchd kill"
+  },
+  {
+    "args": {},
+    "id": "cli.service-launchd.unload.launchd-kill",
+    "output": "launchd kill"
+  },
+  {
+    "args": {},
+    "id": "cli.service-launchd.unload.launchd-quiescence-check",
+    "output": "launchd quiescence check"
+  },
+  {
+    "args": {},
+    "id": "cli.service-launchd.unload.launchd-quiescence-check",
+    "output": "launchd quiescence check"
+  },
+  {
+    "args": {},
+    "id": "cli.service-launchd.unload.launchd-quiescence-check",
+    "output": "launchd quiescence check"
+  },
+  {
+    "args": {
+      "LABEL": "fixture-LABEL",
+      "arg0": "fixture-arg0",
+      "retry_command": "fixture-retry_command"
+    },
+    "id": "cli.service-launchd.unload.still-reports-a-live-pid-after-seconds-rerun",
+    "output": "fixture-LABEL still reports a live pid after fixture-arg0 seconds; rerun solstone-tmux fixture-retry_command"
+  },
+  {
+    "args": {
+      "LABEL": "日本語-LABEL",
+      "arg0": "日本語-arg0",
+      "retry_command": "日本語-retry_command"
+    },
+    "id": "cli.service-launchd.unload.still-reports-a-live-pid-after-seconds-rerun",
+    "output": "日本語-LABEL still reports a live pid after 日本語-arg0 seconds; rerun solstone-tmux 日本語-retry_command"
+  },
+  {
+    "args": {
+      "LABEL": "{value} yes --mark",
+      "arg0": "{value} yes --mark",
+      "retry_command": "{value} yes --mark"
+    },
+    "id": "cli.service-launchd.unload.still-reports-a-live-pid-after-seconds-rerun",
+    "output": "{value} yes --mark still reports a live pid after {value} yes --mark seconds; rerun solstone-tmux {value} yes --mark"
+  },
+  {
+    "args": {},
+    "id": "cli.service-launchd.unload.launchd-bootout",
+    "output": "launchd bootout"
+  },
+  {
+    "args": {},
+    "id": "cli.service-launchd.unload.launchd-bootout",
+    "output": "launchd bootout"
+  },
+  {
+    "args": {},
+    "id": "cli.service-launchd.unload.launchd-bootout",
+    "output": "launchd bootout"
+  },
+  {
+    "args": {
+      "LABEL": "fixture-LABEL"
+    },
+    "id": "cli.service-launchd.verify-loaded.is-loaded-but-does-not-report-a-live",
+    "output": "fixture-LABEL is loaded but does not report a live pid; rerun solstone-tmux install-service"
+  },
+  {
+    "args": {
+      "LABEL": "日本語-LABEL"
+    },
+    "id": "cli.service-launchd.verify-loaded.is-loaded-but-does-not-report-a-live",
+    "output": "日本語-LABEL is loaded but does not report a live pid; rerun solstone-tmux install-service"
+  },
+  {
+    "args": {
+      "LABEL": "{value} yes --mark"
+    },
+    "id": "cli.service-launchd.verify-loaded.is-loaded-but-does-not-report-a-live",
+    "output": "{value} yes --mark is loaded but does not report a live pid; rerun solstone-tmux install-service"
+  },
+  {
+    "args": {
+      "LABEL": "fixture-LABEL",
+      "expected": "fixture-expected",
+      "pid": "fixture-pid"
+    },
+    "id": "cli.service-launchd.verify-loaded.was-running-as-pid-and-its-plist-was",
+    "output": "fixture-LABEL was running as pid fixture-expected and its plist was already current, so install-service left it alone, but it now reports pid fixture-pid; the job restarted on its own and this install did not observe what it started. Rerun solstone-tmux install-service"
+  },
+  {
+    "args": {
+      "LABEL": "日本語-LABEL",
+      "expected": "日本語-expected",
+      "pid": "日本語-pid"
+    },
+    "id": "cli.service-launchd.verify-loaded.was-running-as-pid-and-its-plist-was",
+    "output": "日本語-LABEL was running as pid 日本語-expected and its plist was already current, so install-service left it alone, but it now reports pid 日本語-pid; the job restarted on its own and this install did not observe what it started. Rerun solstone-tmux install-service"
+  },
+  {
+    "args": {
+      "LABEL": "{value} yes --mark",
+      "expected": "{value} yes --mark",
+      "pid": "{value} yes --mark"
+    },
+    "id": "cli.service-launchd.verify-loaded.was-running-as-pid-and-its-plist-was",
+    "output": "{value} yes --mark was running as pid {value} yes --mark and its plist was already current, so install-service left it alone, but it now reports pid {value} yes --mark; the job restarted on its own and this install did not observe what it started. Rerun solstone-tmux install-service"
+  },
+  {
+    "args": {},
+    "id": "cli.service-launchd.disable.launchd-disable",
+    "output": "launchd disable"
+  },
+  {
+    "args": {},
+    "id": "cli.service-launchd.disable.launchd-disable",
+    "output": "launchd disable"
+  },
+  {
+    "args": {},
+    "id": "cli.service-launchd.disable.launchd-disable",
+    "output": "launchd disable"
+  },
+  {
+    "args": {},
+    "id": "cli.service-launchd.enable.launchd-enable",
+    "output": "launchd enable"
+  },
+  {
+    "args": {},
+    "id": "cli.service-launchd.enable.launchd-enable",
+    "output": "launchd enable"
+  },
+  {
+    "args": {},
+    "id": "cli.service-launchd.enable.launchd-enable",
+    "output": "launchd enable"
+  },
+  {
+    "args": {},
+    "id": "cli.service-launchd.bootstrap.launchd-bootstrap",
+    "output": "launchd bootstrap"
+  },
+  {
+    "args": {},
+    "id": "cli.service-launchd.bootstrap.launchd-bootstrap",
+    "output": "launchd bootstrap"
+  },
+  {
+    "args": {},
+    "id": "cli.service-launchd.bootstrap.launchd-bootstrap",
+    "output": "launchd bootstrap"
+  },
+  {
+    "args": {},
+    "id": "cli.service-systemd.prepare-install.systemd-stop",
+    "output": "systemd stop"
+  },
+  {
+    "args": {},
+    "id": "cli.service-systemd.prepare-install.systemd-stop",
+    "output": "systemd stop"
+  },
+  {
+    "args": {},
+    "id": "cli.service-systemd.prepare-install.systemd-stop",
+    "output": "systemd stop"
+  },
+  {
+    "args": {},
+    "id": "cli.service-systemd.prepare-install.systemd-daemon-reload",
+    "output": "systemd daemon-reload"
+  },
+  {
+    "args": {},
+    "id": "cli.service-systemd.prepare-install.systemd-daemon-reload",
+    "output": "systemd daemon-reload"
+  },
+  {
+    "args": {},
+    "id": "cli.service-systemd.prepare-install.systemd-daemon-reload",
+    "output": "systemd daemon-reload"
+  },
+  {
+    "args": {},
+    "id": "cli.service-systemd.activate.systemd-enable",
+    "output": "systemd enable"
+  },
+  {
+    "args": {},
+    "id": "cli.service-systemd.activate.systemd-enable",
+    "output": "systemd enable"
+  },
+  {
+    "args": {},
+    "id": "cli.service-systemd.activate.systemd-enable",
+    "output": "systemd enable"
+  },
+  {
+    "args": {},
+    "id": "cli.service-systemd.activate.systemd-active-check",
+    "output": "systemd active check"
+  },
+  {
+    "args": {},
+    "id": "cli.service-systemd.activate.systemd-active-check",
+    "output": "systemd active check"
+  },
+  {
+    "args": {},
+    "id": "cli.service-systemd.activate.systemd-active-check",
+    "output": "systemd active check"
+  },
+  {
+    "args": {},
+    "id": "cli.service-systemd.uninstall.systemd-disable",
+    "output": "systemd disable"
+  },
+  {
+    "args": {},
+    "id": "cli.service-systemd.uninstall.systemd-disable",
+    "output": "systemd disable"
+  },
+  {
+    "args": {},
+    "id": "cli.service-systemd.uninstall.systemd-disable",
+    "output": "systemd disable"
+  },
+  {
+    "args": {},
+    "id": "cli.service-systemd.status.systemd-status",
+    "output": "systemd status"
+  },
+  {
+    "args": {},
+    "id": "cli.service-systemd.status.systemd-status",
+    "output": "systemd status"
+  },
+  {
+    "args": {},
+    "id": "cli.service-systemd.status.systemd-status",
+    "output": "systemd status"
+  },
+  {
+    "args": {},
+    "id": "cli.service-systemd.escape-unit-value.service-paths-must-not-contain-control-characters",
+    "output": "service paths must not contain control characters"
+  },
+  {
+    "args": {},
+    "id": "cli.service-systemd.escape-unit-value.service-paths-must-not-contain-control-characters",
+    "output": "service paths must not contain control characters"
+  },
+  {
+    "args": {},
+    "id": "cli.service-systemd.escape-unit-value.service-paths-must-not-contain-control-characters",
+    "output": "service paths must not contain control characters"
+  },
+  {
+    "args": {},
+    "id": "cli.service.copy.tmux-not-found",
+    "output": "tmux was not found. Install tmux, or put its bin directory on PATH and rerun solstone-tmux install-service."
+  },
+  {
+    "args": {},
+    "id": "cli.service.copy.tmux-not-found",
+    "output": "tmux was not found. Install tmux, or put its bin directory on PATH and rerun solstone-tmux install-service."
+  },
+  {
+    "args": {},
+    "id": "cli.service.copy.tmux-not-found",
+    "output": "tmux was not found. Install tmux, or put its bin directory on PATH and rerun solstone-tmux install-service."
+  },
+  {
+    "args": {
+      "arg0": "fixture-arg0"
+    },
+    "id": "cli.service.fmt.refusing-to-alter-invalid-or-unowned-service-artifact",
+    "output": "refusing to alter invalid or unowned service artifact fixture-arg0"
+  },
+  {
+    "args": {
+      "arg0": "日本語-arg0"
+    },
+    "id": "cli.service.fmt.refusing-to-alter-invalid-or-unowned-service-artifact",
+    "output": "refusing to alter invalid or unowned service artifact 日本語-arg0"
+  },
+  {
+    "args": {
+      "arg0": "{value} yes --mark"
+    },
+    "id": "cli.service.fmt.refusing-to-alter-invalid-or-unowned-service-artifact",
+    "output": "refusing to alter invalid or unowned service artifact {value} yes --mark"
+  },
+  {
+    "args": {
+      "arg0": "fixture-arg0"
+    },
+    "id": "cli.service.fmt.is-not-an-executable-regular-file",
+    "output": "fixture-arg0 is not an executable regular file"
+  },
+  {
+    "args": {
+      "arg0": "日本語-arg0"
+    },
+    "id": "cli.service.fmt.is-not-an-executable-regular-file",
+    "output": "日本語-arg0 is not an executable regular file"
+  },
+  {
+    "args": {
+      "arg0": "{value} yes --mark"
+    },
+    "id": "cli.service.fmt.is-not-an-executable-regular-file",
+    "output": "{value} yes --mark is not an executable regular file"
+  },
+  {
+    "args": {
+      "arg0": "fixture-arg0"
+    },
+    "id": "cli.service.fmt.cannot-be-represented-safely-in-a-service-definition",
+    "output": "fixture-arg0 cannot be represented safely in a service definition"
+  },
+  {
+    "args": {
+      "arg0": "日本語-arg0"
+    },
+    "id": "cli.service.fmt.cannot-be-represented-safely-in-a-service-definition",
+    "output": "日本語-arg0 cannot be represented safely in a service definition"
+  },
+  {
+    "args": {
+      "arg0": "{value} yes --mark"
+    },
+    "id": "cli.service.fmt.cannot-be-represented-safely-in-a-service-definition",
+    "output": "{value} yes --mark cannot be represented safely in a service definition"
+  },
+  {
+    "args": {
+      "action": "fixture-action",
+      "status": "fixture-status"
+    },
+    "id": "cli.service.fmt.failed-with-exit-status",
+    "output": "fixture-action failed with exit status fixture-status"
+  },
+  {
+    "args": {
+      "action": "日本語-action",
+      "status": "日本語-status"
+    },
+    "id": "cli.service.fmt.failed-with-exit-status",
+    "output": "日本語-action failed with exit status 日本語-status"
+  },
+  {
+    "args": {
+      "action": "{value} yes --mark",
+      "status": "{value} yes --mark"
+    },
+    "id": "cli.service.fmt.failed-with-exit-status",
+    "output": "{value} yes --mark failed with exit status {value} yes --mark"
+  },
+  {
+    "args": {
+      "stderr": "fixture-stderr"
+    },
+    "id": "cli.service.fmt.message",
+    "output": ": fixture-stderr"
+  },
+  {
+    "args": {
+      "stderr": "日本語-stderr"
+    },
+    "id": "cli.service.fmt.message",
+    "output": ": 日本語-stderr"
+  },
+  {
+    "args": {
+      "stderr": "{value} yes --mark"
+    },
+    "id": "cli.service.fmt.message",
+    "output": ": {value} yes --mark"
+  },
+  {
+    "args": {
+      "arg0": "fixture-arg0",
+      "primary": "fixture-primary",
+      "reenable": "fixture-reenable",
+      "retry_command": "fixture-retry_command"
+    },
+    "id": "cli.service.fmt.launchd-re-enable-recovery-also-failed-launchd-crash",
+    "output": "fixture-primary; launchd re-enable recovery also failed: fixture-reenable; launchd crash restart may remain disabled for fixture-arg0; rerun solstone-tmux fixture-retry_command"
+  },
+  {
+    "args": {
+      "arg0": "日本語-arg0",
+      "primary": "日本語-primary",
+      "reenable": "日本語-reenable",
+      "retry_command": "日本語-retry_command"
+    },
+    "id": "cli.service.fmt.launchd-re-enable-recovery-also-failed-launchd-crash",
+    "output": "日本語-primary; launchd re-enable recovery also failed: 日本語-reenable; launchd crash restart may remain disabled for 日本語-arg0; rerun solstone-tmux 日本語-retry_command"
+  },
+  {
+    "args": {
+      "arg0": "{value} yes --mark",
+      "primary": "{value} yes --mark",
+      "reenable": "{value} yes --mark",
+      "retry_command": "{value} yes --mark"
+    },
+    "id": "cli.service.fmt.launchd-re-enable-recovery-also-failed-launchd-crash",
+    "output": "{value} yes --mark; launchd re-enable recovery also failed: {value} yes --mark; launchd crash restart may remain disabled for {value} yes --mark; rerun solstone-tmux {value} yes --mark"
+  },
+  {
+    "args": {
+      "arg0": "fixture-arg0"
+    },
+    "id": "cli.service.load-local-observer.is-missing-run-solstone-tmux-install-service-to",
+    "output": "fixture-arg0 is missing; run solstone-tmux install-service to resolve and persist an absolute tmux path"
+  },
+  {
+    "args": {
+      "arg0": "日本語-arg0"
+    },
+    "id": "cli.service.load-local-observer.is-missing-run-solstone-tmux-install-service-to",
+    "output": "日本語-arg0 is missing; run solstone-tmux install-service to resolve and persist an absolute tmux path"
+  },
+  {
+    "args": {
+      "arg0": "{value} yes --mark"
+    },
+    "id": "cli.service.load-local-observer.is-missing-run-solstone-tmux-install-service-to",
+    "output": "{value} yes --mark is missing; run solstone-tmux install-service to resolve and persist an absolute tmux path"
+  },
+  {
+    "args": {
+      "arg0": "fixture-arg0",
+      "error": "fixture-error"
+    },
+    "id": "cli.service.load-local-observer.does-not-contain-valid-local-solstone-tmux-state",
+    "output": "fixture-arg0 does not contain valid local solstone-tmux state: fixture-error"
+  },
+  {
+    "args": {
+      "arg0": "日本語-arg0",
+      "error": "日本語-error"
+    },
+    "id": "cli.service.load-local-observer.does-not-contain-valid-local-solstone-tmux-state",
+    "output": "日本語-arg0 does not contain valid local solstone-tmux state: 日本語-error"
+  },
+  {
+    "args": {
+      "arg0": "{value} yes --mark",
+      "error": "{value} yes --mark"
+    },
+    "id": "cli.service.load-local-observer.does-not-contain-valid-local-solstone-tmux-state",
+    "output": "{value} yes --mark does not contain valid local solstone-tmux state: {value} yes --mark"
+  },
+  {
+    "args": {
+      "arg0": "fixture-arg0"
+    },
+    "id": "cli.service.load-local-observer.contains-a-non-canonical-tmux-path",
+    "output": "fixture-arg0 contains a non-canonical tmux path"
+  },
+  {
+    "args": {
+      "arg0": "日本語-arg0"
+    },
+    "id": "cli.service.load-local-observer.contains-a-non-canonical-tmux-path",
+    "output": "日本語-arg0 contains a non-canonical tmux path"
+  },
+  {
+    "args": {
+      "arg0": "{value} yes --mark"
+    },
+    "id": "cli.service.load-local-observer.contains-a-non-canonical-tmux-path",
+    "output": "{value} yes --mark contains a non-canonical tmux path"
+  },
+  {
+    "args": {
+      "error": "fixture-error"
+    },
+    "id": "cli.service.assembled-service-path.could-not-assemble-service-path-including-the-resolved",
+    "output": "could not assemble service PATH including the resolved tmux directory: fixture-error; remove path entries containing ':' and rerun install-service"
+  },
+  {
+    "args": {
+      "error": "日本語-error"
+    },
+    "id": "cli.service.assembled-service-path.could-not-assemble-service-path-including-the-resolved",
+    "output": "could not assemble service PATH including the resolved tmux directory: 日本語-error; remove path entries containing ':' and rerun install-service"
+  },
+  {
+    "args": {
+      "error": "{value} yes --mark"
+    },
+    "id": "cli.service.assembled-service-path.could-not-assemble-service-path-including-the-resolved",
+    "output": "could not assemble service PATH including the resolved tmux directory: {value} yes --mark; remove path entries containing ':' and rerun install-service"
+  },
+  {
+    "args": {
+      "error": "fixture-error"
+    },
+    "id": "cli.service.persist-local-observer.could-not-serialize-state",
+    "output": "could not serialize state: fixture-error"
+  },
+  {
+    "args": {
+      "error": "日本語-error"
+    },
+    "id": "cli.service.persist-local-observer.could-not-serialize-state",
+    "output": "could not serialize state: 日本語-error"
+  },
+  {
+    "args": {
+      "error": "{value} yes --mark"
+    },
+    "id": "cli.service.persist-local-observer.could-not-serialize-state",
+    "output": "could not serialize state: {value} yes --mark"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.handle.open-jsonl",
+    "output": "open JSONL"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.handle.open-jsonl",
+    "output": "open JSONL"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.handle.open-jsonl",
+    "output": "open JSONL"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.handle.set-jsonl-permissions",
+    "output": "set JSONL permissions"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.handle.set-jsonl-permissions",
+    "output": "set JSONL permissions"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.handle.set-jsonl-permissions",
+    "output": "set JSONL permissions"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.handle.inspect-jsonl",
+    "output": "inspect JSONL"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.handle.inspect-jsonl",
+    "output": "inspect JSONL"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.handle.inspect-jsonl",
+    "output": "inspect JSONL"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.rollback.rollback-injection",
+    "output": "rollback injection"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.rollback.rollback-injection",
+    "output": "rollback injection"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.rollback.rollback-injection",
+    "output": "rollback injection"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.rollback.truncate-rollback",
+    "output": "truncate rollback"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.rollback.truncate-rollback",
+    "output": "truncate rollback"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.rollback.truncate-rollback",
+    "output": "truncate rollback"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.rollback.seek-rollback",
+    "output": "seek rollback"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.rollback.seek-rollback",
+    "output": "seek rollback"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.rollback.seek-rollback",
+    "output": "seek rollback"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.rollback.flush-rollback",
+    "output": "flush rollback"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.rollback.flush-rollback",
+    "output": "flush rollback"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.rollback.flush-rollback",
+    "output": "flush rollback"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.rollback.fsync-rollback",
+    "output": "fsync rollback"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.rollback.fsync-rollback",
+    "output": "fsync rollback"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.rollback.fsync-rollback",
+    "output": "fsync rollback"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.append-inner.inspect-append-offset",
+    "output": "inspect append offset"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.append-inner.inspect-append-offset",
+    "output": "inspect append offset"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.append-inner.inspect-append-offset",
+    "output": "inspect append offset"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.append-inner.seek-append",
+    "output": "seek append"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.append-inner.seek-append",
+    "output": "seek append"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.append-inner.seek-append",
+    "output": "seek append"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.append-inner.partial-append",
+    "output": "partial append"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.append-inner.partial-append",
+    "output": "partial append"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.append-inner.partial-append",
+    "output": "partial append"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.append-inner.append-injection",
+    "output": "append injection"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.append-inner.append-injection",
+    "output": "append injection"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.append-inner.append-injection",
+    "output": "append injection"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.append-inner.flush-injection",
+    "output": "flush injection"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.append-inner.flush-injection",
+    "output": "flush injection"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.append-inner.flush-injection",
+    "output": "flush injection"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.append-inner.jsonl-fsync-injection",
+    "output": "JSONL fsync injection"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.append-inner.jsonl-fsync-injection",
+    "output": "JSONL fsync injection"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.append-inner.jsonl-fsync-injection",
+    "output": "JSONL fsync injection"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.append-inner.fsync-jsonl",
+    "output": "fsync JSONL"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.append-inner.fsync-jsonl",
+    "output": "fsync JSONL"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.append-inner.fsync-jsonl",
+    "output": "fsync JSONL"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.open-regular-readonly-from.open-regular-file",
+    "output": "open regular file"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.open-regular-readonly-from.open-regular-file",
+    "output": "open regular file"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.open-regular-readonly-from.open-regular-file",
+    "output": "open regular file"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.validate-regular-file.inspect-regular-file",
+    "output": "inspect regular file"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.validate-regular-file.inspect-regular-file",
+    "output": "inspect regular file"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.validate-regular-file.inspect-regular-file",
+    "output": "inspect regular file"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.open-directory-readonly.open-directory",
+    "output": "open directory"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.open-directory-readonly.open-directory",
+    "output": "open directory"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.open-directory-readonly.open-directory",
+    "output": "open directory"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.open-directory-readonly.inspect-directory",
+    "output": "inspect directory"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.open-directory-readonly.inspect-directory",
+    "output": "inspect directory"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.open-directory-readonly.inspect-directory",
+    "output": "inspect directory"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.append-frame.read-previous-metadata",
+    "output": "read previous metadata"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.append-frame.read-previous-metadata",
+    "output": "read previous metadata"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.append-frame.read-previous-metadata",
+    "output": "read previous metadata"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.append-frame.metadata-injection",
+    "output": "metadata injection"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.append-frame.metadata-injection",
+    "output": "metadata injection"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.append-frame.metadata-injection",
+    "output": "metadata injection"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.sync-and-close.final-flush",
+    "output": "final flush"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.sync-and-close.final-flush",
+    "output": "final flush"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.sync-and-close.final-flush",
+    "output": "final flush"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.sync-and-close.final-fsync",
+    "output": "final fsync"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.sync-and-close.final-fsync",
+    "output": "final fsync"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.sync-and-close.final-fsync",
+    "output": "final fsync"
+  },
+  {
+    "args": {
+      "error": "fixture-error"
+    },
+    "id": "cli.storage.fmt.metadata-serialization-failed",
+    "output": "metadata serialization failed: fixture-error"
+  },
+  {
+    "args": {
+      "error": "日本語-error"
+    },
+    "id": "cli.storage.fmt.metadata-serialization-failed",
+    "output": "metadata serialization failed: 日本語-error"
+  },
+  {
+    "args": {
+      "error": "{value} yes --mark"
+    },
+    "id": "cli.storage.fmt.metadata-serialization-failed",
+    "output": "metadata serialization failed: {value} yes --mark"
+  },
+  {
+    "args": {
+      "arg0": "fixture-arg0"
+    },
+    "id": "cli.storage.fmt.invalid-file-target",
+    "output": "invalid file target: fixture-arg0"
+  },
+  {
+    "args": {
+      "arg0": "日本語-arg0"
+    },
+    "id": "cli.storage.fmt.invalid-file-target",
+    "output": "invalid file target: 日本語-arg0"
+  },
+  {
+    "args": {
+      "arg0": "{value} yes --mark"
+    },
+    "id": "cli.storage.fmt.invalid-file-target",
+    "output": "invalid file target: {value} yes --mark"
+  },
+  {
+    "args": {
+      "actual": "fixture-actual",
+      "arg0": "fixture-arg0",
+      "expected": "fixture-expected"
+    },
+    "id": "cli.storage.fmt.has-length-expected-durable-offset",
+    "output": "fixture-arg0 has length fixture-actual, expected durable offset fixture-expected"
+  },
+  {
+    "args": {
+      "actual": "日本語-actual",
+      "arg0": "日本語-arg0",
+      "expected": "日本語-expected"
+    },
+    "id": "cli.storage.fmt.has-length-expected-durable-offset",
+    "output": "日本語-arg0 has length 日本語-actual, expected durable offset 日本語-expected"
+  },
+  {
+    "args": {
+      "actual": "{value} yes --mark",
+      "arg0": "{value} yes --mark",
+      "expected": "{value} yes --mark"
+    },
+    "id": "cli.storage.fmt.has-length-expected-durable-offset",
+    "output": "{value} yes --mark has length {value} yes --mark, expected durable offset {value} yes --mark"
+  },
+  {
+    "args": {
+      "arg0": "fixture-arg0",
+      "source": "fixture-source",
+      "stage": "fixture-stage"
+    },
+    "id": "cli.storage.fmt.failed-for",
+    "output": "fixture-stage failed for fixture-arg0: fixture-source"
+  },
+  {
+    "args": {
+      "arg0": "日本語-arg0",
+      "source": "日本語-source",
+      "stage": "日本語-stage"
+    },
+    "id": "cli.storage.fmt.failed-for",
+    "output": "日本語-stage failed for 日本語-arg0: 日本語-source"
+  },
+  {
+    "args": {
+      "arg0": "{value} yes --mark",
+      "source": "{value} yes --mark",
+      "stage": "{value} yes --mark"
+    },
+    "id": "cli.storage.fmt.failed-for",
+    "output": "{value} yes --mark failed for {value} yes --mark: {value} yes --mark"
+  },
+  {
+    "args": {
+      "error": "fixture-error"
+    },
+    "id": "cli.storage.fmt.append-rolled-back",
+    "output": "append rolled back: fixture-error"
+  },
+  {
+    "args": {
+      "error": "日本語-error"
+    },
+    "id": "cli.storage.fmt.append-rolled-back",
+    "output": "append rolled back: 日本語-error"
+  },
+  {
+    "args": {
+      "error": "{value} yes --mark"
+    },
+    "id": "cli.storage.fmt.append-rolled-back",
+    "output": "append rolled back: {value} yes --mark"
+  },
+  {
+    "args": {
+      "operation": "fixture-operation",
+      "rollback": "fixture-rollback"
+    },
+    "id": "cli.storage.fmt.append-failed-and-rollback-failed-operation-rollback",
+    "output": "append failed and rollback failed: operation=fixture-operation; rollback=fixture-rollback"
+  },
+  {
+    "args": {
+      "operation": "日本語-operation",
+      "rollback": "日本語-rollback"
+    },
+    "id": "cli.storage.fmt.append-failed-and-rollback-failed-operation-rollback",
+    "output": "append failed and rollback failed: operation=日本語-operation; rollback=日本語-rollback"
+  },
+  {
+    "args": {
+      "operation": "{value} yes --mark",
+      "rollback": "{value} yes --mark"
+    },
+    "id": "cli.storage.fmt.append-failed-and-rollback-failed-operation-rollback",
+    "output": "append failed and rollback failed: operation={value} yes --mark; rollback={value} yes --mark"
+  },
+  {
+    "args": {
+      "arg0": "fixture-arg0",
+      "arg1": "fixture-arg1"
+    },
+    "id": "cli.storage.fmt.rollback-group-failed-jsonl-metadata",
+    "output": "rollback group failed (JSONL=fixture-arg0, metadata=fixture-arg1)"
+  },
+  {
+    "args": {
+      "arg0": "日本語-arg0",
+      "arg1": "日本語-arg1"
+    },
+    "id": "cli.storage.fmt.rollback-group-failed-jsonl-metadata",
+    "output": "rollback group failed (JSONL=日本語-arg0, metadata=日本語-arg1)"
+  },
+  {
+    "args": {
+      "arg0": "{value} yes --mark",
+      "arg1": "{value} yes --mark"
+    },
+    "id": "cli.storage.fmt.rollback-group-failed-jsonl-metadata",
+    "output": "rollback group failed (JSONL={value} yes --mark, metadata={value} yes --mark)"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.atomic-write-bytes.inspect-atomic-write-target",
+    "output": "inspect atomic write target"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.atomic-write-bytes.inspect-atomic-write-target",
+    "output": "inspect atomic write target"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.atomic-write-bytes.inspect-atomic-write-target",
+    "output": "inspect atomic write target"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.atomic-write-bytes.create-metadata-temporary",
+    "output": "create metadata temporary"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.atomic-write-bytes.create-metadata-temporary",
+    "output": "create metadata temporary"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.atomic-write-bytes.create-metadata-temporary",
+    "output": "create metadata temporary"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.atomic-write-bytes.set-metadata-permissions",
+    "output": "set metadata permissions"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.atomic-write-bytes.set-metadata-permissions",
+    "output": "set metadata permissions"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.atomic-write-bytes.set-metadata-permissions",
+    "output": "set metadata permissions"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.atomic-write-bytes.write-metadata",
+    "output": "write metadata"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.atomic-write-bytes.write-metadata",
+    "output": "write metadata"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.atomic-write-bytes.write-metadata",
+    "output": "write metadata"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.atomic-write-bytes.flush-metadata",
+    "output": "flush metadata"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.atomic-write-bytes.flush-metadata",
+    "output": "flush metadata"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.atomic-write-bytes.flush-metadata",
+    "output": "flush metadata"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.atomic-write-bytes.fsync-metadata",
+    "output": "fsync metadata"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.atomic-write-bytes.fsync-metadata",
+    "output": "fsync metadata"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.atomic-write-bytes.fsync-metadata",
+    "output": "fsync metadata"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.atomic-write-bytes.rename-metadata",
+    "output": "rename metadata"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.atomic-write-bytes.rename-metadata",
+    "output": "rename metadata"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.atomic-write-bytes.rename-metadata",
+    "output": "rename metadata"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.sync-directory.fsync-directory",
+    "output": "fsync directory"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.sync-directory.fsync-directory",
+    "output": "fsync directory"
+  },
+  {
+    "args": {},
+    "id": "cli.storage.sync-directory.fsync-directory",
+    "output": "fsync directory"
+  },
+  {
+    "args": {},
+    "id": "cli.sync.delete-confirmed-segment.solstone-tmux-confirmed-segment-was-not-removed",
+    "output": "solstone-tmux: confirmed segment was not removed"
+  },
+  {
+    "args": {},
+    "id": "cli.sync.delete-confirmed-segment.solstone-tmux-confirmed-segment-was-not-removed",
+    "output": "solstone-tmux: confirmed segment was not removed"
+  },
+  {
+    "args": {},
+    "id": "cli.sync.delete-confirmed-segment.solstone-tmux-confirmed-segment-was-not-removed",
+    "output": "solstone-tmux: confirmed segment was not removed"
+  },
+  {
+    "args": {},
+    "id": "cli.sync.fmt.segment-removed-on-journal-unlinked-locally",
+    "output": "segment removed on journal; unlinked locally"
+  },
+  {
+    "args": {},
+    "id": "cli.sync.fmt.segment-removed-on-journal-unlinked-locally",
+    "output": "segment removed on journal; unlinked locally"
+  },
+  {
+    "args": {},
+    "id": "cli.sync.fmt.segment-removed-on-journal-unlinked-locally",
+    "output": "segment removed on journal; unlinked locally"
+  },
+  {
+    "args": {
+      "arg0": "fixture-arg0"
+    },
+    "id": "cli.sync.run-sweep.solstone-tmux-upload-was-not-acknowledged",
+    "output": "solstone-tmux: upload was not acknowledged (fixture-arg0)"
+  },
+  {
+    "args": {
+      "arg0": "日本語-arg0"
+    },
+    "id": "cli.sync.run-sweep.solstone-tmux-upload-was-not-acknowledged",
+    "output": "solstone-tmux: upload was not acknowledged (日本語-arg0)"
+  },
+  {
+    "args": {
+      "arg0": "{value} yes --mark"
+    },
+    "id": "cli.sync.run-sweep.solstone-tmux-upload-was-not-acknowledged",
+    "output": "solstone-tmux: upload was not acknowledged ({value} yes --mark)"
+  },
+  {
+    "args": {},
+    "id": "cli.sync.run-sweep.solstone-tmux-upload-was-not-acknowledged-descriptors-absent",
+    "output": "solstone-tmux: upload was not acknowledged (descriptors_absent)"
+  },
+  {
+    "args": {},
+    "id": "cli.sync.run-sweep.solstone-tmux-upload-was-not-acknowledged-descriptors-absent",
+    "output": "solstone-tmux: upload was not acknowledged (descriptors_absent)"
+  },
+  {
+    "args": {},
+    "id": "cli.sync.run-sweep.solstone-tmux-upload-was-not-acknowledged-descriptors-absent",
+    "output": "solstone-tmux: upload was not acknowledged (descriptors_absent)"
+  },
+  {
+    "args": {
+      "message": "fixture-message"
+    },
+    "id": "cli.tmux.warn.solstone-tmux-warning",
+    "output": "solstone-tmux: warning: fixture-message"
+  },
+  {
+    "args": {
+      "message": "日本語-message"
+    },
+    "id": "cli.tmux.warn.solstone-tmux-warning",
+    "output": "solstone-tmux: warning: 日本語-message"
+  },
+  {
+    "args": {
+      "message": "{value} yes --mark"
+    },
+    "id": "cli.tmux.warn.solstone-tmux-warning",
+    "output": "solstone-tmux: warning: {value} yes --mark"
+  },
+  {
+    "args": {
+      "arg0": "fixture-arg0"
+    },
+    "id": "cli.tmux.fmt.tmux-executable-must-be-absolute",
+    "output": "tmux executable must be absolute: fixture-arg0"
+  },
+  {
+    "args": {
+      "arg0": "日本語-arg0"
+    },
+    "id": "cli.tmux.fmt.tmux-executable-must-be-absolute",
+    "output": "tmux executable must be absolute: 日本語-arg0"
+  },
+  {
+    "args": {
+      "arg0": "{value} yes --mark"
+    },
+    "id": "cli.tmux.fmt.tmux-executable-must-be-absolute",
+    "output": "tmux executable must be absolute: {value} yes --mark"
+  },
+  {
+    "args": {
+      "arg0": "fixture-arg0",
+      "operation": "fixture-operation",
+      "status": "fixture-status"
+    },
+    "id": "cli.tmux.fmt.exited-with-status",
+    "output": "\"fixture-operation\" exited with status fixture-status: fixture-arg0"
+  },
+  {
+    "args": {
+      "arg0": "日本語-arg0",
+      "operation": "日本語-operation",
+      "status": "日本語-status"
+    },
+    "id": "cli.tmux.fmt.exited-with-status",
+    "output": "\"日本語-operation\" exited with status 日本語-status: 日本語-arg0"
+  },
+  {
+    "args": {
+      "arg0": "{value} yes --mark",
+      "operation": "{value} yes --mark",
+      "status": "{value} yes --mark"
+    },
+    "id": "cli.tmux.fmt.exited-with-status",
+    "output": "\"{value} yes --mark\" exited with status {value} yes --mark: {value} yes --mark"
+  },
+  {
+    "args": {
+      "operation": "fixture-operation",
+      "source": "fixture-source"
+    },
+    "id": "cli.tmux.fmt.returned-non-utf-output",
+    "output": "\"fixture-operation\" returned non-UTF-8 output: fixture-source"
+  },
+  {
+    "args": {
+      "operation": "日本語-operation",
+      "source": "日本語-source"
+    },
+    "id": "cli.tmux.fmt.returned-non-utf-output",
+    "output": "\"日本語-operation\" returned non-UTF-8 output: 日本語-source"
+  },
+  {
+    "args": {
+      "operation": "{value} yes --mark",
+      "source": "{value} yes --mark"
+    },
+    "id": "cli.tmux.fmt.returned-non-utf-output",
+    "output": "\"{value} yes --mark\" returned non-UTF-8 output: {value} yes --mark"
+  },
+  {
+    "args": {
+      "detail": "fixture-detail",
+      "operation": "fixture-operation"
+    },
+    "id": "cli.tmux.fmt.malformed-output",
+    "output": "malformed \"fixture-operation\" output: fixture-detail"
+  },
+  {
+    "args": {
+      "detail": "日本語-detail",
+      "operation": "日本語-operation"
+    },
+    "id": "cli.tmux.fmt.malformed-output",
+    "output": "malformed \"日本語-operation\" output: 日本語-detail"
+  },
+  {
+    "args": {
+      "detail": "{value} yes --mark",
+      "operation": "{value} yes --mark"
+    },
+    "id": "cli.tmux.fmt.malformed-output",
+    "output": "malformed \"{value} yes --mark\" output: {value} yes --mark"
+  },
+  {
+    "args": {},
+    "id": "cli.tmux.list-clients.empty-row",
+    "output": "empty row"
+  },
+  {
+    "args": {},
+    "id": "cli.tmux.list-clients.empty-row",
+    "output": "empty row"
+  },
+  {
+    "args": {},
+    "id": "cli.tmux.list-clients.empty-row",
+    "output": "empty row"
+  },
+  {
+    "args": {},
+    "id": "cli.tmux.list-clients.missing-activity-separator",
+    "output": "missing activity separator"
+  },
+  {
+    "args": {},
+    "id": "cli.tmux.list-clients.missing-activity-separator",
+    "output": "missing activity separator"
+  },
+  {
+    "args": {},
+    "id": "cli.tmux.list-clients.missing-activity-separator",
+    "output": "missing activity separator"
+  },
+  {
+    "args": {},
+    "id": "cli.tmux.list-clients.empty-session-identity",
+    "output": "empty session identity"
+  },
+  {
+    "args": {},
+    "id": "cli.tmux.list-clients.empty-session-identity",
+    "output": "empty session identity"
+  },
+  {
+    "args": {},
+    "id": "cli.tmux.list-clients.empty-session-identity",
+    "output": "empty session identity"
+  },
+  {
+    "args": {},
+    "id": "cli.tmux.list-clients.activity-is-not-an-integer",
+    "output": "activity is not an integer"
+  },
+  {
+    "args": {},
+    "id": "cli.tmux.list-clients.activity-is-not-an-integer",
+    "output": "activity is not an integer"
+  },
+  {
+    "args": {},
+    "id": "cli.tmux.list-clients.activity-is-not-an-integer",
+    "output": "activity is not an integer"
+  },
+  {
+    "args": {
+      "arg0": "fixture-arg0",
+      "error": "fixture-error"
+    },
+    "id": "cli.tmux.capture-sessions.session-was-skipped-before-observation",
+    "output": "session \"fixture-arg0\" was skipped before observation: fixture-error"
+  },
+  {
+    "args": {
+      "arg0": "日本語-arg0",
+      "error": "日本語-error"
+    },
+    "id": "cli.tmux.capture-sessions.session-was-skipped-before-observation",
+    "output": "session \"日本語-arg0\" was skipped before observation: 日本語-error"
+  },
+  {
+    "args": {
+      "arg0": "{value} yes --mark",
+      "error": "{value} yes --mark"
+    },
+    "id": "cli.tmux.capture-sessions.session-was-skipped-before-observation",
+    "output": "session \"{value} yes --mark\" was skipped before observation: {value} yes --mark"
+  },
+  {
+    "args": {
+      "arg0": "fixture-arg0",
+      "error": "fixture-error"
+    },
+    "id": "cli.tmux.capture-sessions.session-observation-failed",
+    "output": "session \"fixture-arg0\" observation failed: fixture-error"
+  },
+  {
+    "args": {
+      "arg0": "日本語-arg0",
+      "error": "日本語-error"
+    },
+    "id": "cli.tmux.capture-sessions.session-observation-failed",
+    "output": "session \"日本語-arg0\" observation failed: 日本語-error"
+  },
+  {
+    "args": {
+      "arg0": "{value} yes --mark",
+      "error": "{value} yes --mark"
+    },
+    "id": "cli.tmux.capture-sessions.session-observation-failed",
+    "output": "session \"{value} yes --mark\" observation failed: {value} yes --mark"
+  },
+  {
+    "args": {
+      "reason": "fixture-reason",
+      "row": "fixture-row"
+    },
+    "id": "cli.tmux.warn-client-row.dropping-malformed-list-clients-row",
+    "output": "dropping malformed list-clients row \"fixture-row\": fixture-reason"
+  },
+  {
+    "args": {
+      "reason": "日本語-reason",
+      "row": "日本語-row"
+    },
+    "id": "cli.tmux.warn-client-row.dropping-malformed-list-clients-row",
+    "output": "dropping malformed list-clients row \"日本語-row\": 日本語-reason"
+  },
+  {
+    "args": {
+      "reason": "{value} yes --mark",
+      "row": "{value} yes --mark"
+    },
+    "id": "cli.tmux.warn-client-row.dropping-malformed-list-clients-row",
+    "output": "dropping malformed list-clients row \"{value} yes --mark\": {value} yes --mark"
+  },
+  {
+    "args": {},
+    "id": "cli.tmux.parse-windows.empty-successful-output",
+    "output": "empty successful output"
+  },
+  {
+    "args": {},
+    "id": "cli.tmux.parse-windows.empty-successful-output",
+    "output": "empty successful output"
+  },
+  {
+    "args": {},
+    "id": "cli.tmux.parse-windows.empty-successful-output",
+    "output": "empty successful output"
+  },
+  {
+    "args": {
+      "row": "fixture-row"
+    },
+    "id": "cli.tmux.parse-windows.invalid-row",
+    "output": "invalid row \"fixture-row\""
+  },
+  {
+    "args": {
+      "row": "日本語-row"
+    },
+    "id": "cli.tmux.parse-windows.invalid-row",
+    "output": "invalid row \"日本語-row\""
+  },
+  {
+    "args": {
+      "row": "{value} yes --mark"
+    },
+    "id": "cli.tmux.parse-windows.invalid-row",
+    "output": "invalid row \"{value} yes --mark\""
+  },
+  {
+    "args": {
+      "row": "fixture-row"
+    },
+    "id": "cli.tmux.parse-windows.duplicate-id-or-index-in-row",
+    "output": "duplicate ID or index in row \"fixture-row\""
+  },
+  {
+    "args": {
+      "row": "日本語-row"
+    },
+    "id": "cli.tmux.parse-windows.duplicate-id-or-index-in-row",
+    "output": "duplicate ID or index in row \"日本語-row\""
+  },
+  {
+    "args": {
+      "row": "{value} yes --mark"
+    },
+    "id": "cli.tmux.parse-windows.duplicate-id-or-index-in-row",
+    "output": "duplicate ID or index in row \"{value} yes --mark\""
+  },
+  {
+    "args": {},
+    "id": "cli.tmux.parse-windows.expected-exactly-one-active-window",
+    "output": "expected exactly one active window"
+  },
+  {
+    "args": {},
+    "id": "cli.tmux.parse-windows.expected-exactly-one-active-window",
+    "output": "expected exactly one active window"
+  },
+  {
+    "args": {},
+    "id": "cli.tmux.parse-windows.expected-exactly-one-active-window",
+    "output": "expected exactly one active window"
+  },
+  {
+    "args": {
+      "row": "fixture-row"
+    },
+    "id": "cli.tmux.parse-panes.nonpositive-pane-size-in-row",
+    "output": "nonpositive pane size in row \"fixture-row\""
+  },
+  {
+    "args": {
+      "row": "日本語-row"
+    },
+    "id": "cli.tmux.parse-panes.nonpositive-pane-size-in-row",
+    "output": "nonpositive pane size in row \"日本語-row\""
+  },
+  {
+    "args": {
+      "row": "{value} yes --mark"
+    },
+    "id": "cli.tmux.parse-panes.nonpositive-pane-size-in-row",
+    "output": "nonpositive pane size in row \"{value} yes --mark\""
+  },
+  {
+    "args": {},
+    "id": "cli.tmux.parse-panes.expected-exactly-one-active-pane",
+    "output": "expected exactly one active pane"
+  },
+  {
+    "args": {},
+    "id": "cli.tmux.parse-panes.expected-exactly-one-active-pane",
+    "output": "expected exactly one active pane"
+  },
+  {
+    "args": {},
+    "id": "cli.tmux.parse-panes.expected-exactly-one-active-pane",
+    "output": "expected exactly one active pane"
+  },
+  {
+    "args": {},
+    "id": "real.about.age.0",
+    "output": "journal 1.2.3 · last seen just now"
+  },
+  {
+    "args": {},
+    "id": "real.about.age.59",
+    "output": "journal 1.2.3 · last seen just now"
+  },
+  {
+    "args": {},
+    "id": "real.about.age.60",
+    "output": "journal 1.2.3 · last seen 1 minute ago"
+  },
+  {
+    "args": {},
+    "id": "real.about.age.120",
+    "output": "journal 1.2.3 · last seen 2 minutes ago"
+  },
+  {
+    "args": {},
+    "id": "real.about.age.3599",
+    "output": "journal 1.2.3 · last seen 59 minutes ago"
+  },
+  {
+    "args": {},
+    "id": "real.about.age.3600",
+    "output": "journal 1.2.3 · last seen 1 hour ago"
+  },
+  {
+    "args": {},
+    "id": "real.about.age.7200",
+    "output": "journal 1.2.3 · last seen 2 hours ago"
+  },
+  {
+    "args": {},
+    "id": "real.about.age.86399",
+    "output": "journal 1.2.3 · last seen 23 hours ago"
+  },
+  {
+    "args": {},
+    "id": "real.about.age.86400",
+    "output": "journal 1.2.3 · last seen 1 day ago"
+  },
+  {
+    "args": {},
+    "id": "real.about.age.172800",
+    "output": "journal 1.2.3 · last seen 2 days ago"
+  },
+  {
+    "args": {},
+    "id": "real.cli.help",
+    "output": "usage: solstone-tmux [run|setup|confirm|status|about|install-service|uninstall-service|--help|--version]\n       solstone-tmux setup [--mark <words>]\n       solstone-tmux confirm [--mark <words>]\n--mark  the two words of the mark your journal's network app shows. needed when there's no terminal to ask you on.\nexit 0 paired or already confirmed; exit 1 not paired, nothing changed, or no terminal; exit 2 usage; exit 5 held. status still uses exit 3 and 4."
+  },
+  {
+    "args": {},
+    "id": "real.cli.unknown",
+    "output": "unknown command 'synthetic-command'\nusage: solstone-tmux [run|setup|confirm|status|about|install-service|uninstall-service|--help|--version]\n       solstone-tmux setup [--mark <words>]\n       solstone-tmux confirm [--mark <words>]\n--mark  the two words of the mark your journal's network app shows. needed when there's no terminal to ask you on.\nexit 0 paired or already confirmed; exit 1 not paired, nothing changed, or no terminal; exit 2 usage; exit 5 held. status still uses exit 3 and 4."
+  }
+]

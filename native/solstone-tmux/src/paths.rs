@@ -62,18 +62,45 @@ impl fmt::Display for PathError {
         match self {
             Self::MissingHome => write!(
                 formatter,
-                "HOME is not set; refusing to use a system-wide location"
+                "{}",
+                crate::i18n::MessageId::CliPathsFmtHomeIsNotSetRefusingToUseA.text()
             ),
-            Self::Name(error) => write!(formatter, "invalid stream name: {error}"),
+            Self::Name(error) => write!(
+                formatter,
+                "{}",
+                crate::i18n::render(
+                    crate::i18n::MessageId::CliPathsFmtInvalidStreamName,
+                    &[("error", crate::i18n::ArgValue::Text((error).to_string()))]
+                )
+            ),
             Self::InvalidTarget(path) => {
                 write!(
                     formatter,
-                    "{} is a symlink or wrong file type",
-                    path.display()
+                    "{}",
+                    crate::i18n::render(
+                        crate::i18n::MessageId::CliPathsFmtIsASymlinkOrWrongFileType,
+                        &[(
+                            "arg0",
+                            crate::i18n::ArgValue::Text((path.display()).to_string())
+                        )]
+                    )
                 )
             }
             Self::Io { path, source } => {
-                write!(formatter, "{}: {source}", path.display())
+                write!(
+                    formatter,
+                    "{}",
+                    crate::i18n::render(
+                        crate::i18n::MessageId::CliPathsFmtMessage,
+                        &[
+                            (
+                                "arg0",
+                                crate::i18n::ArgValue::Text((path.display()).to_string())
+                            ),
+                            ("source", crate::i18n::ArgValue::Text((source).to_string()))
+                        ]
+                    )
+                )
             }
         }
     }

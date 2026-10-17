@@ -22,7 +22,8 @@ use crate::storage::{StorageError, atomic_write_bytes, sync_directory};
 
 pub const STATE_FILENAME: &str = "local-observer.json";
 pub const COMMAND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
-pub const TMUX_NOT_FOUND: &str = "tmux was not found. Install tmux, or put its bin directory on PATH and rerun solstone-tmux install-service.";
+pub const TMUX_NOT_FOUND: crate::i18n::MessageId =
+    crate::i18n::MessageId::CliServiceCopyTmuxNotFound;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct LocalObserver {
@@ -82,33 +83,21 @@ impl fmt::Display for ServiceError {
             Self::Path(error) => error.fmt(formatter),
             Self::Storage(error) => error.fmt(formatter),
             Self::Command(error) => error.fmt(formatter),
-            Self::Io { path, source } => write!(formatter, "{}: {source}", path.display()),
-            Self::InvalidArtifact(path) => write!(
-                formatter,
-                "refusing to alter invalid or unowned service artifact {}",
-                path.display()
-            ),
+            Self::Io { path, source } => write!(formatter, "{}", crate::i18n::render(crate::i18n::MessageId::CliPathsFmtMessage, &[("arg0", crate::i18n::ArgValue::Text((path.display()).to_string())), ("source", crate::i18n::ArgValue::Text((source).to_string()))])),
+            Self::InvalidArtifact(path) => write!(formatter, "{}", crate::i18n::render(crate::i18n::MessageId::CliServiceFmtRefusingToAlterInvalidOrUnownedServiceArtifact, &[("arg0", crate::i18n::ArgValue::Text((path.display()).to_string()))])),
             Self::InvalidExecutable(path) => {
-                write!(
-                    formatter,
-                    "{} is not an executable regular file",
-                    path.display()
-                )
+                write!(formatter, "{}", crate::i18n::render(crate::i18n::MessageId::CliServiceFmtIsNotAnExecutableRegularFile, &[("arg0", crate::i18n::ArgValue::Text((path.display()).to_string()))]))
             }
-            Self::InvalidUtf8Path(path) => write!(
-                formatter,
-                "{} cannot be represented safely in a service definition",
-                path.display()
-            ),
-            Self::TmuxNotFound => formatter.write_str(TMUX_NOT_FOUND),
+            Self::InvalidUtf8Path(path) => write!(formatter, "{}", crate::i18n::render(crate::i18n::MessageId::CliServiceFmtCannotBeRepresentedSafelyInAServiceDefinition, &[("arg0", crate::i18n::ArgValue::Text((path.display()).to_string()))])),
+            Self::TmuxNotFound => formatter.write_str(TMUX_NOT_FOUND.text()),
             Self::Manager {
                 action,
                 status,
                 stderr,
             } => {
-                write!(formatter, "{action} failed with exit status {status}")?;
+                write!(formatter, "{}", crate::i18n::render(crate::i18n::MessageId::CliServiceFmtFailedWithExitStatus, &[("action", crate::i18n::ArgValue::Text((action).to_string())), ("status", crate::i18n::ArgValue::Text((status).to_string()))]))?;
                 if !stderr.is_empty() {
-                    write!(formatter, ": {stderr}")?;
+                    write!(formatter, "{}", crate::i18n::render(crate::i18n::MessageId::CliServiceFmtMessage, &[("stderr", crate::i18n::ArgValue::Text((stderr).to_string()))]))?;
                 }
                 Ok(())
             }
@@ -116,12 +105,7 @@ impl fmt::Display for ServiceError {
                 primary,
                 reenable,
                 retry_command,
-            } => write!(
-                formatter,
-                "{primary}; launchd re-enable recovery also failed: {reenable}; launchd crash \
-restart may remain disabled for {}; rerun solstone-tmux {retry_command}",
-                launchd::LABEL
-            ),
+            } => write!(formatter, "{}", crate::i18n::render(crate::i18n::MessageId::CliServiceFmtLaunchdReEnableRecoveryAlsoFailedLaunchdCrash, &[("primary", crate::i18n::ArgValue::Text((primary).to_string())), ("reenable", crate::i18n::ArgValue::Text((reenable).to_string())), ("arg0", crate::i18n::ArgValue::Text((launchd::LABEL).to_string())), ("retry_command", crate::i18n::ArgValue::Text((retry_command).to_string()))])),
             Self::InvalidState(message) => formatter.write_str(message),
         }
     }
@@ -278,26 +262,23 @@ pub fn current_platform() -> PlatformKind {
 pub fn load_local_observer(config_root: &Path) -> Result<LocalObserver, ServiceError> {
     let path = config_root.join(STATE_FILENAME);
     if !validate_regular_file(&path, None)? {
-        return Err(ServiceError::InvalidState(format!(
-            "{} is missing; run solstone-tmux install-service to resolve and persist an absolute tmux path",
-            path.display()
-        )));
+        return Err(ServiceError::InvalidState(crate::i18n::render(crate::i18n::MessageId::CliServiceLoadLocalObserverIsMissingRunSolstoneTmuxInstallServiceTo, &[("arg0", crate::i18n::ArgValue::Text((path.display()).to_string()))])));
     }
     let bytes = fs::read(&path).map_err(|source| ServiceError::Io {
         path: path.clone(),
         source,
     })?;
     let state: LocalObserver = serde_json::from_slice(&bytes).map_err(|error| {
-        ServiceError::InvalidState(format!(
-            "{} does not contain valid local solstone-tmux state: {error}",
-            path.display()
-        ))
+        ServiceError::InvalidState(crate::i18n::render(crate::i18n::MessageId::CliServiceLoadLocalObserverDoesNotContainValidLocalSolstoneTmuxState, &[("arg0", crate::i18n::ArgValue::Text((path.display()).to_string())), ("error", crate::i18n::ArgValue::Text((error).to_string()))]))
     })?;
     let canonical = canonical_executable(&state.tmux_path)?;
     if canonical != state.tmux_path {
-        return Err(ServiceError::InvalidState(format!(
-            "{} contains a non-canonical tmux path",
-            path.display()
+        return Err(ServiceError::InvalidState(crate::i18n::render(
+            crate::i18n::MessageId::CliServiceLoadLocalObserverContainsANonCanonicalTmuxPath,
+            &[(
+                "arg0",
+                crate::i18n::ArgValue::Text((path.display()).to_string()),
+            )],
         )));
     }
     Ok(state)
@@ -370,16 +351,17 @@ fn assembled_service_path(
         }
     }
     std::env::join_paths(assembled).map_err(|error| {
-        ServiceError::InvalidState(format!(
-            "could not assemble service PATH including the resolved tmux directory: {error}; remove path entries containing ':' and rerun install-service"
-        ))
+        ServiceError::InvalidState(crate::i18n::render(crate::i18n::MessageId::CliServiceAssembledServicePathCouldNotAssembleServicePathIncludingTheResolved, &[("error", crate::i18n::ArgValue::Text((error).to_string()))]))
     })
 }
 
 fn persist_local_observer(config_root: &Path, state: &LocalObserver) -> Result<(), ServiceError> {
     ensure_private_directory(config_root)?;
     let mut bytes = serde_json::to_vec(state).map_err(|error| {
-        ServiceError::InvalidState(format!("could not serialize state: {error}"))
+        ServiceError::InvalidState(crate::i18n::render(
+            crate::i18n::MessageId::CliServicePersistLocalObserverCouldNotSerializeState,
+            &[("error", crate::i18n::ArgValue::Text((error).to_string()))],
+        ))
     })?;
     bytes.push(b'\n');
     atomic_write_bytes(&config_root.join(STATE_FILENAME), config_root, &bytes)?;
@@ -506,7 +488,10 @@ pub(crate) fn require_success(
     }
 }
 
-pub(crate) fn reports_absent(output: &crate::command::CommandOutput) -> bool {
+// Narrow machine-parser exception: these service-manager versions do not
+// share one sufficient exit-code contract. CommandRunner pins their locale.
+// This remains English-as-logic, pending native version/exit-code evidence.
+pub(crate) fn reports_absent_c_locale(output: &crate::command::CommandOutput) -> bool {
     let stderr = String::from_utf8_lossy(&output.stderr).to_ascii_lowercase();
     output.status == 3
         || output.status == 4

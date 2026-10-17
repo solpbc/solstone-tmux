@@ -40,15 +40,42 @@ pub enum NameError {
 impl fmt::Display for NameError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Empty => write!(formatter, "identity must not be empty"),
-            Self::ContainsNul => write!(formatter, "identity must not contain NUL"),
-            Self::Absolute => write!(formatter, "identity must not be an absolute path"),
-            Self::Traversal => write!(formatter, "identity must not contain path traversal"),
+            Self::Empty => write!(
+                formatter,
+                "{}",
+                crate::i18n::MessageId::CliNameFmtIdentityMustNotBeEmpty.text()
+            ),
+            Self::ContainsNul => write!(
+                formatter,
+                "{}",
+                crate::i18n::MessageId::CliNameFmtIdentityMustNotContainNul.text()
+            ),
+            Self::Absolute => write!(
+                formatter,
+                "{}",
+                crate::i18n::MessageId::CliNameFmtIdentityMustNotBeAnAbsolutePath.text()
+            ),
+            Self::Traversal => write!(
+                formatter,
+                "{}",
+                crate::i18n::MessageId::CliNameFmtIdentityMustNotContainPathTraversal.text()
+            ),
             Self::TooLong { actual, limit } => write!(
                 formatter,
-                "derived identity is {actual} bytes; the limit is {limit} bytes"
+                "{}",
+                crate::i18n::render(
+                    crate::i18n::MessageId::CliNameFmtDerivedIdentityIsBytesTheLimitIsBytes,
+                    &[
+                        ("actual", crate::i18n::ArgValue::Text((actual).to_string())),
+                        ("limit", crate::i18n::ArgValue::Text((limit).to_string()))
+                    ]
+                )
             ),
-            Self::EscapesParent => write!(formatter, "derived identity escapes its parent"),
+            Self::EscapesParent => write!(
+                formatter,
+                "{}",
+                crate::i18n::MessageId::CliNameFmtDerivedIdentityEscapesItsParent.text()
+            ),
         }
     }
 }

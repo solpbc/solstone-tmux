@@ -134,7 +134,11 @@ pub async fn activate(
         bootstrap(runner, user_id, &prepared.path).await?;
     } else {
         let output = print(runner, user_id).await?;
-        match classify_print(&output, user_id, "launchd loaded check")? {
+        match classify_print(
+            &output,
+            user_id,
+            crate::i18n::MessageId::CliServiceLaunchdActivateLaunchdLoadedCheck.text(),
+        )? {
             // The plist on disk is already current and the job is already running, so
             // nothing here may restart it: `enable` only clears a lingering disabled
             // flag. Carrying the pid forward turns that into a checked claim — the final
@@ -188,7 +192,10 @@ pub async fn status(
     } else if reports_missing_service(&output, user_id) {
         Ok(ServiceStatus::Inactive)
     } else {
-        Err(manager_error("launchd status", &output))
+        Err(manager_error(
+            crate::i18n::MessageId::CliServiceLaunchdStatusLaunchdStatus.text(),
+            &output,
+        ))
     }
 }
 
@@ -201,7 +208,11 @@ async fn graceful_stop(
     let result = async {
         disable(runner, user_id).await?;
         let output = print(runner, user_id).await?;
-        let state = classify_print(&output, user_id, "launchd stop inspection")?;
+        let state = classify_print(
+            &output,
+            user_id,
+            crate::i18n::MessageId::CliServiceLaunchdGracefulStopLaunchdStopInspection.text(),
+        )?;
         unload(runner, user_id, path, state, retry_command).await
     }
     .await;
@@ -229,7 +240,10 @@ async fn unload(
     if matches!(state, JobState::Running(_)) {
         let output = kill(runner, user_id).await?;
         if output.status != 0 && !reports_missing_service(&output, user_id) {
-            return Err(manager_error("launchd kill", &output));
+            return Err(manager_error(
+                crate::i18n::MessageId::CliServiceLaunchdUnloadLaunchdKill.text(),
+                &output,
+            ));
         }
 
         let started = tokio::time::Instant::now();
@@ -239,16 +253,16 @@ async fn unload(
             tokio::time::sleep_until(next_poll).await;
             next_poll += QUIESCENCE_POLL_INTERVAL;
             let output = print(runner, user_id).await?;
-            state = classify_print(&output, user_id, "launchd quiescence check")?;
+            state = classify_print(
+                &output,
+                user_id,
+                crate::i18n::MessageId::CliServiceLaunchdUnloadLaunchdQuiescenceCheck.text(),
+            )?;
             if !matches!(state, JobState::Running(_)) {
                 break;
             }
             if tokio::time::Instant::now() >= deadline {
-                return Err(ServiceError::InvalidState(format!(
-                    "{LABEL} still reports a live pid after {} seconds; rerun \
-solstone-tmux {retry_command}",
-                    QUIESCENCE_TIMEOUT.as_secs()
-                )));
+                return Err(ServiceError::InvalidState(crate::i18n::render(crate::i18n::MessageId::CliServiceLaunchdUnloadStillReportsALivePidAfterSecondsRerun, &[("LABEL", crate::i18n::ArgValue::Text((LABEL).to_string())), ("arg0", crate::i18n::ArgValue::Text((QUIESCENCE_TIMEOUT.as_secs()).to_string())), ("retry_command", crate::i18n::ArgValue::Text((retry_command).to_string()))])));
             }
         }
     }
@@ -260,7 +274,10 @@ solstone-tmux {retry_command}",
     if output.status == 0 || reports_missing_service(&output, user_id) {
         Ok(())
     } else {
-        Err(manager_error("launchd bootout", &output))
+        Err(manager_error(
+            crate::i18n::MessageId::CliServiceLaunchdUnloadLaunchdBootout.text(),
+            &output,
+        ))
     }
 }
 
@@ -330,20 +347,28 @@ async fn verify_loaded(
 ) -> Result<(), ServiceError> {
     let output = print(runner, user_id).await?;
     if output.status != 0 {
-        return Err(manager_error("launchd loaded check", &output));
+        return Err(manager_error(
+            crate::i18n::MessageId::CliServiceLaunchdActivateLaunchdLoadedCheck.text(),
+            &output,
+        ));
     }
     let Some(pid) = top_level_pid(&output.stdout) else {
-        return Err(ServiceError::InvalidState(format!(
-            "{LABEL} is loaded but does not report a live pid; rerun \
-solstone-tmux install-service"
+        return Err(ServiceError::InvalidState(crate::i18n::render(
+            crate::i18n::MessageId::CliServiceLaunchdVerifyLoadedIsLoadedButDoesNotReportALive,
+            &[("LABEL", crate::i18n::ArgValue::Text((LABEL).to_string()))],
         )));
     };
     match expected_pid {
-        Some(expected) if pid != expected => Err(ServiceError::InvalidState(format!(
-            "{LABEL} was running as pid {expected} and its plist was already current, so \
-install-service left it alone, but it now reports pid {pid}; the job restarted on its own \
-and this install did not observe what it started. Rerun solstone-tmux \
-install-service"
+        Some(expected) if pid != expected => Err(ServiceError::InvalidState(crate::i18n::render(
+            crate::i18n::MessageId::CliServiceLaunchdVerifyLoadedWasRunningAsPidAndItsPlistWas,
+            &[
+                ("LABEL", crate::i18n::ArgValue::Text((LABEL).to_string())),
+                (
+                    "expected",
+                    crate::i18n::ArgValue::Text((expected).to_string()),
+                ),
+                ("pid", crate::i18n::ArgValue::Text((pid).to_string())),
+            ],
         ))),
         _ => Ok(()),
     }
@@ -368,7 +393,7 @@ async fn bootout(
 
 async fn disable(runner: &dyn CommandRunner, user_id: u32) -> Result<(), ServiceError> {
     require_success(
-        "launchd disable",
+        crate::i18n::MessageId::CliServiceLaunchdDisableLaunchdDisable.text(),
         run(
             runner,
             ServiceOperation::LaunchdDisable,
@@ -380,7 +405,7 @@ async fn disable(runner: &dyn CommandRunner, user_id: u32) -> Result<(), Service
 
 async fn enable(runner: &dyn CommandRunner, user_id: u32) -> Result<(), ServiceError> {
     require_success(
-        "launchd enable",
+        crate::i18n::MessageId::CliServiceLaunchdEnableLaunchdEnable.text(),
         run(
             runner,
             ServiceOperation::LaunchdEnable,
@@ -414,7 +439,7 @@ async fn bootstrap(
     path: &Path,
 ) -> Result<(), ServiceError> {
     require_success(
-        "launchd bootstrap",
+        crate::i18n::MessageId::CliServiceLaunchdBootstrapLaunchdBootstrap.text(),
         run(
             runner,
             ServiceOperation::LaunchdBootstrap,

@@ -22,11 +22,17 @@ pub enum CliCommand {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CliError(String);
+pub struct CliError(crate::i18n::Message);
+
+impl CliError {
+    pub fn message(&self) -> &crate::i18n::Message {
+        &self.0
+    }
+}
 
 impl fmt::Display for CliError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.0)
+        self.0.fmt(formatter)
     }
 }
 
@@ -52,10 +58,15 @@ where
         Some(value) if value == "-h" || value == "--help" => (CliCommand::Help, false),
         Some(value) if value == "-V" || value == "--version" => (CliCommand::Version, false),
         Some(value) => {
-            return Err(CliError(format!(
-                "unknown command '{}'\n{}",
-                value.to_string_lossy(),
-                usage()
+            return Err(CliError(crate::i18n::Message::new(
+                crate::i18n::MessageId::CliCliParseArgsUnknownCommand,
+                vec![
+                    (
+                        "arg0",
+                        crate::i18n::ArgValue::Text((value.to_string_lossy()).to_string()),
+                    ),
+                    ("arg1", crate::i18n::ArgValue::Text((usage()).to_string())),
+                ],
             )));
         }
     };
@@ -83,10 +94,15 @@ where
                     }
                 }
             } else {
-                return Err(CliError(format!(
-                    "unexpected argument '{}'\n{}",
-                    arg.to_string_lossy(),
-                    usage()
+                return Err(CliError(crate::i18n::Message::new(
+                    crate::i18n::MessageId::CliCliParseArgsUnexpectedArgument,
+                    vec![
+                        (
+                            "arg0",
+                            crate::i18n::ArgValue::Text((arg.to_string_lossy()).to_string()),
+                        ),
+                        ("arg1", crate::i18n::ArgValue::Text((usage()).to_string())),
+                    ],
                 )));
             }
         }
@@ -96,10 +112,15 @@ where
             _ => {}
         }
     } else if let Some(value) = args.next() {
-        return Err(CliError(format!(
-            "unexpected argument '{}'\n{}",
-            value.to_string_lossy(),
-            usage()
+        return Err(CliError(crate::i18n::Message::new(
+            crate::i18n::MessageId::CliCliParseArgsUnexpectedArgument,
+            vec![
+                (
+                    "arg0",
+                    crate::i18n::ArgValue::Text((value.to_string_lossy()).to_string()),
+                ),
+                ("arg1", crate::i18n::ArgValue::Text((usage()).to_string())),
+            ],
         )));
     }
 
@@ -107,16 +128,25 @@ where
 }
 
 pub fn usage() -> String {
-    format!(
-        "usage: solstone-tmux [run|setup|confirm|status|about|install-service|uninstall-service|--help|--version]\n       solstone-tmux setup [--mark <words>]\n       solstone-tmux confirm [--mark <words>]\n--mark  {}\nexit 0 paired or already confirmed; exit 1 not paired, nothing changed, or no terminal; exit 2 usage; exit 5 held. status still uses exit 3 and 4.",
-        crate::pairing_answer::MARK_HELP
+    crate::i18n::render(
+        crate::i18n::MessageId::CliCliUsageUsageSolstoneTmuxRunSetupConfirmStatusAbout,
+        &[(
+            "arg0",
+            crate::i18n::ArgValue::Text((crate::pairing_answer::MARK_HELP).to_string()),
+        )],
     )
 }
 
 pub fn version() -> String {
     let source = option_env!("SOLSTONE_TMUX_SOURCE_COMMIT").unwrap_or("development");
-    format!(
-        "solstone-tmux {} (source {source})",
-        env!("CARGO_PKG_VERSION")
+    crate::i18n::render(
+        crate::i18n::MessageId::CliCliVersionSolstoneTmuxSource,
+        &[
+            (
+                "arg0",
+                crate::i18n::ArgValue::Text((env!("CARGO_PKG_VERSION")).to_string()),
+            ),
+            ("source", crate::i18n::ArgValue::Text((source).to_string())),
+        ],
     )
 }

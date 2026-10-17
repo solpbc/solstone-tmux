@@ -10,6 +10,7 @@ pub mod clock;
 pub mod command;
 pub mod config;
 pub mod health;
+pub mod i18n;
 pub mod indicator;
 pub mod instance_lock;
 pub mod journal;

@@ -3,7 +3,7 @@
 
 SHELL := /bin/bash
 
-.PHONY: all build agent-setup test test-only format ci clean install-service uninstall-service service-status service-logs package-linux release-linux validate-release sign-validate-release publish-origin publish-release
+.PHONY: all build agent-setup test test-only format ci clean install-service uninstall-service service-status service-logs package-linux release-linux validate-release sign-validate-release publish-origin publish-release i18n-check
 
 APP := solstone-tmux
 CARGO := cargo
@@ -33,10 +33,15 @@ test-only:
 format:
 	$(CARGO) fmt --all
 
+i18n-check:
+	$(CARGO) run --locked --example i18n_lint
+	$(CARGO) test --locked --test i18n
+
 ci:
 	@echo "Running CI checks..."
 	@echo "=== Running repository guards (host execution) ==="
 	@bash $(RUST_GUARDS)
+	@$(CARGO) run --locked --example i18n_lint
 	@echo ""
 	@echo "=== Checking Rust formatting (host tool; no dependency resolution) ==="
 	@$(CARGO) fmt --all --check

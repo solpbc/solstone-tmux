@@ -1063,7 +1063,8 @@ fn spawn_file_producer(
                 Err(error) => {
                     let _ = sender.blocking_send(Err(io::Error::new(
                         error.kind(),
-                        "local file stream failed",
+                        crate::i18n::MessageId::CliJournalSpawnFileProducerLocalFileStreamFailed
+                            .text(),
                     )));
                     return;
                 }

@@ -1,0 +1,32 @@
+{
+  "id": "cli.observer.process-poll.solstone-tmux-warning-durable-append-for-session-rolled",
+  "fluent_id": "cli-observer-process-poll-solstone-tmux-warning-durable-append-for-session-rolled",
+  "args": [
+    {
+      "name": "arg0",
+      "type": "text",
+      "rust_format_spec": "?",
+      "description": "Preformatted diagnostic or display value; preserve exactly"
+    },
+    {
+      "name": "error",
+      "type": "text",
+      "rust_format_spec": "",
+      "description": "Preformatted diagnostic or display value; preserve exactly"
+    }
+  ],
+  "description": "Terminal diagnostic detail for observer.rs. Explain the failed operation. Dynamic arguments are preformatted diagnostic facts, paths, codes, or nested errors and must remain unchanged.",
+  "surfaces": [
+    "terminal"
+  ],
+  "max_length": null,
+  "risk": "routine",
+  "screenshots": [],
+  "source_revision": "2cc01d9c029cac7c6aa7beeed2f4fdd2c3188c05",
+  "sources": [
+    {
+      "path": "native/solstone-tmux/src/observer.rs",
+      "line": 340
+    }
+  ]
+}

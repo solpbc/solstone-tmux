@@ -49,7 +49,8 @@ impl InstanceLock {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(source) => {
                 return Err(InstanceLockError::Io {
-                    operation: "inspect data root",
+                    operation:
+                        crate::i18n::MessageId::CliInstanceLockAcquireExistingInspectDataRoot.text(),
                     path: data_root.to_owned(),
                     source,
                 });
@@ -64,7 +65,9 @@ impl InstanceLock {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(source) => {
                 return Err(InstanceLockError::Io {
-                    operation: "inspect instance lock",
+                    operation:
+                        crate::i18n::MessageId::CliInstanceLockAcquireExistingInspectInstanceLock
+                            .text(),
                     path,
                     source,
                 });
@@ -83,7 +86,9 @@ impl InstanceLock {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(source) => {
                 return Err(InstanceLockError::Io {
-                    operation: "inspect instance lock",
+                    operation:
+                        crate::i18n::MessageId::CliInstanceLockAcquireExistingInspectInstanceLock
+                            .text(),
                     path,
                     source,
                 });
@@ -100,7 +105,7 @@ impl InstanceLock {
             rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
         )
         .map_err(|source| InstanceLockError::Io {
-            operation: "open instance lock",
+            operation: crate::i18n::MessageId::CliInstanceLockOpenOpenInstanceLock.text(),
             path: path.clone(),
             source: source.into(),
         })?;
@@ -108,13 +113,14 @@ impl InstanceLock {
         if create {
             file.set_permissions(fs::Permissions::from_mode(0o600))
                 .map_err(|source| InstanceLockError::Io {
-                    operation: "set instance lock permissions",
+                    operation: crate::i18n::MessageId::CliInstanceLockOpenSetInstanceLockPermissions.text(),
                     path: path.clone(),
                     source,
                 })?;
         }
         let metadata = file.metadata().map_err(|source| InstanceLockError::Io {
-            operation: "inspect instance lock",
+            operation: crate::i18n::MessageId::CliInstanceLockAcquireExistingInspectInstanceLock
+                .text(),
             path: path.clone(),
             source,
         })?;
@@ -140,7 +146,7 @@ impl InstanceLock {
                 Err(InstanceLockError::AlreadyLocked(path))
             }
             Err(source) => Err(InstanceLockError::Io {
-                operation: "acquire instance lock",
+                operation: crate::i18n::MessageId::CliInstanceLockOpenAcquireInstanceLock.text(),
                 path,
                 source: source.into(),
             }),
@@ -217,13 +223,15 @@ fn write_identity(
     identity: &RunIdentity,
 ) -> Result<(), InstanceLockError> {
     let bytes = serde_json::to_vec(identity).map_err(|source| InstanceLockError::Io {
-        operation: "serialize instance identity",
+        operation: crate::i18n::MessageId::CliInstanceLockWriteIdentitySerializeInstanceIdentity
+            .text(),
         path: path.to_owned(),
         source: std::io::Error::other(source),
     })?;
     let mut file = file;
     file.set_len(0).map_err(|source| InstanceLockError::Io {
-        operation: "truncate instance identity",
+        operation: crate::i18n::MessageId::CliInstanceLockWriteIdentityTruncateInstanceIdentity
+            .text(),
         path: path.to_owned(),
         source,
     })?;
@@ -231,7 +239,8 @@ fn write_identity(
         .and_then(|_| file.write_all(&bytes))
         .and_then(|_| file.sync_all())
         .map_err(|source| InstanceLockError::Io {
-            operation: "write instance identity",
+            operation: crate::i18n::MessageId::CliInstanceLockWriteIdentityWriteInstanceIdentity
+                .text(),
             path: path.to_owned(),
             source,
         })
@@ -268,27 +277,15 @@ pub enum InstanceLockError {
 impl fmt::Display for InstanceLockError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::AlreadyLocked(path) => write!(
-                formatter,
-                "another solstone-tmux process is already using this data folder (lock: {})",
-                path.display()
-            ),
+            Self::AlreadyLocked(path) => write!(formatter, "{}", crate::i18n::render(crate::i18n::MessageId::CliInstanceLockFmtAnotherSolstoneTmuxProcessIsAlreadyUsingThis, &[("arg0", crate::i18n::ArgValue::Text((path.display()).to_string()))])),
             Self::InvalidTarget(path) => {
-                write!(
-                    formatter,
-                    "instance lock target is not a regular file: {}",
-                    path.display()
-                )
+                write!(formatter, "{}", crate::i18n::render(crate::i18n::MessageId::CliInstanceLockFmtInstanceLockTargetIsNotARegularFile, &[("arg0", crate::i18n::ArgValue::Text((path.display()).to_string()))]))
             }
             Self::Io {
                 operation,
                 path,
                 source,
-            } => write!(
-                formatter,
-                "{operation} failed for {}: {source}",
-                path.display()
-            ),
+            } => write!(formatter, "{}", crate::i18n::render(crate::i18n::MessageId::CliConfigFmtFailedFor, &[("operation", crate::i18n::ArgValue::Text((operation).to_string())), ("arg0", crate::i18n::ArgValue::Text((path.display()).to_string())), ("source", crate::i18n::ArgValue::Text((source).to_string()))])),
         }
     }
 }

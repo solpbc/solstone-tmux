@@ -88,7 +88,9 @@ pub fn recover_capture_streams(
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(source) => {
             return Err(RecoveryError::Io {
-                operation: "inspect captures directory",
+                operation:
+                    crate::i18n::MessageId::CliRecoveryRecoverCaptureStreamsInspectCapturesDirectory
+                        .text(),
                 path: captures,
                 source,
             });
@@ -98,7 +100,8 @@ pub fn recover_capture_streams(
         Ok(entries) => entries,
         Err(source) => {
             return Err(RecoveryError::Io {
-                operation: "scan capture dates",
+                operation: crate::i18n::MessageId::CliRecoveryRecoverCaptureStreamsScanCaptureDates
+                    .text(),
                 path: captures,
                 source,
             });
@@ -107,7 +110,8 @@ pub fn recover_capture_streams(
     let mut stream_directories = Vec::new();
     for entry in entries {
         let entry = entry.map_err(|source| RecoveryError::Io {
-            operation: "read capture date entry",
+            operation: crate::i18n::MessageId::CliRecoveryRecoverCaptureStreamsReadCaptureDateEntry
+                .text(),
             path: captures.clone(),
             source,
         })?;
@@ -118,7 +122,9 @@ pub fn recover_capture_streams(
             continue;
         }
         let file_type = entry.file_type().map_err(|source| RecoveryError::Io {
-            operation: "inspect capture date entry",
+            operation:
+                crate::i18n::MessageId::CliRecoveryRecoverCaptureStreamsInspectCaptureDateEntry
+                    .text(),
             path: entry.path(),
             source,
         })?;
@@ -127,13 +133,16 @@ pub fn recover_capture_streams(
         }
         let date_dir = entry.path();
         let stream_entries = fs::read_dir(&date_dir).map_err(|source| RecoveryError::Io {
-            operation: "scan capture streams",
+            operation: crate::i18n::MessageId::CliRecoveryRecoverCaptureStreamsScanCaptureStreams
+                .text(),
             path: date_dir.clone(),
             source,
         })?;
         for stream_entry in stream_entries {
             let stream_entry = stream_entry.map_err(|source| RecoveryError::Io {
-                operation: "read capture stream entry",
+                operation:
+                    crate::i18n::MessageId::CliRecoveryRecoverCaptureStreamsReadCaptureStreamEntry
+                        .text(),
                 path: date_dir.clone(),
                 source,
             })?;
@@ -174,12 +183,12 @@ fn recover_stream_inner(
     validate_stream(data_root, stream_dir)?;
     let mut stems = BTreeSet::new();
     for entry in fs::read_dir(stream_dir).map_err(|source| RecoveryError::Io {
-        operation: "scan stream directory",
+        operation: crate::i18n::MessageId::CliRecoveryRecoverStreamInnerScanStreamDirectory.text(),
         path: stream_dir.to_owned(),
         source,
     })? {
         let entry = entry.map_err(|source| RecoveryError::Io {
-            operation: "read stream entry",
+            operation: crate::i18n::MessageId::CliRecoveryRecoverStreamInnerReadStreamEntry.text(),
             path: stream_dir.to_owned(),
             source,
         })?;
@@ -223,7 +232,8 @@ fn recover_candidate(
             stream_dir,
             &source,
             &metadata_path,
-            "candidate stem is not a well-formed HHMMSS",
+            crate::i18n::MessageId::CliRecoveryRecoverCandidateCandidateStemIsNotAWellFormedHhmmss
+                .text(),
         );
     }
 
@@ -232,7 +242,8 @@ fn recover_candidate(
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
         Err(source_error) => {
             return Err(RecoveryError::Io {
-                operation: "read segment metadata",
+                operation: crate::i18n::MessageId::CliRecoveryRecoverCandidateReadSegmentMetadata
+                    .text(),
                 path: metadata_path,
                 source: source_error,
             });
@@ -246,9 +257,10 @@ fn recover_candidate(
             source,
             RecoveryAction::Retain,
             if nonempty {
-                "missing metadata with non-empty JSONL"
+                crate::i18n::MessageId::CliRecoveryRecoverCandidateMissingMetadataWithNonEmptyJsonl
+                    .text()
             } else {
-                "missing metadata cannot prove an empty segment"
+                crate::i18n::MessageId::CliRecoveryRecoverCandidateMissingMetadataCannotProveAnEmptySegment.text()
             },
         ));
     };
@@ -260,7 +272,7 @@ fn recover_candidate(
             stream_dir,
             &source,
             &metadata_path,
-            "metadata is torn or contradictory",
+            crate::i18n::MessageId::CliRecoveryRecoverCandidateMetadataIsTornOrContradictory.text(),
         );
     };
 
@@ -275,7 +287,9 @@ fn recover_candidate(
                     .all(|session| session.durable_offset == 0))
         {
             fs::remove_file(&metadata_path).map_err(|source_error| RecoveryError::Io {
-                operation: "remove orphan creating metadata",
+                operation:
+                    crate::i18n::MessageId::CliRecoveryRecoverCandidateRemoveOrphanCreatingMetadata
+                        .text(),
                 path: metadata_path.clone(),
                 source: source_error,
             })?;
@@ -283,7 +297,8 @@ fn recover_candidate(
             return Ok(record(
                 source,
                 RecoveryAction::Remove,
-                "removed orphan creating metadata",
+                crate::i18n::MessageId::CliRecoveryRecoverCandidateRemovedOrphanCreatingMetadata
+                    .text(),
             ));
         }
         let finalized = stream_dir.join(&metadata.finalized_dir);
@@ -294,7 +309,7 @@ fn recover_candidate(
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
             Err(source_error) => {
                 return Err(RecoveryError::Io {
-                    operation: "inspect orphan finalized target",
+                    operation: crate::i18n::MessageId::CliRecoveryRecoverCandidateInspectOrphanFinalizedTarget.text(),
                     path: finalized,
                     source: source_error,
                 });
@@ -313,7 +328,9 @@ fn recover_candidate(
             )
             .map_err(RecoveryError::Storage)?;
             fs::remove_file(&metadata_path).map_err(|source_error| RecoveryError::Io {
-                operation: "remove orphan finalized metadata",
+                operation:
+                    crate::i18n::MessageId::CliRecoveryRecoverCandidateRemoveOrphanFinalizedMetadata
+                        .text(),
                 path: metadata_path.clone(),
                 source: source_error,
             })?;
@@ -321,13 +338,13 @@ fn recover_candidate(
             return Ok(record(
                 finalized,
                 RecoveryAction::Remove,
-                "removed metadata left after finalized rename",
+                crate::i18n::MessageId::CliRecoveryRecoverCandidateRemovedMetadataLeftAfterFinalizedRename.text(),
             ));
         }
         return Ok(record(
             source,
             RecoveryAction::Retain,
-            "metadata has no matching source or validated finalized target",
+            crate::i18n::MessageId::CliRecoveryRecoverCandidateMetadataHasNoMatchingSourceOrValidatedFinalized.text(),
         ));
     }
 
@@ -340,7 +357,7 @@ fn recover_candidate(
         return Ok(record(
             source,
             RecoveryAction::Failed,
-            "finalized target collision; source and metadata retained",
+            crate::i18n::MessageId::CliRecoveryRecoverCandidateFinalizedTargetCollisionSourceAndMetadataRetained.text(),
         ));
     }
     if options.fail_source_rename {
@@ -362,7 +379,7 @@ fn recover_candidate(
         if let Some(validated) = validated_empty_files(&source)? {
             if let Some(before_empty_removal) = options.before_empty_removal {
                 before_empty_removal(&source).map_err(|source_error| RecoveryError::Io {
-                    operation: "run confirmed-empty pre-removal hook",
+                    operation: crate::i18n::MessageId::CliRecoveryRecoverCandidateRunConfirmedEmptyPreRemovalHook.text(),
                     path: source.clone(),
                     source: source_error,
                 })?;
@@ -371,16 +388,20 @@ fn recover_candidate(
                 return Ok(record(
                     source,
                     RecoveryAction::Retain,
-                    "confirmed-empty segment changed before removal; retained without deleting unvalidated entries",
+                    crate::i18n::MessageId::CliRecoveryRecoverCandidateConfirmedEmptySegmentChangedBeforeRemovalRetainedWithout.text(),
                 ));
             }
             fs::remove_dir(&source).map_err(|source_error| RecoveryError::Io {
-                operation: "remove confirmed-empty segment",
+                operation:
+                    crate::i18n::MessageId::CliRecoveryRecoverCandidateRemoveConfirmedEmptySegment
+                        .text(),
                 path: source.clone(),
                 source: source_error,
             })?;
             fs::remove_file(&metadata_path).map_err(|source_error| RecoveryError::Io {
-                operation: "remove confirmed-empty metadata",
+                operation:
+                    crate::i18n::MessageId::CliRecoveryRecoverCandidateRemoveConfirmedEmptyMetadata
+                        .text(),
                 path: metadata_path.clone(),
                 source: source_error,
             })?;
@@ -388,14 +409,15 @@ fn recover_candidate(
             return Ok(record(
                 source,
                 RecoveryAction::Remove,
-                "valid metadata positively confirmed an empty segment",
+                crate::i18n::MessageId::CliRecoveryRecoverCandidateValidMetadataPositivelyConfirmedAnEmptySegment.text(),
             ));
         }
         return quarantine(
             stream_dir,
             &source,
             &metadata_path,
-            "empty metadata contradicts JSONL bytes",
+            crate::i18n::MessageId::CliRecoveryRecoverCandidateEmptyMetadataContradictsJsonlBytes
+                .text(),
         );
     }
 
@@ -418,12 +440,19 @@ fn recover_candidate(
         return Ok(record(
             source,
             RecoveryAction::Failed,
-            &format!("source rename failed and was retained: {source_error}"),
+            &crate::i18n::render(
+                crate::i18n::MessageId::CliRecoveryRecoverCandidateSourceRenameFailedAndWasRetained,
+                &[(
+                    "source_error",
+                    crate::i18n::ArgValue::Text((source_error).to_string()),
+                )],
+            ),
         ));
     }
     if options.fail_rename_parent_sync {
         return Err(RecoveryError::Io {
-            operation: "fsync recovered rename parent",
+            operation:
+                crate::i18n::MessageId::CliRecoveryRecoverCandidateFsyncRecoveredRenameParent.text(),
             path: stream_dir.to_owned(),
             source: std::io::Error::other("injected recovered rename parent fsync failure"),
         });
@@ -439,7 +468,8 @@ fn recover_candidate(
     )
     .map_err(RecoveryError::Storage)?;
     fs::remove_file(&metadata_path).map_err(|source_error| RecoveryError::Io {
-        operation: "remove recovered metadata",
+        operation: crate::i18n::MessageId::CliRecoveryRecoverCandidateRemoveRecoveredMetadata
+            .text(),
         path: metadata_path,
         source: source_error,
     })?;
@@ -452,9 +482,10 @@ fn recover_candidate(
             RecoveryAction::Finalized
         },
         if repaired {
-            "repaired only a torn final line and finalized"
+            crate::i18n::MessageId::CliRecoveryRecoverCandidateRepairedOnlyATornFinalLineAndFinalized.text()
         } else {
-            "validated durable bytes and finalized"
+            crate::i18n::MessageId::CliRecoveryRecoverCandidateValidatedDurableBytesAndFinalized
+                .text()
         },
     ))
 }
@@ -463,12 +494,12 @@ fn validate_stream(data_root: &Path, stream_dir: &Path) -> Result<(), RecoveryEr
     let data_root = data_root
         .canonicalize()
         .map_err(|source| RecoveryError::Io {
-            operation: "canonicalize data root",
+            operation: crate::i18n::MessageId::CliRecoveryValidateStreamCanonicalizeDataRoot.text(),
             path: data_root.to_owned(),
             source,
         })?;
     let metadata = fs::symlink_metadata(stream_dir).map_err(|source| RecoveryError::Io {
-        operation: "inspect stream directory",
+        operation: crate::i18n::MessageId::CliRecoveryValidateStreamInspectStreamDirectory.text(),
         path: stream_dir.to_owned(),
         source,
     })?;
@@ -478,7 +509,8 @@ fn validate_stream(data_root: &Path, stream_dir: &Path) -> Result<(), RecoveryEr
     let stream = stream_dir
         .canonicalize()
         .map_err(|source| RecoveryError::Io {
-            operation: "canonicalize stream directory",
+            operation: crate::i18n::MessageId::CliRecoveryValidateStreamCanonicalizeStreamDirectory
+                .text(),
             path: stream_dir.to_owned(),
             source,
         })?;
@@ -508,7 +540,8 @@ fn reject_special_target(path: &Path) -> Result<(), RecoveryError> {
         Ok(_) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(source) => Err(RecoveryError::Io {
-            operation: "inspect recovery target",
+            operation: crate::i18n::MessageId::CliRecoveryRejectSpecialTargetInspectRecoveryTarget
+                .text(),
             path: path.to_owned(),
             source,
         }),
@@ -581,26 +614,35 @@ fn validate_files(
         .map(|session| session.filename.as_str())
         .collect::<BTreeSet<_>>();
     for entry in fs::read_dir(directory).map_err(|source| RecoveryError::Io {
-        operation: "scan incomplete segment",
+        operation: crate::i18n::MessageId::CliRecoveryValidateFilesScanIncompleteSegment.text(),
         path: directory.to_owned(),
         source,
     })? {
         let entry = entry.map_err(|source| RecoveryError::Io {
-            operation: "read incomplete segment entry",
+            operation: crate::i18n::MessageId::CliRecoveryValidateFilesReadIncompleteSegmentEntry
+                .text(),
             path: directory.to_owned(),
             source,
         })?;
-        let kind = entry.file_type().map_err(|source| RecoveryError::Io {
-            operation: "inspect incomplete segment entry",
-            path: entry.path(),
-            source,
-        })?;
+        let kind =
+            entry.file_type().map_err(|source| RecoveryError::Io {
+                operation:
+                    crate::i18n::MessageId::CliRecoveryValidateFilesInspectIncompleteSegmentEntry
+                        .text(),
+                path: entry.path(),
+                source,
+            })?;
         let name = entry.file_name();
         let Some(name) = name.to_str() else {
-            return Ok(contradiction("non-UTF-8 filename in segment"));
+            return Ok(contradiction(
+                crate::i18n::MessageId::CliRecoveryValidateFilesNonUtfFilenameInSegment.text(),
+            ));
         };
         if kind.is_symlink() || !kind.is_file() || !expected.contains(name) {
-            return Ok(contradiction("unknown or non-regular file in segment"));
+            return Ok(contradiction(
+                crate::i18n::MessageId::CliRecoveryValidateFilesUnknownOrNonRegularFileInSegment
+                    .text(),
+            ));
         }
     }
 
@@ -612,18 +654,26 @@ fn validate_files(
         let bytes = match fs::read(&path) {
             Ok(bytes) => bytes,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(contradiction("referenced JSONL file is missing"));
+                return Ok(contradiction(
+                    crate::i18n::MessageId::CliRecoveryValidateFilesReferencedJsonlFileIsMissing
+                        .text(),
+                ));
             }
             Err(source) => {
                 return Err(RecoveryError::Io {
-                    operation: "read JSONL during recovery",
+                    operation:
+                        crate::i18n::MessageId::CliRecoveryValidateFilesReadJsonlDuringRecovery
+                            .text(),
                     path,
                     source,
                 });
             }
         };
         if bytes.len() < session.durable_offset as usize {
-            return Ok(contradiction("JSONL is shorter than its durable offset"));
+            return Ok(contradiction(
+                crate::i18n::MessageId::CliRecoveryValidateFilesJsonlIsShorterThanItsDurableOffset
+                    .text(),
+            ));
         }
         let recorded = session.durable_offset as usize;
         let prefix = &bytes[..recorded];
@@ -640,16 +690,21 @@ fn validate_files(
             entry.durable_offset = valid_offset as u64;
             entry.last_frame_id = ids.last().copied().unwrap_or(0);
         } else if valid_offset != prefix.len() {
-            return Ok(contradiction("earlier JSONL corruption"));
+            return Ok(contradiction(
+                crate::i18n::MessageId::CliRecoveryValidateFilesEarlierJsonlCorruption.text(),
+            ));
         }
         if !prefix_torn && ids.last().copied().unwrap_or(0) != session.last_frame_id {
-            return Ok(contradiction("session frame IDs disagree with metadata"));
+            return Ok(contradiction(
+                crate::i18n::MessageId::CliRecoveryValidateFilesSessionFrameIdsDisagreeWithMetadata
+                    .text(),
+            ));
         }
         if bytes.len() > recorded {
             let suffix = &bytes[recorded..];
             if suffix.contains(&b'\n') {
                 return Ok(contradiction(
-                    "complete or multiline bytes exist beyond the durable offset",
+                    crate::i18n::MessageId::CliRecoveryValidateFilesCompleteOrMultilineBytesExistBeyondTheDurable.text(),
                 ));
             }
             repairs.push(FileRepair {
@@ -668,14 +723,17 @@ fn validate_files(
         .any(|(index, frame_id)| *frame_id != index as u64 + 1)
     {
         return Ok(contradiction(
-            "global frame IDs are duplicated or nonconsecutive",
+            crate::i18n::MessageId::CliRecoveryValidateFilesGlobalFrameIdsAreDuplicatedOrNonconsecutive.text(),
         ));
     }
     if repairs.is_empty()
         && (metadata.durable_frame_count != expected_count
             || metadata.last_durable_frame_id != expected_last)
     {
-        return Ok(contradiction("global frame IDs disagree with metadata"));
+        return Ok(contradiction(
+            crate::i18n::MessageId::CliRecoveryValidateFilesGlobalFrameIdsDisagreeWithMetadata
+                .text(),
+        ));
     }
     if !repairs.is_empty() {
         updated.durable_frame_count = expected_count;
@@ -738,7 +796,7 @@ fn apply_repairs(
             .write(true)
             .open(&repair.path)
             .map_err(|source| RecoveryError::Io {
-                operation: "open JSONL repair",
+                operation: crate::i18n::MessageId::CliRecoveryApplyRepairsOpenJsonlRepair.text(),
                 path: repair.path.clone(),
                 source,
             })?;
@@ -753,7 +811,9 @@ fn apply_repairs(
                 }
             })
             .map_err(|source| RecoveryError::Io {
-                operation: "truncate and fsync JSONL repair",
+                operation:
+                    crate::i18n::MessageId::CliRecoveryApplyRepairsTruncateAndFsyncJsonlRepair
+                        .text(),
                 path: repair.path.clone(),
                 source,
             })?;
@@ -773,17 +833,20 @@ fn validated_empty_files(
 ) -> Result<Option<Vec<ValidatedEmptyFile>>, RecoveryError> {
     let mut validated = Vec::new();
     for entry in fs::read_dir(directory).map_err(|source| RecoveryError::Io {
-        operation: "scan empty segment",
+        operation: crate::i18n::MessageId::CliRecoveryValidatedEmptyFilesScanEmptySegment.text(),
         path: directory.to_owned(),
         source,
     })? {
         let entry = entry.map_err(|source| RecoveryError::Io {
-            operation: "read empty segment entry",
+            operation: crate::i18n::MessageId::CliRecoveryValidatedEmptyFilesReadEmptySegmentEntry
+                .text(),
             path: directory.to_owned(),
             source,
         })?;
         let metadata = fs::symlink_metadata(entry.path()).map_err(|source| RecoveryError::Io {
-            operation: "inspect empty segment entry",
+            operation:
+                crate::i18n::MessageId::CliRecoveryValidatedEmptyFilesInspectEmptySegmentEntry
+                    .text(),
             path: entry.path(),
             source,
         })?;
@@ -806,12 +869,15 @@ fn remove_validated_empty_files(
 ) -> Result<bool, RecoveryError> {
     let mut seen = BTreeSet::new();
     for entry in fs::read_dir(directory).map_err(|source| RecoveryError::Io {
-        operation: "scan zero-length files",
+        operation: crate::i18n::MessageId::CliRecoveryRemoveValidatedEmptyFilesScanZeroLengthFiles
+            .text(),
         path: directory.to_owned(),
         source,
     })? {
         let entry = entry.map_err(|source| RecoveryError::Io {
-            operation: "read zero-length entry",
+            operation:
+                crate::i18n::MessageId::CliRecoveryRemoveValidatedEmptyFilesReadZeroLengthEntry
+                    .text(),
             path: directory.to_owned(),
             source,
         })?;
@@ -820,7 +886,9 @@ fn remove_validated_empty_files(
             return Ok(false);
         };
         let metadata = fs::symlink_metadata(&path).map_err(|source| RecoveryError::Io {
-            operation: "reinspect zero-length JSONL",
+            operation:
+                crate::i18n::MessageId::CliRecoveryRemoveValidatedEmptyFilesReinspectZeroLengthJsonl
+                    .text(),
             path: path.clone(),
             source,
         })?;
@@ -839,7 +907,9 @@ fn remove_validated_empty_files(
     }
     for expected in validated {
         fs::remove_file(&expected.path).map_err(|source| RecoveryError::Io {
-            operation: "remove zero-length JSONL",
+            operation:
+                crate::i18n::MessageId::CliRecoveryRemoveValidatedEmptyFilesRemoveZeroLengthJsonl
+                    .text(),
             path: expected.path.clone(),
             source,
         })?;
@@ -852,12 +922,13 @@ fn source_has_nonempty_jsonl(source: &Path) -> Result<bool, RecoveryError> {
         return Ok(false);
     }
     for entry in fs::read_dir(source).map_err(|source_error| RecoveryError::Io {
-        operation: "scan metadata-less segment",
+        operation: crate::i18n::MessageId::CliRecoverySourceHasNonemptyJsonlScanMetadataLessSegment
+            .text(),
         path: source.to_owned(),
         source: source_error,
     })? {
         let entry = entry.map_err(|source_error| RecoveryError::Io {
-            operation: "read metadata-less segment entry",
+            operation: crate::i18n::MessageId::CliRecoverySourceHasNonemptyJsonlReadMetadataLessSegmentEntry.text(),
             path: source.to_owned(),
             source: source_error,
         })?;
@@ -900,7 +971,7 @@ fn quarantine(
     let metadata_exists = entry_exists(metadata)?;
     if source_exists {
         fs::rename(source, &failed).map_err(|source_error| RecoveryError::Io {
-            operation: "quarantine segment",
+            operation: crate::i18n::MessageId::CliRecoveryQuarantineQuarantineSegment.text(),
             path: source.to_owned(),
             source: source_error,
         })?;
@@ -910,7 +981,7 @@ fn quarantine(
             let _ = fs::rename(&failed, source);
         }
         return Err(RecoveryError::Io {
-            operation: "quarantine metadata",
+            operation: crate::i18n::MessageId::CliRecoveryQuarantineQuarantineMetadata.text(),
             path: metadata.to_owned(),
             source: source_error,
         });
@@ -924,7 +995,8 @@ fn entry_exists(path: &Path) -> Result<bool, RecoveryError> {
         Ok(_) => Ok(true),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
         Err(source) => Err(RecoveryError::Io {
-            operation: "inspect recovery collision target",
+            operation: crate::i18n::MessageId::CliRecoveryEntryExistsInspectRecoveryCollisionTarget
+                .text(),
             path: path.to_owned(),
             source,
         }),
@@ -999,25 +1071,13 @@ impl fmt::Display for RecoveryError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Storage(error) => error.fmt(formatter),
-            Self::EscapesDataRoot(path) => write!(
-                formatter,
-                "recovery candidate escapes the configured data root: {}",
-                path.display()
-            ),
-            Self::SpecialTarget(path) => write!(
-                formatter,
-                "recovery candidate is a symlink or wrong file type: {}",
-                path.display()
-            ),
+            Self::EscapesDataRoot(path) => write!(formatter, "{}", crate::i18n::render(crate::i18n::MessageId::CliRecoveryFmtRecoveryCandidateEscapesTheConfiguredDataRoot, &[("arg0", crate::i18n::ArgValue::Text((path.display()).to_string()))])),
+            Self::SpecialTarget(path) => write!(formatter, "{}", crate::i18n::render(crate::i18n::MessageId::CliRecoveryFmtRecoveryCandidateIsASymlinkOrWrongFile, &[("arg0", crate::i18n::ArgValue::Text((path.display()).to_string()))])),
             Self::Io {
                 operation,
                 path,
                 source,
-            } => write!(
-                formatter,
-                "{operation} failed for {}: {source}",
-                path.display()
-            ),
+            } => write!(formatter, "{}", crate::i18n::render(crate::i18n::MessageId::CliConfigFmtFailedFor, &[("operation", crate::i18n::ArgValue::Text((operation).to_string())), ("arg0", crate::i18n::ArgValue::Text((path.display()).to_string())), ("source", crate::i18n::ArgValue::Text((source).to_string()))])),
         }
     }
 }

@@ -1,0 +1,38 @@
+{
+  "id": "cli.service-launchd.verify-loaded.was-running-as-pid-and-its-plist-was",
+  "fluent_id": "cli-service-launchd-verify-loaded-was-running-as-pid-and-its-plist-was",
+  "args": [
+    {
+      "name": "LABEL",
+      "type": "text",
+      "rust_format_spec": "",
+      "description": "Preformatted diagnostic or display value; preserve exactly"
+    },
+    {
+      "name": "expected",
+      "type": "text",
+      "rust_format_spec": "",
+      "description": "Preformatted diagnostic or display value; preserve exactly"
+    },
+    {
+      "name": "pid",
+      "type": "text",
+      "rust_format_spec": "",
+      "description": "Preformatted diagnostic or display value; preserve exactly"
+    }
+  ],
+  "description": "Terminal diagnostic detail for service/launchd.rs. Explain the failed operation. Dynamic arguments are preformatted diagnostic facts, paths, codes, or nested errors and must remain unchanged.",
+  "surfaces": [
+    "terminal"
+  ],
+  "max_length": null,
+  "risk": "routine",
+  "screenshots": [],
+  "source_revision": "2cc01d9c029cac7c6aa7beeed2f4fdd2c3188c05",
+  "sources": [
+    {
+      "path": "native/solstone-tmux/src/service/launchd.rs",
+      "line": 343
+    }
+  ]
+}

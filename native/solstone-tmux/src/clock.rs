@@ -101,8 +101,9 @@ impl SystemClock {
             Ok(zone) => (Self::from_zone(zone), None),
             Err(cause) => (
                 Self::utc(),
-                Some(format!(
-                    "could not load the local time zone ({cause}); set TZ or repair /etc/localtime"
+                Some(crate::i18n::render(
+                    crate::i18n::MessageId::CliClockFromResolvedCouldNotLoadTheLocalTimeZoneSet,
+                    &[("cause", crate::i18n::ArgValue::Text((cause).to_string()))],
                 )),
             ),
         }

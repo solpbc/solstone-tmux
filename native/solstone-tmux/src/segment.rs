@@ -232,7 +232,7 @@ impl SegmentState {
             return Err(SegmentError::Collision(finalized));
         }
         fs::rename(&self.incomplete_dir, &finalized).map_err(|source| SegmentError::Io {
-            operation: "rename finalized segment",
+            operation: crate::i18n::MessageId::CliSegmentFinalizeRenameFinalizedSegment.text(),
             path: self.incomplete_dir.clone(),
             source,
         })?;
@@ -246,7 +246,7 @@ impl SegmentState {
             },
         )?;
         fs::remove_file(&self.metadata_path).map_err(|source| SegmentError::Io {
-            operation: "remove finalized metadata",
+            operation: crate::i18n::MessageId::CliSegmentFinalizeRemoveFinalizedMetadata.text(),
             path: self.metadata_path.clone(),
             source,
         })?;
@@ -272,23 +272,29 @@ impl SegmentState {
         }
         self.storage.sync_and_close()?;
         for entry in fs::read_dir(&self.incomplete_dir).map_err(|source| SegmentError::Io {
-            operation: "scan confirmed-empty segment",
+            operation:
+                crate::i18n::MessageId::CliSegmentRemoveConfirmedEmptyScanConfirmedEmptySegment
+                    .text(),
             path: self.incomplete_dir.clone(),
             source,
         })? {
             let entry = entry.map_err(|source| SegmentError::Io {
-                operation: "read confirmed-empty entry",
+                operation:
+                    crate::i18n::MessageId::CliSegmentRemoveConfirmedEmptyReadConfirmedEmptyEntry
+                        .text(),
                 path: self.incomplete_dir.clone(),
                 source,
             })?;
             let file_type = entry.file_type().map_err(|source| SegmentError::Io {
-                operation: "inspect confirmed-empty entry",
+                operation:
+                    crate::i18n::MessageId::CliSegmentRemoveConfirmedEmptyInspectConfirmedEmptyEntry
+                        .text(),
                 path: entry.path(),
                 source,
             })?;
             let metadata =
                 fs::symlink_metadata(entry.path()).map_err(|source| SegmentError::Io {
-                    operation: "inspect confirmed-empty file",
+                    operation: crate::i18n::MessageId::CliSegmentRemoveConfirmedEmptyInspectConfirmedEmptyFile.text(),
                     path: entry.path(),
                     source,
                 })?;
@@ -301,19 +307,23 @@ impl SegmentState {
                 return Err(SegmentError::NotEmpty);
             }
             fs::remove_file(entry.path()).map_err(|source| SegmentError::Io {
-                operation: "remove zero-length JSONL",
+                operation: crate::i18n::MessageId::CliRecoveryRemoveValidatedEmptyFilesRemoveZeroLengthJsonl.text(),
                 path: entry.path(),
                 source,
             })?;
         }
         fs::remove_dir(&self.incomplete_dir).map_err(|source| SegmentError::Io {
-            operation: "remove confirmed-empty segment",
+            operation:
+                crate::i18n::MessageId::CliRecoveryRecoverCandidateRemoveConfirmedEmptySegment
+                    .text(),
             path: self.incomplete_dir.clone(),
             source,
         })?;
         sync_directory(&self.stream_dir)?;
         fs::remove_file(&self.metadata_path).map_err(|source| SegmentError::Io {
-            operation: "remove confirmed-empty metadata",
+            operation:
+                crate::i18n::MessageId::CliRecoveryRecoverCandidateRemoveConfirmedEmptyMetadata
+                    .text(),
             path: self.metadata_path.clone(),
             source,
         })?;
@@ -437,10 +447,27 @@ impl fmt::Display for SegmentError {
         match self {
             Self::Path(error) => error.fmt(formatter),
             Self::Name(error) => error.fmt(formatter),
-            Self::Serialize(error) => write!(formatter, "frame serialization failed: {error}"),
+            Self::Serialize(error) => write!(
+                formatter,
+                "{}",
+                crate::i18n::render(
+                    crate::i18n::MessageId::CliSegmentFmtFrameSerializationFailed,
+                    &[("error", crate::i18n::ArgValue::Text((error).to_string()))]
+                )
+            ),
             Self::Storage(error) => error.fmt(formatter),
             Self::Collision(path) => {
-                write!(formatter, "segment path already exists: {}", path.display())
+                write!(
+                    formatter,
+                    "{}",
+                    crate::i18n::render(
+                        crate::i18n::MessageId::CliSegmentFmtSegmentPathAlreadyExists,
+                        &[(
+                            "arg0",
+                            crate::i18n::ArgValue::Text((path.display()).to_string())
+                        )]
+                    )
+                )
             }
             Self::Io {
                 operation,
@@ -448,13 +475,42 @@ impl fmt::Display for SegmentError {
                 source,
             } => write!(
                 formatter,
-                "{operation} failed for {}: {source}",
-                path.display()
+                "{}",
+                crate::i18n::render(
+                    crate::i18n::MessageId::CliConfigFmtFailedFor,
+                    &[
+                        (
+                            "operation",
+                            crate::i18n::ArgValue::Text((operation).to_string())
+                        ),
+                        (
+                            "arg0",
+                            crate::i18n::ArgValue::Text((path.display()).to_string())
+                        ),
+                        ("source", crate::i18n::ArgValue::Text((source).to_string()))
+                    ]
+                )
             ),
-            Self::Poisoned => write!(formatter, "segment is poisoned after a failed rollback"),
-            Self::Closed => write!(formatter, "segment is already closed"),
-            Self::NotEmpty => write!(formatter, "segment is not metadata-confirmed empty"),
-            Self::FrameIdOverflow => write!(formatter, "segment frame_id overflow"),
+            Self::Poisoned => write!(
+                formatter,
+                "{}",
+                crate::i18n::MessageId::CliSegmentFmtSegmentIsPoisonedAfterAFailedRollback.text()
+            ),
+            Self::Closed => write!(
+                formatter,
+                "{}",
+                crate::i18n::MessageId::CliSegmentFmtSegmentIsAlreadyClosed.text()
+            ),
+            Self::NotEmpty => write!(
+                formatter,
+                "{}",
+                crate::i18n::MessageId::CliSegmentFmtSegmentIsNotMetadataConfirmedEmpty.text()
+            ),
+            Self::FrameIdOverflow => write!(
+                formatter,
+                "{}",
+                crate::i18n::MessageId::CliSegmentFmtSegmentFrameIdOverflow.text()
+            ),
         }
     }
 }

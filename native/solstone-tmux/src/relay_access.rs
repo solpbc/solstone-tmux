@@ -140,7 +140,7 @@ pub async fn run_access_lane(
     AccessLaneResult { relay, addresses }
 }
 
-const FAILURE_LINE: &str = "solstone-tmux: journal dial addresses were not refreshed";
+const FAILURE_LINE: crate::i18n::MessageId = crate::i18n::MessageId::CliRelayAccessCopyFailureLine;
 
 enum DialAddressJobStep {
     Success,

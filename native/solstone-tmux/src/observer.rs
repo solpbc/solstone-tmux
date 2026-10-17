@@ -102,8 +102,9 @@ fn open_segment(
         }
         Err(cause) => {
             if !*zone_failure_warned {
-                warnings.warn(&format!(
-                    "could not load the local time zone ({cause}); set TZ or repair /etc/localtime"
+                warnings.warn(&crate::i18n::render(
+                    crate::i18n::MessageId::CliClockFromResolvedCouldNotLoadTheLocalTimeZoneSet,
+                    &[("cause", crate::i18n::ArgValue::Text((cause).to_string()))],
                 ));
                 *zone_failure_warned = true;
             }
@@ -336,10 +337,7 @@ impl SegmentLifecycle for SegmentManager {
                 .append_capture(capture, timestamp, monotonic_now)
             {
                 if error.is_recoverable_append() {
-                    eprintln!(
-                        "solstone-tmux: warning: durable append for session {:?} rolled back and will retry: {error}",
-                        capture.session
-                    );
+                    eprintln!("{}", crate::i18n::render(crate::i18n::MessageId::CliObserverProcessPollSolstoneTmuxWarningDurableAppendForSessionRolled, &[("arg0", crate::i18n::ArgValue::Text(format!("{:?}", capture.session))), ("error", crate::i18n::ArgValue::Text((error).to_string()))]));
                     continue;
                 }
                 return Err(operation_error(error));
@@ -507,18 +505,28 @@ pub async fn run_observer(
         let captures = match capture_result {
             Some(Ok(Ok(captures))) => captures,
             Some(Ok(Err(error))) => {
-                failures.push(format!("capture task exited: {error}"));
+                failures.push(crate::i18n::render(
+                    crate::i18n::MessageId::CliObserverRunObserverCaptureTaskExited,
+                    &[("error", crate::i18n::ArgValue::Text((error).to_string()))],
+                ));
                 break None;
             }
             Some(Err(error)) => {
-                failures.push(format!(
-                    "capture task failed: {}",
-                    join_error_message(error)
+                failures.push(crate::i18n::render(
+                    crate::i18n::MessageId::CliObserverRunObserverCaptureTaskFailed,
+                    &[(
+                        "arg0",
+                        crate::i18n::ArgValue::Text((join_error_message(error)).to_string()),
+                    )],
                 ));
                 break None;
             }
             None => {
-                failures.push("capture task exited without a result".to_owned());
+                failures.push(
+                    crate::i18n::MessageId::CliObserverRunObserverCaptureTaskExitedWithoutAResult
+                        .text()
+                        .to_owned(),
+                );
                 break None;
             }
         };
@@ -532,13 +540,19 @@ pub async fn run_observer(
             Ok((returned, Ok(()))) => segment = returned,
             Ok((returned, Err(error))) => {
                 segment = returned;
-                failures.push(format!("segment poll failed: {error}"));
+                failures.push(crate::i18n::render(
+                    crate::i18n::MessageId::CliObserverRunObserverSegmentPollFailed,
+                    &[("error", crate::i18n::ArgValue::Text((error).to_string()))],
+                ));
                 break None;
             }
             Err(error) => {
-                failures.push(format!(
-                    "blocking segment task failed: {}",
-                    join_error_message(error)
+                failures.push(crate::i18n::render(
+                    crate::i18n::MessageId::CliObserverRunObserverBlockingSegmentTaskFailed,
+                    &[(
+                        "arg0",
+                        crate::i18n::ArgValue::Text((join_error_message(error)).to_string()),
+                    )],
                 ));
                 return ObserverExit {
                     exit_code: 1,
@@ -561,10 +575,16 @@ pub async fn run_observer(
     });
     match blocking.await {
         Ok((_returned, Ok(_))) => {}
-        Ok((_returned, Err(error))) => failures.push(format!("segment shutdown failed: {error}")),
-        Err(error) => failures.push(format!(
-            "blocking segment shutdown failed: {}",
-            join_error_message(error)
+        Ok((_returned, Err(error))) => failures.push(crate::i18n::render(
+            crate::i18n::MessageId::CliObserverRunObserverSegmentShutdownFailed,
+            &[("error", crate::i18n::ArgValue::Text((error).to_string()))],
+        )),
+        Err(error) => failures.push(crate::i18n::render(
+            crate::i18n::MessageId::CliObserverRunObserverBlockingSegmentShutdownFailed,
+            &[(
+                "arg0",
+                crate::i18n::ArgValue::Text((join_error_message(error)).to_string()),
+            )],
         )),
     }
     ObserverExit {
@@ -689,10 +709,7 @@ fn observer_join_result(result: Result<ObserverExit, JoinError>) -> ObserverExit
         Err(error) => ObserverExit {
             exit_code: 1,
             shutdown_event: None,
-            failures: vec![format!(
-                "solstone-tmux stopped unexpectedly: {}",
-                join_error_message(error)
-            )],
+            failures: vec![crate::i18n::render(crate::i18n::MessageId::CliObserverObserverJoinResultSolstoneTmuxStoppedUnexpectedly, &[("arg0", crate::i18n::ArgValue::Text((join_error_message(error)).to_string()))])],
         },
     }
 }
@@ -730,9 +747,13 @@ fn append_authorized_sync_outcome(exit: &mut ObserverExit, outcome: SyncStopOutc
             .push(DiagnosticCode::SyncTaskTimedOut.message().to_owned()),
         SyncStopOutcome::Joined(result) => match result {
             Ok(Ok(())) => {}
-            Ok(Err(code)) => exit
-                .failures
-                .push(format!("sync task failed: {}", code.message())),
+            Ok(Err(code)) => exit.failures.push(crate::i18n::render(
+                crate::i18n::MessageId::CliObserverAppendAuthorizedSyncOutcomeSyncTaskFailed,
+                &[(
+                    "arg0",
+                    crate::i18n::ArgValue::Text((code.message()).to_string()),
+                )],
+            )),
             Err(error) if error.is_panic() => exit
                 .failures
                 .push(DiagnosticCode::SyncTaskPanicked.message().to_owned()),
@@ -746,7 +767,13 @@ fn append_authorized_sync_outcome(exit: &mut ObserverExit, outcome: SyncStopOutc
 fn unexpected_sync_failure(result: Result<Result<(), DiagnosticCode>, JoinError>) -> String {
     match result {
         Ok(Ok(())) => DiagnosticCode::SyncTaskExited.message().to_owned(),
-        Ok(Err(code)) => format!("sync task failed: {}", code.message()),
+        Ok(Err(code)) => crate::i18n::render(
+            crate::i18n::MessageId::CliObserverAppendAuthorizedSyncOutcomeSyncTaskFailed,
+            &[(
+                "arg0",
+                crate::i18n::ArgValue::Text((code.message()).to_string()),
+            )],
+        ),
         Err(error) if error.is_panic() => DiagnosticCode::SyncTaskPanicked.message().to_owned(),
         Err(_) => DiagnosticCode::SyncTaskCancelled.message().to_owned(),
     }
@@ -760,8 +787,10 @@ async fn finish_supervision(
 ) -> ObserverExit {
     retention_fence.close_and_drain().await;
     if let Err(error) = indicator.restore().await {
-        exit.failures
-            .push(format!("indicator shutdown failed: {error}"));
+        exit.failures.push(crate::i18n::render(
+            crate::i18n::MessageId::CliObserverFinishSupervisionIndicatorShutdownFailed,
+            &[("error", crate::i18n::ArgValue::Text((error).to_string()))],
+        ));
         exit.exit_code = 1;
     }
     drop(indicator);
@@ -773,11 +802,11 @@ pub fn production_shutdown_future()
 -> Result<Pin<Box<dyn Future<Output = ShutdownEvent> + Send>>, ObserverOperationError> {
     let mut sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
         .map_err(|error| {
-            ObserverOperationError(format!("could not install SIGINT handler: {error}"))
+            ObserverOperationError(crate::i18n::render(crate::i18n::MessageId::CliObserverProductionShutdownFutureCouldNotInstallSigintHandler, &[("error", crate::i18n::ArgValue::Text((error).to_string()))]))
         })?;
     let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
         .map_err(|error| {
-            ObserverOperationError(format!("could not install SIGTERM handler: {error}"))
+            ObserverOperationError(crate::i18n::render(crate::i18n::MessageId::CliObserverProductionShutdownFutureCouldNotInstallSigtermHandler, &[("error", crate::i18n::ArgValue::Text((error).to_string()))]))
         })?;
     Ok(Box::pin(async move {
         tokio::select! {
@@ -791,15 +820,31 @@ fn join_error_message(error: JoinError) -> String {
     if error.is_panic() {
         let payload = error.into_panic();
         if let Some(message) = payload.downcast_ref::<&str>() {
-            return format!("panic: {message}");
+            return crate::i18n::render(
+                crate::i18n::MessageId::CliObserverJoinErrorMessagePanic,
+                &[(
+                    "message",
+                    crate::i18n::ArgValue::Text((message).to_string()),
+                )],
+            );
         }
         if let Some(message) = payload.downcast_ref::<String>() {
-            return format!("panic: {message}");
+            return crate::i18n::render(
+                crate::i18n::MessageId::CliObserverJoinErrorMessagePanic,
+                &[(
+                    "message",
+                    crate::i18n::ArgValue::Text((message).to_string()),
+                )],
+            );
         }
-        return "panic: non-string panic payload".to_owned();
+        return crate::i18n::MessageId::CliObserverJoinErrorMessagePanicNonStringPanicPayload
+            .text()
+            .to_owned();
     }
     if error.is_cancelled() {
-        "task was cancelled".to_owned()
+        crate::i18n::MessageId::CliObserverJoinErrorMessageTaskWasCancelled
+            .text()
+            .to_owned()
     } else {
         error.to_string()
     }

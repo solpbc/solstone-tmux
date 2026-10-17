@@ -295,11 +295,9 @@ fn repairs_and_parent_renames_are_fsynced() {
     )
     .expect_err("repair fsync failure must surface");
 
-    assert!(
-        error
-            .to_string()
-            .contains("truncate and fsync JSONL repair")
-    );
+    assert!(error.to_string().contains(
+        solstone_tmux::i18n::MessageId::CliRecoveryApplyRepairsTruncateAndFsyncJsonlRepair.text()
+    ));
     assert!(setup.source.is_dir());
     assert!(setup.metadata.is_file());
 }
@@ -321,7 +319,12 @@ fn finalized_rename_parent_is_fsynced() {
     )
     .expect_err("rename parent fsync failure must surface");
 
-    assert!(error.to_string().contains("fsync recovered rename parent"));
+    assert!(
+        error.to_string().contains(
+            solstone_tmux::i18n::MessageId::CliRecoveryRecoverCandidateFsyncRecoveredRenameParent
+                .text()
+        )
+    );
     assert!(setup.finalized_path().is_dir());
     assert!(setup.metadata.is_file());
 }

@@ -29,11 +29,8 @@ fn early_successful_sync_exit_is_a_process_failure() {
     let exit = runtime().block_on(supervise_fixture(async { Ok(()) }));
 
     assert_eq!(exit.exit_code, 1);
-    assert!(
-        exit.failures
-            .iter()
-            .any(|failure| failure == "sync task exited unexpectedly")
-    );
+    assert!(exit.failures.iter().any(|failure| failure
+        == solstone_tmux::i18n::MessageId::CliHealthMessageSyncTaskExitedUnexpectedly.text()));
     assert_eq!(exit.shutdown_event, Some(ShutdownEvent::Injected));
 }
 
@@ -44,7 +41,10 @@ fn sync_panic_is_a_process_failure_and_finalizes_observer() {
     }));
 
     assert_eq!(exit.exit_code, 1);
-    assert_eq!(exit.failures, ["sync task failed: panic"]);
+    assert_eq!(
+        exit.failures,
+        [solstone_tmux::i18n::MessageId::CliHealthMessageSyncTaskFailedPanic.text()]
+    );
     assert_eq!(exit.shutdown_event, Some(ShutdownEvent::Injected));
 }
 

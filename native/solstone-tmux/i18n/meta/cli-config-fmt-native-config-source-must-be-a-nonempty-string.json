@@ -1,0 +1,19 @@
+{
+  "id": "cli.config.fmt.native-config-source-must-be-a-nonempty-string",
+  "fluent_id": "cli-config-fmt-native-config-source-must-be-a-nonempty-string",
+  "args": [],
+  "description": "Terminal diagnostic detail for config.rs. Explain the failed operation. Dynamic arguments are preformatted diagnostic facts, paths, codes, or nested errors and must remain unchanged.",
+  "surfaces": [
+    "terminal"
+  ],
+  "max_length": null,
+  "risk": "routine",
+  "screenshots": [],
+  "source_revision": "2cc01d9c029cac7c6aa7beeed2f4fdd2c3188c05",
+  "sources": [
+    {
+      "path": "native/solstone-tmux/src/config.rs",
+      "line": 291
+    }
+  ]
+}

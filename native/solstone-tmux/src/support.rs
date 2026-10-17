@@ -23,7 +23,7 @@ pub fn report_url(last_state: &str, block: &AboutBlock) -> String {
     if !last_state.is_empty() {
         fields.push(("state", limited(last_state, 500)));
     }
-    fields.push(("about", block.text.clone()));
+    fields.push(("about", block.canonical_text.clone()));
     let fragment = fields
         .into_iter()
         .map(|(key, value)| format!("{}={}", form_encode(key), form_encode(&value)))
@@ -57,6 +57,9 @@ mod tests {
 
     fn block() -> AboutBlock {
         AboutBlock {
+            canonical_text:
+                "tmux app 2.0.11 · ubuntu 24.04 · x86_64\njournal 2.0.29 · macos 26.5 · arm64"
+                    .into(),
             text: "tmux app 2.0.11 · ubuntu 24.04 · x86_64\njournal 2.0.29 · macos 26.5 · arm64"
                 .into(),
             host: crate::about::HostFacts {

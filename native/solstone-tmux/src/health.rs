@@ -69,35 +69,39 @@ impl DiagnosticCode {
         }
     }
 
-    pub const fn message(self) -> &'static str {
+    pub fn message(self) -> &'static str {
+        self.message_id().text()
+    }
+
+    pub fn message_id(self) -> crate::i18n::MessageId {
         match self {
-            Self::SetupInputInvalid => "setup input is invalid",
-            Self::SetupUnavailable => "setup is unavailable; stop solstone-tmux and try again",
+            Self::SetupInputInvalid => crate::i18n::MessageId::CliHealthMessageSetupInputIsInvalid,
+            Self::SetupUnavailable => crate::i18n::MessageId::CliHealthMessageSetupIsUnavailableStopSolstoneTmuxAndTry,
             Self::PairingFailed => {
-                "private network pairing failed; check the pairing link and try setup again"
+                crate::i18n::MessageId::CliHealthMessagePrivateNetworkPairingFailedCheckThePairingLink
             }
-            Self::PrivateStateInvalid => "private network state is invalid",
-            Self::PrivateStateIo => "private network state could not be accessed",
-            Self::HealthSnapshotIo => "sync health snapshot could not be written",
-            Self::BridgeUnavailable => "the private network is unavailable",
-            Self::JournalUnavailable => "paired journal is unavailable",
-            Self::JournalTimeout => "paired journal request timed out",
-            Self::JournalResponseTooLarge => "paired journal response exceeds the supported size",
-            Self::JournalContractInvalid => "journal response did not match the contract",
+            Self::PrivateStateInvalid => crate::i18n::MessageId::CliHealthMessagePrivateNetworkStateIsInvalid,
+            Self::PrivateStateIo => crate::i18n::MessageId::CliHealthMessagePrivateNetworkStateCouldNotBeAccessed,
+            Self::HealthSnapshotIo => crate::i18n::MessageId::CliHealthMessageSyncHealthSnapshotCouldNotBeWritten,
+            Self::BridgeUnavailable => crate::i18n::MessageId::CliHealthMessageThePrivateNetworkIsUnavailable,
+            Self::JournalUnavailable => crate::i18n::MessageId::CliHealthMessagePairedJournalIsUnavailable,
+            Self::JournalTimeout => crate::i18n::MessageId::CliHealthMessagePairedJournalRequestTimedOut,
+            Self::JournalResponseTooLarge => crate::i18n::MessageId::CliHealthMessagePairedJournalResponseExceedsTheSupportedSize,
+            Self::JournalContractInvalid => crate::i18n::MessageId::CliHealthMessageJournalResponseDidNotMatchTheContract,
             Self::ConfiguredStreamMismatch => {
-                "set stream to the hostname-derived tmux name and restart"
+                crate::i18n::MessageId::CliHealthMessageSetStreamToTheHostnameDerivedTmuxName
             }
-            Self::LocalSegmentInvalid => "local segment is invalid",
-            Self::RequestTooLarge => "local request exceeds the bridge limit",
-            Self::JournalRejected => "journal request was rejected",
+            Self::LocalSegmentInvalid => crate::i18n::MessageId::CliHealthMessageLocalSegmentIsInvalid,
+            Self::RequestTooLarge => crate::i18n::MessageId::CliHealthMessageLocalRequestExceedsTheBridgeLimit,
+            Self::JournalRejected => crate::i18n::MessageId::CliHealthMessageJournalRequestWasRejected,
             Self::JournalRevoked => {
-                "this device can't connect to your journal with its saved pairing; run setup with a new pairing link"
+                crate::i18n::MessageId::CliHealthMessageThisDeviceCanTConnectToYourJournal
             }
-            Self::SyncTaskExited => "sync task exited unexpectedly",
-            Self::SyncTaskPanicked => "sync task failed: panic",
-            Self::SyncTaskCancelled => "sync task failed: task was cancelled",
-            Self::SyncTaskTimedOut => "sync task did not stop within the shutdown deadline",
-            Self::IndicatorUpdateFailed => "indicator update failed",
+            Self::SyncTaskExited => crate::i18n::MessageId::CliHealthMessageSyncTaskExitedUnexpectedly,
+            Self::SyncTaskPanicked => crate::i18n::MessageId::CliHealthMessageSyncTaskFailedPanic,
+            Self::SyncTaskCancelled => crate::i18n::MessageId::CliHealthMessageSyncTaskFailedTaskWasCancelled,
+            Self::SyncTaskTimedOut => crate::i18n::MessageId::CliHealthMessageSyncTaskDidNotStopWithinTheShutdown,
+            Self::IndicatorUpdateFailed => crate::i18n::MessageId::CliHealthMessageIndicatorUpdateFailed,
         }
     }
 }
@@ -113,8 +117,14 @@ impl std::error::Error for DiagnosticCode {}
 pub fn emit_diagnostic(code: DiagnosticCode) {
     let _ = writeln!(
         std::io::stderr().lock(),
-        "solstone-tmux: {}",
-        code.message()
+        "{}",
+        crate::i18n::render(
+            crate::i18n::MessageId::CliHealthEmitDiagnosticSolstoneTmux,
+            &[(
+                "arg0",
+                crate::i18n::ArgValue::Text((code.message()).to_string())
+            )]
+        )
     );
 }
 

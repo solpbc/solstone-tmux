@@ -68,14 +68,33 @@ pub enum CommandError {
 impl fmt::Display for CommandError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Spawn(error) => write!(formatter, "could not start command: {error}"),
+            Self::Spawn(error) => write!(
+                formatter,
+                "{}",
+                crate::i18n::render(
+                    crate::i18n::MessageId::CliCommandFmtCouldNotStartCommand,
+                    &[("error", crate::i18n::ArgValue::Text((error).to_string()))]
+                )
+            ),
             Self::Timeout {
                 operation,
                 duration,
             } => write!(
                 formatter,
-                "{operation:?} exceeded its {} second timeout",
-                duration.as_secs()
+                "{}",
+                crate::i18n::render(
+                    crate::i18n::MessageId::CliCommandFmtExceededItsSecondTimeout,
+                    &[
+                        (
+                            "operation",
+                            crate::i18n::ArgValue::Text(format!("{:?}", operation))
+                        ),
+                        (
+                            "arg0",
+                            crate::i18n::ArgValue::Text((duration.as_secs()).to_string())
+                        )
+                    ]
+                )
             ),
         }
     }
@@ -113,6 +132,11 @@ impl CommandRunner for TokioCommandRunner {
                 .stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::piped());
+            // These commands are parsed as machine responses. Tmux retains
+            // its text locale because capture bytes may contain any Unicode.
+            if !matches!(invocation.operation, CommandOperation::Tmux(_)) {
+                command.env("LC_ALL", "C").env("LANG", "C");
+            }
             let operation = invocation.operation;
             let duration = invocation.timeout;
             let output = tokio::time::timeout(duration, command.output())

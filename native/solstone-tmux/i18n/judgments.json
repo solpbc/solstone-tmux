@@ -1,0 +1,2136 @@
+{
+  "revision": "2cc01d9c029cac7c6aa7beeed2f4fdd2c3188c05",
+  "method": "Agent-authored classification rules plus contextual candidate review; not an independent model call per row. Noncandidate exclusions are explicit in inventory.",
+  "batches": [
+    {
+      "file": "native/solstone-tmux/src/about.rs",
+      "occurrences": 11,
+      "rows": [
+        {
+          "line": 227,
+          "value": "tmux app",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 239,
+          "value": "journal unknown",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 255,
+          "value": "journal unknown",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 270,
+          "value": "just now",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 271,
+          "value": "minute",
+          "decision": "manual",
+          "reason": "Unit becomes a dedicated Fluent plural message"
+        },
+        {
+          "line": 272,
+          "value": "hour",
+          "decision": "manual",
+          "reason": "Unit becomes a dedicated Fluent plural message"
+        },
+        {
+          "line": 273,
+          "value": "day",
+          "decision": "manual",
+          "reason": "Unit becomes a dedicated Fluent plural message"
+        },
+        {
+          "line": 275,
+          "value": "{SEPARATOR}last seen {age}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 281,
+          "value": "{value} {unit}{} ago",
+          "decision": "manual",
+          "reason": "Hand plural replaced with three Fluent plural templates"
+        },
+        {
+          "line": 281,
+          "value": "",
+          "decision": "manual",
+          "reason": "Hand plural replaced with three Fluent plural templates"
+        },
+        {
+          "line": 281,
+          "value": "s",
+          "decision": "manual",
+          "reason": "Hand plural replaced with three Fluent plural templates"
+        }
+      ]
+    },
+    {
+      "file": "native/solstone-tmux/src/cli.rs",
+      "occurrences": 5,
+      "rows": [
+        {
+          "line": 56,
+          "value": "unknown command '{}'\n{}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 87,
+          "value": "unexpected argument '{}'\n{}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 100,
+          "value": "unexpected argument '{}'\n{}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 111,
+          "value": "usage: solstone-tmux [run|setup|confirm|status|about|install-service|uninstall-service|--help|--version]\n       solstone-tmux setup [--mark <words>]\n       solstone-tmux confirm [--mark <words>]\n--mark  {}\nexit 0 paired or already confirmed; exit 1 not paired, nothing changed, or no terminal; exit 2 usage; exit 5 held. status still uses exit 3 and 4.",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 119,
+          "value": "solstone-tmux {} (source {source})",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        }
+      ]
+    },
+    {
+      "file": "native/solstone-tmux/src/clock.rs",
+      "occurrences": 1,
+      "rows": [
+        {
+          "line": 105,
+          "value": "could not load the local time zone ({cause}); set TZ or repair /etc/localtime",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        }
+      ]
+    },
+    {
+      "file": "native/solstone-tmux/src/command.rs",
+      "occurrences": 2,
+      "rows": [
+        {
+          "line": 71,
+          "value": "could not start command: {error}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 77,
+          "value": "{operation:?} exceeded its {} second timeout",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        }
+      ]
+    },
+    {
+      "file": "native/solstone-tmux/src/config.rs",
+      "occurrences": 11,
+      "rows": [
+        {
+          "line": 101,
+          "value": "set native config permissions",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 107,
+          "value": "read native config",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 121,
+          "value": "inspect native config",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 239,
+          "value": "hostname {hostname:?} cannot form a native stream name",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 273,
+          "value": "native config {} must be a regular file, not a symlink or special target",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 278,
+          "value": "native config {} is invalid: {detail}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 283,
+          "value": "native stream name {identity:?} is invalid: {source}; update stream in config.json",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 287,
+          "value": "native config {field} must be greater than zero seconds",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 291,
+          "value": "native config source must be a nonempty string matching [a-z0-9][a-z0-9_-]* and at most 64 bytes; update source in config.json",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 295,
+          "value": "could not derive the default native stream from this hostname: {detail}; set stream in config.json",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 303,
+          "value": "{operation} failed for {}: {source}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        }
+      ]
+    },
+    {
+      "file": "native/solstone-tmux/src/health.rs",
+      "occurrences": 22,
+      "rows": [
+        {
+          "line": 74,
+          "value": "setup input is invalid",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 75,
+          "value": "setup is unavailable; stop solstone-tmux and try again",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 77,
+          "value": "private network pairing failed; check the pairing link and try setup again",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 79,
+          "value": "private network state is invalid",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 80,
+          "value": "private network state could not be accessed",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 81,
+          "value": "sync health snapshot could not be written",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 82,
+          "value": "the private network is unavailable",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 83,
+          "value": "paired journal is unavailable",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 84,
+          "value": "paired journal request timed out",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 85,
+          "value": "paired journal response exceeds the supported size",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 86,
+          "value": "journal response did not match the contract",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 88,
+          "value": "set stream to the hostname-derived tmux name and restart",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 90,
+          "value": "local segment is invalid",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 91,
+          "value": "local request exceeds the bridge limit",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 92,
+          "value": "journal request was rejected",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 94,
+          "value": "this device can't connect to your journal with its saved pairing; run setup with a new pairing link",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 96,
+          "value": "sync task exited unexpectedly",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 97,
+          "value": "sync task failed: panic",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 98,
+          "value": "sync task failed: task was cancelled",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 99,
+          "value": "sync task did not stop within the shutdown deadline",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 100,
+          "value": "indicator update failed",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 116,
+          "value": "solstone-tmux: {}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        }
+      ]
+    },
+    {
+      "file": "native/solstone-tmux/src/indicator.rs",
+      "occurrences": 8,
+      "rows": [
+        {
+          "line": 52,
+          "value": "tmux executable must be absolute",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 210,
+          "value": "{error}; status-left rollback also failed: {rollback}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 250,
+          "value": "{STATUS_LEFT}: {error}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 254,
+          "value": "{STATUS_LEFT} read: {error}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 262,
+          "value": "{SOLSTONE_OPTION}: {error}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 266,
+          "value": "{SOLSTONE_OPTION} read: {error}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 324,
+          "value": "tmux option command for {name} exited {status}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 340,
+          "value": "indicator restoration failed: {}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        }
+      ]
+    },
+    {
+      "file": "native/solstone-tmux/src/instance_lock.rs",
+      "occurrences": 13,
+      "rows": [
+        {
+          "line": 52,
+          "value": "inspect data root",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 67,
+          "value": "inspect instance lock",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 86,
+          "value": "inspect instance lock",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 103,
+          "value": "open instance lock",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 111,
+          "value": "set instance lock permissions",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 117,
+          "value": "inspect instance lock",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 143,
+          "value": "acquire instance lock",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 220,
+          "value": "serialize instance identity",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 226,
+          "value": "truncate instance identity",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 234,
+          "value": "write instance identity",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 273,
+          "value": "another solstone-tmux process is already using this data folder (lock: {})",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 279,
+          "value": "instance lock target is not a regular file: {}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 289,
+          "value": "{operation} failed for {}: {source}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        }
+      ]
+    },
+    {
+      "file": "native/solstone-tmux/src/journal.rs",
+      "occurrences": 1,
+      "rows": [
+        {
+          "line": 1066,
+          "value": "local file stream failed",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        }
+      ]
+    },
+    {
+      "file": "native/solstone-tmux/src/main.rs",
+      "occurrences": 10,
+      "rows": [
+        {
+          "line": 35,
+          "value": "solstone-tmux: {error}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 109,
+          "value": "could not find the solstone-tmux executable: {error}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 170,
+          "value": "get help: {}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 172,
+          "value": "report a problem: {}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 176,
+          "value": "solstone-tmux: {error}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 234,
+          "value": "private state is already in use",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 252,
+          "value": "solstone-tmux: warning: recovery {:?} for {}: {}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 350,
+          "value": "solstone-tmux: {failure}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 359,
+          "value": "{error}; removing the empty startup segment also failed: {cleanup}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 369,
+          "value": "could not start the async runtime: {error}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        }
+      ]
+    },
+    {
+      "file": "native/solstone-tmux/src/name.rs",
+      "occurrences": 6,
+      "rows": [
+        {
+          "line": 43,
+          "value": "identity must not be empty",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 44,
+          "value": "identity must not contain NUL",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 45,
+          "value": "identity must not be an absolute path",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 46,
+          "value": "identity must not contain path traversal",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 49,
+          "value": "derived identity is {actual} bytes; the limit is {limit} bytes",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 51,
+          "value": "derived identity escapes its parent",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        }
+      ]
+    },
+    {
+      "file": "native/solstone-tmux/src/observer.rs",
+      "occurrences": 19,
+      "rows": [
+        {
+          "line": 106,
+          "value": "could not load the local time zone ({cause}); set TZ or repair /etc/localtime",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 340,
+          "value": "solstone-tmux: warning: durable append for session {:?} rolled back and will retry: {error}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 510,
+          "value": "capture task exited: {error}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 515,
+          "value": "capture task failed: {}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 521,
+          "value": "capture task exited without a result",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 535,
+          "value": "segment poll failed: {error}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 540,
+          "value": "blocking segment task failed: {}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 564,
+          "value": "segment shutdown failed: {error}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 566,
+          "value": "blocking segment shutdown failed: {}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 693,
+          "value": "solstone-tmux stopped unexpectedly: {}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 735,
+          "value": "sync task failed: {}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 749,
+          "value": "sync task failed: {}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 764,
+          "value": "indicator shutdown failed: {error}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 776,
+          "value": "could not install SIGINT handler: {error}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 780,
+          "value": "could not install SIGTERM handler: {error}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 794,
+          "value": "panic: {message}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 797,
+          "value": "panic: {message}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 799,
+          "value": "panic: non-string panic payload",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 802,
+          "value": "task was cancelled",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        }
+      ]
+    },
+    {
+      "file": "native/solstone-tmux/src/pairing_answer.rs",
+      "occurrences": 24,
+      "rows": [
+        {
+          "line": 23,
+          "value": "one more step: check your journal's mark.",
+          "decision": "visible",
+          "reason": "Owner pairing copy; mark values and accepted tokens remain protocol data"
+        },
+        {
+          "line": 24,
+          "value": "  your journal's mark: ",
+          "decision": "visible",
+          "reason": "Owner pairing copy; mark values and accepted tokens remain protocol data"
+        },
+        {
+          "line": 25,
+          "value": "  your journal's mark: unavailable right now",
+          "decision": "visible",
+          "reason": "Owner pairing copy; mark values and accepted tokens remain protocol data"
+        },
+        {
+          "line": 27,
+          "value": "your journal shows this same mark in its network app. it should match, exactly.",
+          "decision": "visible",
+          "reason": "Owner pairing copy; mark values and accepted tokens remain protocol data"
+        },
+        {
+          "line": 28,
+          "value": "does this match your journal? type yes or no:",
+          "decision": "visible",
+          "reason": "Owner pairing copy; mark values and accepted tokens remain protocol data"
+        },
+        {
+          "line": 29,
+          "value": "couldn't verify.",
+          "decision": "visible",
+          "reason": "Owner pairing copy; mark values and accepted tokens remain protocol data"
+        },
+        {
+          "line": 30,
+          "value": "this computer couldn't work out your journal's mark, so there's nothing to compare. continue only if you're sure the link came from your journal.",
+          "decision": "visible",
+          "reason": "Owner pairing copy; mark values and accepted tokens remain protocol data"
+        },
+        {
+          "line": 31,
+          "value": "type continue to pair anyway, or cancel to stop:",
+          "decision": "visible",
+          "reason": "Owner pairing copy; mark values and accepted tokens remain protocol data"
+        },
+        {
+          "line": 32,
+          "value": "paired.",
+          "decision": "visible",
+          "reason": "Owner pairing copy; mark values and accepted tokens remain protocol data"
+        },
+        {
+          "line": 33,
+          "value": "not paired.",
+          "decision": "visible",
+          "reason": "Owner pairing copy; mark values and accepted tokens remain protocol data"
+        },
+        {
+          "line": 34,
+          "value": "you said this mark doesn't match the one your journal shows, so this computer isn't paired, and nothing it has kept went to that journal through this link. you may have pasted the wrong link, or something isn't right. get a fresh pair link from your journal and run setup again, or email support@solstone.app and we'll help.",
+          "decision": "visible",
+          "reason": "Owner pairing copy; mark values and accepted tokens remain protocol data"
+        },
+        {
+          "line": 35,
+          "value": "pairing cancelled. nothing this computer has kept went to that journal through this link. get a fresh pair link from your journal and run setup again when you're ready.",
+          "decision": "visible",
+          "reason": "Owner pairing copy; mark values and accepted tokens remain protocol data"
+        },
+        {
+          "line": 36,
+          "value": "waiting for you to confirm your journal's mark. nothing waiting goes into your journal until you do.",
+          "decision": "visible",
+          "reason": "Owner pairing copy; mark values and accepted tokens remain protocol data"
+        },
+        {
+          "line": 37,
+          "value": "when you're ready, run: solstone-tmux confirm",
+          "decision": "visible",
+          "reason": "Owner pairing copy; mark values and accepted tokens remain protocol data"
+        },
+        {
+          "line": 38,
+          "value": "your journal's mark is already confirmed. nothing to do.",
+          "decision": "visible",
+          "reason": "Owner pairing copy; mark values and accepted tokens remain protocol data"
+        },
+        {
+          "line": 39,
+          "value": "not paired. to pair, run: solstone-tmux setup",
+          "decision": "visible",
+          "reason": "Owner pairing copy; mark values and accepted tokens remain protocol data"
+        },
+        {
+          "line": 40,
+          "value": "setup can't ask you about your journal's mark here. run it in a terminal, or give the mark's two words with --mark \"word word\".",
+          "decision": "visible",
+          "reason": "Owner pairing copy; mark values and accepted tokens remain protocol data"
+        },
+        {
+          "line": 41,
+          "value": "confirm can't ask you about your journal's mark here. run it in a terminal, or give the mark's two words with --mark \"word word\".",
+          "decision": "visible",
+          "reason": "Owner pairing copy; mark values and accepted tokens remain protocol data"
+        },
+        {
+          "line": 42,
+          "value": "the two words of the mark your journal's network app shows. needed when there's no terminal to ask you on.",
+          "decision": "visible",
+          "reason": "Owner pairing copy; mark values and accepted tokens remain protocol data"
+        },
+        {
+          "line": 44,
+          "value": "give the two words of your journal's mark, like --mark \"bramble quokka\".",
+          "decision": "visible",
+          "reason": "Owner pairing copy; mark values and accepted tokens remain protocol data"
+        },
+        {
+          "line": 45,
+          "value": "the mark words you gave don't match the journal's mark, so this computer isn't paired, and nothing it has kept went to that journal through this link. check the words, get a fresh pair link from your journal and run setup again.",
+          "decision": "visible",
+          "reason": "Owner pairing copy; mark values and accepted tokens remain protocol data"
+        },
+        {
+          "line": 46,
+          "value": "this computer couldn't work out the journal's mark, so the words you gave can't be matched. this computer isn't paired, and nothing it has kept went to that journal through this link. get a fresh pair link from your journal and run setup in a terminal to decide for yourself.",
+          "decision": "visible",
+          "reason": "Owner pairing copy; mark values and accepted tokens remain protocol data"
+        },
+        {
+          "line": 47,
+          "value": "this computer couldn't work out the journal's mark, so the words you gave can't be matched. waiting for you to confirm your journal's mark. nothing waiting goes into your journal until you do. run solstone-tmux confirm in a terminal to decide for yourself.",
+          "decision": "visible",
+          "reason": "Owner pairing copy; mark values and accepted tokens remain protocol data"
+        },
+        {
+          "line": 48,
+          "value": "pairing: waiting for you to confirm your journal's mark",
+          "decision": "visible",
+          "reason": "Owner pairing copy; mark values and accepted tokens remain protocol data"
+        }
+      ]
+    },
+    {
+      "file": "native/solstone-tmux/src/pairing_answer.rs",
+      "occurrences": 1,
+      "rows": [
+        {
+          "line": 49,
+          "value": "confirm with: solstone-tmux confirm",
+          "decision": "visible",
+          "reason": "Owner pairing copy; mark values and accepted tokens remain protocol data"
+        }
+      ]
+    },
+    {
+      "file": "native/solstone-tmux/src/paths.rs",
+      "occurrences": 4,
+      "rows": [
+        {
+          "line": 65,
+          "value": "HOME is not set; refusing to use a system-wide location",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 67,
+          "value": "invalid stream name: {error}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 71,
+          "value": "{} is a symlink or wrong file type",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 76,
+          "value": "{}: {source}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        }
+      ]
+    },
+    {
+      "file": "native/solstone-tmux/src/recovery.rs",
+      "occurrences": 24,
+      "rows": [
+        {
+          "line": 91,
+          "value": "inspect captures directory",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 101,
+          "value": "scan capture dates",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 110,
+          "value": "read capture date entry",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 121,
+          "value": "inspect capture date entry",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 130,
+          "value": "scan capture streams",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 136,
+          "value": "read capture stream entry",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 177,
+          "value": "scan stream directory",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 182,
+          "value": "read stream entry",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 226,
+          "value": "candidate stem is not a well-formed HHMMSS",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 235,
+          "value": "read segment metadata",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 249,
+          "value": "missing metadata with non-empty JSONL",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 251,
+          "value": "missing metadata cannot prove an empty segment",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 263,
+          "value": "metadata is torn or contradictory",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 278,
+          "value": "remove orphan creating metadata",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 286,
+          "value": "removed orphan creating metadata",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 297,
+          "value": "inspect orphan finalized target",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 316,
+          "value": "remove orphan finalized metadata",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 324,
+          "value": "removed metadata left after finalized rename",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 330,
+          "value": "metadata has no matching source or validated finalized target",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 343,
+          "value": "finalized target collision; source and metadata retained",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 365,
+          "value": "run confirmed-empty pre-removal hook",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 374,
+          "value": "confirmed-empty segment changed before removal; retained without deleting unvalidated entries",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 378,
+          "value": "remove confirmed-empty segment",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 383,
+          "value": "remove confirmed-empty metadata",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        }
+      ]
+    },
+    {
+      "file": "native/solstone-tmux/src/recovery.rs",
+      "occurrences": 24,
+      "rows": [
+        {
+          "line": 391,
+          "value": "valid metadata positively confirmed an empty segment",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 398,
+          "value": "empty metadata contradicts JSONL bytes",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 421,
+          "value": "source rename failed and was retained: {source_error}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 426,
+          "value": "fsync recovered rename parent",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 442,
+          "value": "remove recovered metadata",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 455,
+          "value": "repaired only a torn final line and finalized",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 457,
+          "value": "validated durable bytes and finalized",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 466,
+          "value": "canonicalize data root",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 471,
+          "value": "inspect stream directory",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 481,
+          "value": "canonicalize stream directory",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 511,
+          "value": "inspect recovery target",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 584,
+          "value": "scan incomplete segment",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 589,
+          "value": "read incomplete segment entry",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 594,
+          "value": "inspect incomplete segment entry",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 600,
+          "value": "non-UTF-8 filename in segment",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 603,
+          "value": "unknown or non-regular file in segment",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 615,
+          "value": "referenced JSONL file is missing",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 619,
+          "value": "read JSONL during recovery",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 626,
+          "value": "JSONL is shorter than its durable offset",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 643,
+          "value": "earlier JSONL corruption",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 646,
+          "value": "session frame IDs disagree with metadata",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 652,
+          "value": "complete or multiline bytes exist beyond the durable offset",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 671,
+          "value": "global frame IDs are duplicated or nonconsecutive",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 678,
+          "value": "global frame IDs disagree with metadata",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        }
+      ]
+    },
+    {
+      "file": "native/solstone-tmux/src/recovery.rs",
+      "occurrences": 17,
+      "rows": [
+        {
+          "line": 741,
+          "value": "open JSONL repair",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 756,
+          "value": "truncate and fsync JSONL repair",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 776,
+          "value": "scan empty segment",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 781,
+          "value": "read empty segment entry",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 786,
+          "value": "inspect empty segment entry",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 809,
+          "value": "scan zero-length files",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 814,
+          "value": "read zero-length entry",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 823,
+          "value": "reinspect zero-length JSONL",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 842,
+          "value": "remove zero-length JSONL",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 855,
+          "value": "scan metadata-less segment",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 860,
+          "value": "read metadata-less segment entry",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 903,
+          "value": "quarantine segment",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 913,
+          "value": "quarantine metadata",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 927,
+          "value": "inspect recovery collision target",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 1004,
+          "value": "recovery candidate escapes the configured data root: {}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 1009,
+          "value": "recovery candidate is a symlink or wrong file type: {}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 1018,
+          "value": "{operation} failed for {}: {source}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        }
+      ]
+    },
+    {
+      "file": "native/solstone-tmux/src/relay_access.rs",
+      "occurrences": 1,
+      "rows": [
+        {
+          "line": 143,
+          "value": "solstone-tmux: journal dial addresses were not refreshed",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        }
+      ]
+    },
+    {
+      "file": "native/solstone-tmux/src/segment.rs",
+      "occurrences": 16,
+      "rows": [
+        {
+          "line": 235,
+          "value": "rename finalized segment",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 249,
+          "value": "remove finalized metadata",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 275,
+          "value": "scan confirmed-empty segment",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 280,
+          "value": "read confirmed-empty entry",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 285,
+          "value": "inspect confirmed-empty entry",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 291,
+          "value": "inspect confirmed-empty file",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 304,
+          "value": "remove zero-length JSONL",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 310,
+          "value": "remove confirmed-empty segment",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 316,
+          "value": "remove confirmed-empty metadata",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 440,
+          "value": "frame serialization failed: {error}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 443,
+          "value": "segment path already exists: {}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 451,
+          "value": "{operation} failed for {}: {source}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 454,
+          "value": "segment is poisoned after a failed rollback",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 455,
+          "value": "segment is already closed",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 456,
+          "value": "segment is not metadata-confirmed empty",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 457,
+          "value": "segment frame_id overflow",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        }
+      ]
+    },
+    {
+      "file": "native/solstone-tmux/src/service.rs",
+      "occurrences": 13,
+      "rows": [
+        {
+          "line": 25,
+          "value": "tmux was not found. Install tmux, or put its bin directory on PATH and rerun solstone-tmux install-service.",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 85,
+          "value": "{}: {source}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 88,
+          "value": "refusing to alter invalid or unowned service artifact {}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 94,
+          "value": "{} is not an executable regular file",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 100,
+          "value": "{} cannot be represented safely in a service definition",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 109,
+          "value": "{action} failed with exit status {status}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 111,
+          "value": ": {stderr}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 121,
+          "value": "{primary}; launchd re-enable recovery also failed: {reenable}; launchd crash restart may remain disabled for {}; rerun solstone-tmux {retry_command}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 282,
+          "value": "{} is missing; run solstone-tmux install-service to resolve and persist an absolute tmux path",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 292,
+          "value": "{} does not contain valid local solstone-tmux state: {error}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 299,
+          "value": "{} contains a non-canonical tmux path",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 374,
+          "value": "could not assemble service PATH including the resolved tmux directory: {error}; remove path entries containing ':' and rerun install-service",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 382,
+          "value": "could not serialize state: {error}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        }
+      ]
+    },
+    {
+      "file": "native/solstone-tmux/src/service/launchd.rs",
+      "occurrences": 13,
+      "rows": [
+        {
+          "line": 137,
+          "value": "launchd loaded check",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 191,
+          "value": "launchd status",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 204,
+          "value": "launchd stop inspection",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 232,
+          "value": "launchd kill",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 242,
+          "value": "launchd quiescence check",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 248,
+          "value": "{LABEL} still reports a live pid after {} seconds; rerun solstone-tmux {retry_command}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 263,
+          "value": "launchd bootout",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 333,
+          "value": "launchd loaded check",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 337,
+          "value": "{LABEL} is loaded but does not report a live pid; rerun solstone-tmux install-service",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 343,
+          "value": "{LABEL} was running as pid {expected} and its plist was already current, so install-service left it alone, but it now reports pid {pid}; the job restarted on its own and this install did not observe what it started. Rerun solstone-tmux install-service",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 371,
+          "value": "launchd disable",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 383,
+          "value": "launchd enable",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 417,
+          "value": "launchd bootstrap",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        }
+      ]
+    },
+    {
+      "file": "native/solstone-tmux/src/service/systemd.rs",
+      "occurrences": 8,
+      "rows": [
+        {
+          "line": 67,
+          "value": "systemd stop",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 71,
+          "value": "systemd daemon-reload",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 85,
+          "value": "systemd enable",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 100,
+          "value": "systemd active check",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 117,
+          "value": "systemd disable",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 121,
+          "value": "systemd daemon-reload",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 154,
+          "value": "systemd status",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 165,
+          "value": "service paths must not contain control characters",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        }
+      ]
+    },
+    {
+      "file": "native/solstone-tmux/src/storage.rs",
+      "occurrences": 24,
+      "rows": [
+        {
+          "line": 200,
+          "value": "open JSONL",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 207,
+          "value": "set JSONL permissions",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 212,
+          "value": "inspect JSONL",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 231,
+          "value": "rollback injection",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 240,
+          "value": "truncate rollback",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 246,
+          "value": "seek rollback",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 251,
+          "value": "flush rollback",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 256,
+          "value": "fsync rollback",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 269,
+          "value": "inspect append offset",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 282,
+          "value": "seek append",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 290,
+          "value": "partial append",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 295,
+          "value": "append injection",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 308,
+          "value": "flush injection",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 320,
+          "value": "JSONL fsync injection",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 326,
+          "value": "fsync JSONL",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 358,
+          "value": "open regular file",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 367,
+          "value": "inspect regular file",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 387,
+          "value": "open directory",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 393,
+          "value": "inspect directory",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 407,
+          "value": "read previous metadata",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 426,
+          "value": "metadata injection",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 465,
+          "value": "final flush",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 470,
+          "value": "final fsync",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 517,
+          "value": "metadata serialization failed: {error}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        }
+      ]
+    },
+    {
+      "file": "native/solstone-tmux/src/storage.rs",
+      "occurrences": 14,
+      "rows": [
+        {
+          "line": 519,
+          "value": "invalid file target: {}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 527,
+          "value": "{} has length {actual}, expected durable offset {expected}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 534,
+          "value": "{stage} failed for {}: {source}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 535,
+          "value": "append rolled back: {error}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 541,
+          "value": "append failed and rollback failed: operation={operation}; rollback={rollback}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 546,
+          "value": "rollback group failed (JSONL={}, metadata={})",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 581,
+          "value": "inspect atomic write target",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 644,
+          "value": "create metadata temporary",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 651,
+          "value": "set metadata permissions",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 656,
+          "value": "write metadata",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 661,
+          "value": "flush metadata",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 666,
+          "value": "fsync metadata",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 678,
+          "value": "rename metadata",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 749,
+          "value": "fsync directory",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        }
+      ]
+    },
+    {
+      "file": "native/solstone-tmux/src/sync.rs",
+      "occurrences": 5,
+      "rows": [
+        {
+          "line": 945,
+          "value": "solstone-tmux: confirmed segment was not removed",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 983,
+          "value": "solstone-tmux: confirmed segment was not removed",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 1018,
+          "value": "segment removed on journal; unlinked locally",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 2062,
+          "value": "solstone-tmux: upload was not acknowledged ({})",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 2101,
+          "value": "solstone-tmux: upload was not acknowledged (descriptors_absent)",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        }
+      ]
+    },
+    {
+      "file": "native/solstone-tmux/src/tmux.rs",
+      "occurrences": 24,
+      "rows": [
+        {
+          "line": 27,
+          "value": "solstone-tmux: warning: {message}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 56,
+          "value": "tmux executable must be absolute: {}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 67,
+          "value": "{operation:?} exited with status {status}: {}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 73,
+          "value": "{operation:?} returned non-UTF-8 output: {source}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 77,
+          "value": "malformed {operation:?} output: {detail}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 132,
+          "value": "#{client_session} #{client_activity}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 145,
+          "value": "empty row",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 149,
+          "value": "missing activity separator",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 153,
+          "value": "empty session identity",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 157,
+          "value": "activity is not an integer",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 213,
+          "value": "session {:?} was skipped before observation: {error}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 221,
+          "value": "session {:?} observation failed: {error}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 239,
+          "value": "#{window_active} #{window_id} #{window_index} #{window_name}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 261,
+          "value": "#{pane_id} #{pane_index} #{pane_left} #{pane_top} #{pane_width} #{pane_height} #{pane_active}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 318,
+          "value": "dropping malformed list-clients row {row:?}: {reason}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 325,
+          "value": "empty successful output",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 333,
+          "value": "invalid row {row:?}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 336,
+          "value": "invalid row {row:?}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 339,
+          "value": "invalid row {row:?}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 341,
+          "value": "duplicate ID or index in row {row:?}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 351,
+          "value": "empty successful output",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 354,
+          "value": "expected exactly one active window",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 361,
+          "value": "empty successful output",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 369,
+          "value": "invalid row {row:?}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        }
+      ]
+    },
+    {
+      "file": "native/solstone-tmux/src/tmux.rs",
+      "occurrences": 6,
+      "rows": [
+        {
+          "line": 377,
+          "value": "nonpositive pane size in row {row:?}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 380,
+          "value": "invalid row {row:?}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 382,
+          "value": "duplicate ID or index in row {row:?}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 396,
+          "value": "empty successful output",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 399,
+          "value": "expected exactly one active pane",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        },
+        {
+          "line": 407,
+          "value": "invalid row {row:?}",
+          "decision": "visible",
+          "reason": "Owner rendering, warning, or nested Display diagnostic detail"
+        }
+      ]
+    }
+  ]
+}

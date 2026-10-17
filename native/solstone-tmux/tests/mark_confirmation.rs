@@ -296,85 +296,17 @@ fn read_pty_until_pattern(
 
 #[test]
 fn mark_wording_owner_transcript() {
-    assert_eq!(STEP, "one more step: check your journal's mark.");
-    assert_eq!(MARK_PREFIX, "  your journal's mark: ");
+    assert_eq!(STEP.text(), "one more step: check your journal's mark.");
+
     assert_eq!(
-        MARK_UNAVAILABLE,
-        "  your journal's mark: unavailable right now"
-    );
-    assert_eq!(
-        SUBTEXT,
-        "your journal shows this same mark in its network app. it should match, exactly."
-    );
-    assert_eq!(
-        ASK_IDENTIFIED,
+        ASK_IDENTIFIED.text(),
         "does this match your journal? type yes or no:"
     );
-    assert_eq!(COULDNT_VERIFY, "couldn't verify.");
+
     assert_eq!(
-        BODY_UNAVAILABLE,
-        "this computer couldn't work out your journal's mark, so there's nothing to compare. continue only if you're sure the link came from your journal."
-    );
-    assert_eq!(
-        ASK_UNAVAILABLE,
-        "type continue to pair anyway, or cancel to stop:"
-    );
-    assert_eq!(PAIRED, "paired.");
-    assert_eq!(NOT_PAIRED, "not paired.");
-    assert_eq!(
-        MISMATCH_BODY,
-        "you said this mark doesn't match the one your journal shows, so this computer isn't paired, and nothing it has kept went to that journal through this link. you may have pasted the wrong link, or something isn't right. get a fresh pair link from your journal and run setup again, or email support@solstone.app and we'll help."
-    );
-    assert_eq!(
-        CANCEL,
-        "pairing cancelled. nothing this computer has kept went to that journal through this link. get a fresh pair link from your journal and run setup again when you're ready."
-    );
-    assert_eq!(
-        HELD,
-        "waiting for you to confirm your journal's mark. nothing waiting goes into your journal until you do."
-    );
-    assert_eq!(RUN_LINE, "when you're ready, run: solstone-tmux confirm");
-    assert_eq!(
-        CONFIRM_DONE,
-        "your journal's mark is already confirmed. nothing to do."
-    );
-    assert_eq!(
-        CONFIRM_UNPAIRED,
-        "not paired. to pair, run: solstone-tmux setup"
-    );
-    assert_eq!(
-        SETUP_NO_TERMINAL,
-        "setup can't ask you about your journal's mark here. run it in a terminal, or give the mark's two words with --mark \"word word\"."
-    );
-    assert_eq!(
-        CONFIRM_NO_TERMINAL,
-        "confirm can't ask you about your journal's mark here. run it in a terminal, or give the mark's two words with --mark \"word word\"."
-    );
-    assert_eq!(
-        MARK_HELP,
-        "the two words of the mark your journal's network app shows. needed when there's no terminal to ask you on."
-    );
-    assert_eq!(
-        MARK_USAGE,
+        MARK_USAGE.text(),
         "give the two words of your journal's mark, like --mark \"bramble quokka\"."
     );
-    assert_eq!(
-        MARK_MISMATCH,
-        "the mark words you gave don't match the journal's mark, so this computer isn't paired, and nothing it has kept went to that journal through this link. check the words, get a fresh pair link from your journal and run setup again."
-    );
-    assert_eq!(
-        MARK_UNVERIFIABLE_SETUP,
-        "this computer couldn't work out the journal's mark, so the words you gave can't be matched. this computer isn't paired, and nothing it has kept went to that journal through this link. get a fresh pair link from your journal and run setup in a terminal to decide for yourself."
-    );
-    assert_eq!(
-        MARK_UNVERIFIABLE_CONFIRM,
-        "this computer couldn't work out the journal's mark, so the words you gave can't be matched. waiting for you to confirm your journal's mark. nothing waiting goes into your journal until you do. run solstone-tmux confirm in a terminal to decide for yourself."
-    );
-    assert_eq!(
-        STATUS_HELD_PAIRING,
-        "pairing: waiting for you to confirm your journal's mark"
-    );
-    assert_eq!(STATUS_HELD_CONFIRM, "confirm with: solstone-tmux confirm");
 
     let jid = test_jid();
     let spoken = format_spoken_mark(&jid).expect("spoken mark");
@@ -387,7 +319,7 @@ fn mark_wording_owner_transcript() {
         "{STEP}\n\n{MARK_UNAVAILABLE}\n\n{COULDNT_VERIFY}\n{BODY_UNAVAILABLE}\n{ASK_UNAVAILABLE}\n"
     );
     assert!(identified_prompt.contains(&spoken));
-    assert!(unavailable_prompt.contains(MARK_UNAVAILABLE));
+    assert!(unavailable_prompt.contains(MARK_UNAVAILABLE.text()));
 
     runtime().block_on(async {
         let mut term = TestTerminal::new("yes\n");
@@ -479,7 +411,7 @@ fn mark_argument_before_stdin() {
             outcome,
             Outcome::Owner {
                 code: 1,
-                lines: vec![SETUP_NO_TERMINAL.to_string()],
+                lines: vec![SETUP_NO_TERMINAL],
             }
         );
         assert!(!read_called.load(Ordering::SeqCst));
@@ -618,7 +550,7 @@ fn setup_answers_and_reread() {
                 outcome,
                 Outcome::Owner {
                     code: 0,
-                    lines: vec![PAIRED.to_string()],
+                    lines: vec![PAIRED],
                 }
             );
             assert!(roots.config_root().join(CREDENTIALS_FILENAME).exists());
@@ -649,7 +581,7 @@ fn setup_answers_and_reread() {
                 outcome,
                 Outcome::Owner {
                     code: 0,
-                    lines: vec![PAIRED.to_string()],
+                    lines: vec![PAIRED],
                 }
             );
             assert!(roots.config_root().join(CREDENTIALS_FILENAME).exists());
@@ -680,7 +612,7 @@ fn setup_answers_and_reread() {
                 outcome,
                 Outcome::Owner {
                     code: 1,
-                    lines: vec![NOT_PAIRED.to_string(), MISMATCH_BODY.to_string()],
+                    lines: vec![NOT_PAIRED, MISMATCH_BODY],
                 }
             );
             assert!(!roots.config_root().join(CREDENTIALS_FILENAME).exists());
@@ -711,7 +643,7 @@ fn setup_answers_and_reread() {
                 outcome,
                 Outcome::Owner {
                     code: 1,
-                    lines: vec![CANCEL.to_string()],
+                    lines: vec![CANCEL],
                 }
             );
             assert!(!roots.config_root().join(CREDENTIALS_FILENAME).exists());
@@ -742,7 +674,7 @@ fn setup_answers_and_reread() {
                 outcome,
                 Outcome::Owner {
                     code: 5,
-                    lines: vec![HELD.to_string(), RUN_LINE.to_string()],
+                    lines: vec![HELD, RUN_LINE],
                 }
             );
             assert!(roots.config_root().join(CREDENTIALS_FILENAME).exists());
@@ -773,7 +705,7 @@ fn setup_answers_and_reread() {
                 outcome,
                 Outcome::Owner {
                     code: 5,
-                    lines: vec![HELD.to_string(), RUN_LINE.to_string()],
+                    lines: vec![HELD, RUN_LINE],
                 }
             );
             assert!(roots.config_root().join(CREDENTIALS_FILENAME).exists());
@@ -806,12 +738,12 @@ fn setup_answers_and_reread() {
                 outcome,
                 Outcome::Owner {
                     code: 0,
-                    lines: vec![PAIRED.to_string()],
+                    lines: vec![PAIRED],
                 }
             );
             let text = String::from_utf8_lossy(&out_ref.lock().expect("lock")).into_owned();
-            assert_eq!(text.matches(ASK_IDENTIFIED).count(), 4);
-            assert!(!text.contains(ASK_UNAVAILABLE));
+            assert_eq!(text.matches(ASK_IDENTIFIED.text()).count(), 4);
+            assert!(!text.contains(ASK_UNAVAILABLE.text()));
         }
 
         // 7b. Empty, 'c', 'y' on unavailable branch re-asks only ASK_UNAVAILABLE, then 'continue' confirms
@@ -840,12 +772,12 @@ fn setup_answers_and_reread() {
                 outcome,
                 Outcome::Owner {
                     code: 0,
-                    lines: vec![PAIRED.to_string()],
+                    lines: vec![PAIRED],
                 }
             );
             let text = String::from_utf8_lossy(&out_ref.lock().expect("lock")).into_owned();
-            assert_eq!(text.matches(ASK_UNAVAILABLE).count(), 4);
-            assert!(!text.contains(ASK_IDENTIFIED));
+            assert_eq!(text.matches(ASK_UNAVAILABLE.text()).count(), 4);
+            assert!(!text.contains(ASK_IDENTIFIED.text()));
             assert!(roots.config_root().join(CREDENTIALS_FILENAME).exists());
             assert!(is_pairing_confirmed(&roots.config_root(), &mut_cred));
         }
@@ -879,7 +811,7 @@ fn setup_answers_and_reread() {
                 outcome,
                 Outcome::Owner {
                     code: 5,
-                    lines: vec![HELD.to_string(), RUN_LINE.to_string()],
+                    lines: vec![HELD, RUN_LINE],
                 }
             );
             assert!(roots.config_root().join(CREDENTIALS_FILENAME).exists());
@@ -921,7 +853,12 @@ fn setup_signal_at_the_prompt() {
             .write_all(peer.pair_link().as_bytes())
             .expect("write link");
 
-        read_pty_until_pattern(&master, &mut child, ASK_UNAVAILABLE, Duration::from_secs(5));
+        read_pty_until_pattern(
+            &master,
+            &mut child,
+            ASK_UNAVAILABLE.text(),
+            Duration::from_secs(5),
+        );
 
         let pid = rustix::process::Pid::from_raw(child.id() as i32).expect("pid");
         rustix::process::kill_process(pid, sig).expect("kill");
@@ -1034,7 +971,7 @@ fn mark_argument_words() {
                 outcome,
                 Outcome::Owner {
                     code: 0,
-                    lines: vec![PAIRED.to_string()],
+                    lines: vec![PAIRED],
                 }
             );
             assert!(is_pairing_confirmed(&roots.config_root(), &mut_cred));
@@ -1077,7 +1014,7 @@ fn mark_argument_words() {
                 outcome,
                 Outcome::Owner {
                     code: 1,
-                    lines: vec![NOT_PAIRED.to_string(), MARK_MISMATCH.to_string()],
+                    lines: vec![NOT_PAIRED, MARK_MISMATCH],
                 }
             );
             assert!(!roots.config_root().join(CREDENTIALS_FILENAME).exists());
@@ -1108,10 +1045,7 @@ fn mark_argument_words() {
                 outcome,
                 Outcome::Owner {
                     code: 1,
-                    lines: vec![
-                        COULDNT_VERIFY.to_string(),
-                        MARK_UNVERIFIABLE_SETUP.to_string(),
-                    ],
+                    lines: vec![COULDNT_VERIFY, MARK_UNVERIFIABLE_SETUP,],
                 }
             );
             assert!(!roots.config_root().join(CREDENTIALS_FILENAME).exists());
@@ -1247,7 +1181,7 @@ fn mark_argument_words() {
                 outcome,
                 Outcome::Owner {
                     code: 5,
-                    lines: vec![MARK_UNVERIFIABLE_CONFIRM.to_string()],
+                    lines: vec![MARK_UNVERIFIABLE_CONFIRM],
                 }
             );
             assert!(roots.config_root().join(CREDENTIALS_FILENAME).exists());
@@ -1304,7 +1238,7 @@ fn repair_keeps_confirmed_credential() {
                 outcome,
                 Outcome::Owner {
                     code: 1,
-                    lines: vec![NOT_PAIRED.to_string(), MISMATCH_BODY.to_string()],
+                    lines: vec![NOT_PAIRED, MISMATCH_BODY],
                 }
             );
             assert_eq!(
@@ -1350,7 +1284,7 @@ fn repair_keeps_confirmed_credential() {
                 outcome,
                 Outcome::Owner {
                     code: 1,
-                    lines: vec![CANCEL.to_string()],
+                    lines: vec![CANCEL],
                 }
             );
             assert_eq!(
@@ -1395,7 +1329,7 @@ fn repair_keeps_confirmed_credential() {
                 outcome,
                 Outcome::Owner {
                     code: 1,
-                    lines: vec![NOT_PAIRED.to_string(), MARK_MISMATCH.to_string()],
+                    lines: vec![NOT_PAIRED, MARK_MISMATCH],
                 }
             );
             assert_eq!(
@@ -1440,7 +1374,7 @@ fn repair_keeps_confirmed_credential() {
                 outcome,
                 Outcome::Owner {
                     code: 1,
-                    lines: vec![CANCEL.to_string()],
+                    lines: vec![CANCEL],
                 }
             );
             assert_eq!(
@@ -1520,7 +1454,7 @@ fn repair_keeps_confirmed_credential() {
                 outcome,
                 Outcome::Owner {
                     code: 1,
-                    lines: vec![CANCEL.to_string()],
+                    lines: vec![CANCEL],
                 }
             );
             assert_eq!(
@@ -1566,7 +1500,7 @@ fn repair_keeps_confirmed_credential() {
                 outcome,
                 Outcome::Owner {
                     code: 1,
-                    lines: vec![NOT_PAIRED.to_string(), MISMATCH_BODY.to_string()],
+                    lines: vec![NOT_PAIRED, MISMATCH_BODY],
                 }
             );
             assert_eq!(
@@ -1618,7 +1552,7 @@ fn repair_keeps_confirmed_credential() {
                 outcome,
                 Outcome::Owner {
                     code: 5,
-                    lines: vec![HELD.to_string(), RUN_LINE.to_string()],
+                    lines: vec![HELD, RUN_LINE],
                 }
             );
             let stored_bytes = fs::read(roots.config_root().join(CREDENTIALS_FILENAME)).unwrap();
@@ -1676,7 +1610,12 @@ fn repair_keeps_confirmed_credential() {
             .write_all(peer.pair_link().as_bytes())
             .expect("write link");
 
-        read_pty_until_pattern(&master, &mut child, ASK_UNAVAILABLE, Duration::from_secs(5));
+        read_pty_until_pattern(
+            &master,
+            &mut child,
+            ASK_UNAVAILABLE.text(),
+            Duration::from_secs(5),
+        );
 
         let pid = rustix::process::Pid::from_raw(child.id() as i32).expect("pid");
         rustix::process::kill_process(pid, sig).expect("kill");
@@ -1736,7 +1675,7 @@ fn confirm_binds_the_displayed_generation() {
                 outcome,
                 Outcome::Owner {
                     code: 0,
-                    lines: vec![PAIRED.to_string()],
+                    lines: vec![PAIRED],
                 }
             );
             assert!(is_pairing_confirmed(&roots.config_root(), &cred));
@@ -1763,7 +1702,7 @@ fn confirm_binds_the_displayed_generation() {
                 outcome,
                 Outcome::Owner {
                     code: 1,
-                    lines: vec![NOT_PAIRED.to_string(), MISMATCH_BODY.to_string()],
+                    lines: vec![NOT_PAIRED, MISMATCH_BODY],
                 }
             );
             assert!(!roots.config_root().join(CREDENTIALS_FILENAME).exists());
@@ -1797,7 +1736,7 @@ fn confirm_binds_the_displayed_generation() {
                 outcome,
                 Outcome::Owner {
                     code: 1,
-                    lines: vec![CONFIRM_NO_TERMINAL.to_string()],
+                    lines: vec![CONFIRM_NO_TERMINAL],
                 }
             );
             assert!(roots.config_root().join(CREDENTIALS_FILENAME).exists());
@@ -1821,7 +1760,7 @@ fn confirm_binds_the_displayed_generation() {
                 outcome,
                 Outcome::Owner {
                     code: 1,
-                    lines: vec![CONFIRM_UNPAIRED.to_string()],
+                    lines: vec![CONFIRM_UNPAIRED],
                 }
             );
             let ans = read_answer_file(&roots.config_root()).unwrap().unwrap();
@@ -1853,7 +1792,7 @@ fn confirm_binds_the_displayed_generation() {
 
             assert_eq!(output.status.code(), Some(0));
             let stdout = String::from_utf8_lossy(&output.stdout);
-            assert!(stdout.contains(PAIRED));
+            assert!(stdout.contains(PAIRED.text()));
         }
 
         // 6. Already confirmed: exit 0 [CONFIRM_DONE], bytes unchanged, 0 peer requests
@@ -1887,7 +1826,7 @@ fn confirm_binds_the_displayed_generation() {
                 outcome,
                 Outcome::Owner {
                     code: 0,
-                    lines: vec![CONFIRM_DONE.to_string()],
+                    lines: vec![CONFIRM_DONE],
                 }
             );
             assert_eq!(
@@ -2144,7 +2083,7 @@ fn grandfather_bytes_and_malformed_credential() {
                 outcome,
                 Outcome::Owner {
                     code: 0,
-                    lines: vec![PAIRED.to_string()],
+                    lines: vec![PAIRED],
                 }
             );
             assert!(is_pairing_confirmed(&roots.config_root(), &valid_cred));
@@ -2309,8 +2248,8 @@ fn pairing_gate_uploads_after_confirm() {
             .output()
             .expect("status");
         let stdout = String::from_utf8_lossy(&status_out.stdout);
-        assert!(!stdout.contains(STATUS_HELD_PAIRING));
-        assert!(!stdout.contains(STATUS_HELD_CONFIRM));
+        assert!(!stdout.contains(STATUS_HELD_PAIRING.text()));
+        assert!(!stdout.contains(STATUS_HELD_CONFIRM.text()));
 
         peer.shutdown().await;
     });
@@ -2379,7 +2318,7 @@ fn retire_through_setup_and_confirm() {
                     outcome,
                     Outcome::Owner {
                         code: 1,
-                        lines: vec![NOT_PAIRED.to_string(), MISMATCH_BODY.to_string()],
+                        lines: vec![NOT_PAIRED, MISMATCH_BODY],
                     }
                 );
                 assert!(!ctx.roots.config_root().join(CREDENTIALS_FILENAME).exists());
@@ -2419,7 +2358,7 @@ fn retire_through_setup_and_confirm() {
                     outcome,
                     Outcome::Owner {
                         code: 1,
-                        lines: vec![CANCEL.to_string()],
+                        lines: vec![CANCEL],
                     }
                 );
                 assert!(!ctx.roots.config_root().join(CREDENTIALS_FILENAME).exists());
@@ -2454,7 +2393,7 @@ fn retire_through_setup_and_confirm() {
                     outcome,
                     Outcome::Owner {
                         code: 1,
-                        lines: vec![NOT_PAIRED.to_string(), MARK_MISMATCH.to_string()],
+                        lines: vec![NOT_PAIRED, MARK_MISMATCH],
                     }
                 );
                 assert!(!ctx.roots.config_root().join(CREDENTIALS_FILENAME).exists());
@@ -2494,10 +2433,7 @@ fn retire_through_setup_and_confirm() {
                     outcome,
                     Outcome::Owner {
                         code: 1,
-                        lines: vec![
-                            COULDNT_VERIFY.to_string(),
-                            MARK_UNVERIFIABLE_SETUP.to_string(),
-                        ],
+                        lines: vec![COULDNT_VERIFY, MARK_UNVERIFIABLE_SETUP,],
                     }
                 );
                 assert!(!ctx.roots.config_root().join(CREDENTIALS_FILENAME).exists());
@@ -2543,7 +2479,7 @@ fn retire_through_setup_and_confirm() {
                     outcome,
                     Outcome::Owner {
                         code: 1,
-                        lines: vec![NOT_PAIRED.to_string(), MISMATCH_BODY.to_string()],
+                        lines: vec![NOT_PAIRED, MISMATCH_BODY],
                     }
                 );
                 assert_eq!(
@@ -2593,7 +2529,7 @@ fn retire_through_setup_and_confirm() {
                     outcome,
                     Outcome::Owner {
                         code: 1,
-                        lines: vec![NOT_PAIRED.to_string(), MISMATCH_BODY.to_string()],
+                        lines: vec![NOT_PAIRED, MISMATCH_BODY],
                     }
                 );
                 assert!(!ctx.roots.config_root().join(CREDENTIALS_FILENAME).exists());
@@ -2628,7 +2564,7 @@ fn retire_through_setup_and_confirm() {
                     outcome,
                     Outcome::Owner {
                         code: 1,
-                        lines: vec![NOT_PAIRED.to_string(), MARK_MISMATCH.to_string()],
+                        lines: vec![NOT_PAIRED, MARK_MISMATCH],
                     }
                 );
                 assert!(!ctx.roots.config_root().join(CREDENTIALS_FILENAME).exists());
@@ -2668,7 +2604,7 @@ fn retire_through_setup_and_confirm() {
                     outcome,
                     Outcome::Owner {
                         code: 1,
-                        lines: vec![NOT_PAIRED.to_string(), MISMATCH_BODY.to_string()],
+                        lines: vec![NOT_PAIRED, MISMATCH_BODY],
                     }
                 );
                 assert!(!ctx.roots.config_root().join(CREDENTIALS_FILENAME).exists());
@@ -2704,7 +2640,7 @@ fn retire_through_setup_and_confirm() {
                     outcome,
                     Outcome::Owner {
                         code: 1,
-                        lines: vec![NOT_PAIRED.to_string(), MISMATCH_BODY.to_string()],
+                        lines: vec![NOT_PAIRED, MISMATCH_BODY],
                     }
                 );
                 assert!(!ctx.roots.config_root().join(CREDENTIALS_FILENAME).exists());
@@ -2744,7 +2680,7 @@ fn retire_through_setup_and_confirm() {
                     outcome,
                     Outcome::Owner {
                         code: 1,
-                        lines: vec![NOT_PAIRED.to_string(), MISMATCH_BODY.to_string()],
+                        lines: vec![NOT_PAIRED, MISMATCH_BODY],
                     }
                 );
                 assert!(!ctx.roots.config_root().join(CREDENTIALS_FILENAME).exists());
@@ -2796,8 +2732,8 @@ fn held_status_without_a_daemon() {
         .expect("run status");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(!stdout.contains(STATUS_HELD_PAIRING));
-    assert!(!stdout.contains(STATUS_HELD_CONFIRM));
+    assert!(!stdout.contains(STATUS_HELD_PAIRING.text()));
+    assert!(!stdout.contains(STATUS_HELD_CONFIRM.text()));
     assert!(!stdout.contains("sync-health: held"));
     assert!(!stdout.contains("state=held"));
 
@@ -2815,8 +2751,8 @@ fn held_status_without_a_daemon() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("sync-health: held"));
-    assert!(stdout.contains(STATUS_HELD_PAIRING));
-    assert!(stdout.contains(STATUS_HELD_CONFIRM));
+    assert!(stdout.contains(STATUS_HELD_PAIRING.text()));
+    assert!(stdout.contains(STATUS_HELD_CONFIRM.text()));
     assert!(stdout.contains("state=held"));
 
     // 2. Confirmed status prints neither held line
@@ -2834,8 +2770,8 @@ fn held_status_without_a_daemon() {
         .expect("run status");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(!stdout.contains(STATUS_HELD_PAIRING));
-    assert!(!stdout.contains(STATUS_HELD_CONFIRM));
+    assert!(!stdout.contains(STATUS_HELD_PAIRING.text()));
+    assert!(!stdout.contains(STATUS_HELD_CONFIRM.text()));
 
     // 3. Running daemon test: SyncTask with 50ms refresh, 200ms lock timeout, confirm --mark mismatch
     runtime().block_on(async {

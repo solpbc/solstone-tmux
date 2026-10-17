@@ -1,0 +1,32 @@
+{
+  "id": "cli.cli.version.solstone-tmux-source",
+  "fluent_id": "cli-cli-version-solstone-tmux-source",
+  "args": [
+    {
+      "name": "arg0",
+      "type": "text",
+      "rust_format_spec": "",
+      "description": "Preformatted diagnostic or display value; preserve exactly"
+    },
+    {
+      "name": "source",
+      "type": "text",
+      "rust_format_spec": "",
+      "description": "Preformatted diagnostic or display value; preserve exactly"
+    }
+  ],
+  "description": "CLI version display. arg0 is the package version and source is the build revision; preserve both argument values.",
+  "surfaces": [
+    "terminal"
+  ],
+  "max_length": null,
+  "risk": "routine",
+  "screenshots": [],
+  "source_revision": "2cc01d9c029cac7c6aa7beeed2f4fdd2c3188c05",
+  "sources": [
+    {
+      "path": "native/solstone-tmux/src/cli.rs",
+      "line": 119
+    }
+  ]
+}

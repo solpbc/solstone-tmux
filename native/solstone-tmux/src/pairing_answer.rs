@@ -20,33 +20,49 @@ use crate::private_link::{
 };
 use crate::storage::{StorageError, atomic_write_bytes, open_regular_readonly};
 
-pub const STEP: &str = "one more step: check your journal's mark.";
-pub const MARK_PREFIX: &str = "  your journal's mark: ";
-pub const MARK_UNAVAILABLE: &str = "  your journal's mark: unavailable right now";
-pub const SUBTEXT: &str =
-    "your journal shows this same mark in its network app. it should match, exactly.";
-pub const ASK_IDENTIFIED: &str = "does this match your journal? type yes or no:";
-pub const COULDNT_VERIFY: &str = "couldn't verify.";
-pub const BODY_UNAVAILABLE: &str = "this computer couldn't work out your journal's mark, so there's nothing to compare. continue only if you're sure the link came from your journal.";
-pub const ASK_UNAVAILABLE: &str = "type continue to pair anyway, or cancel to stop:";
-pub const PAIRED: &str = "paired.";
-pub const NOT_PAIRED: &str = "not paired.";
-pub const MISMATCH_BODY: &str = "you said this mark doesn't match the one your journal shows, so this computer isn't paired, and nothing it has kept went to that journal through this link. you may have pasted the wrong link, or something isn't right. get a fresh pair link from your journal and run setup again, or email support@solstone.app and we'll help.";
-pub const CANCEL: &str = "pairing cancelled. nothing this computer has kept went to that journal through this link. get a fresh pair link from your journal and run setup again when you're ready.";
-pub const HELD: &str = "waiting for you to confirm your journal's mark. nothing waiting goes into your journal until you do.";
-pub const RUN_LINE: &str = "when you're ready, run: solstone-tmux confirm";
-pub const CONFIRM_DONE: &str = "your journal's mark is already confirmed. nothing to do.";
-pub const CONFIRM_UNPAIRED: &str = "not paired. to pair, run: solstone-tmux setup";
-pub const SETUP_NO_TERMINAL: &str = "setup can't ask you about your journal's mark here. run it in a terminal, or give the mark's two words with --mark \"word word\".";
-pub const CONFIRM_NO_TERMINAL: &str = "confirm can't ask you about your journal's mark here. run it in a terminal, or give the mark's two words with --mark \"word word\".";
-pub const MARK_HELP: &str = "the two words of the mark your journal's network app shows. needed when there's no terminal to ask you on.";
-pub const MARK_USAGE: &str =
-    "give the two words of your journal's mark, like --mark \"bramble quokka\".";
-pub const MARK_MISMATCH: &str = "the mark words you gave don't match the journal's mark, so this computer isn't paired, and nothing it has kept went to that journal through this link. check the words, get a fresh pair link from your journal and run setup again.";
-pub const MARK_UNVERIFIABLE_SETUP: &str = "this computer couldn't work out the journal's mark, so the words you gave can't be matched. this computer isn't paired, and nothing it has kept went to that journal through this link. get a fresh pair link from your journal and run setup in a terminal to decide for yourself.";
-pub const MARK_UNVERIFIABLE_CONFIRM: &str = "this computer couldn't work out the journal's mark, so the words you gave can't be matched. waiting for you to confirm your journal's mark. nothing waiting goes into your journal until you do. run solstone-tmux confirm in a terminal to decide for yourself.";
-pub const STATUS_HELD_PAIRING: &str = "pairing: waiting for you to confirm your journal's mark";
-pub const STATUS_HELD_CONFIRM: &str = "confirm with: solstone-tmux confirm";
+pub const STEP: crate::i18n::MessageId = crate::i18n::MessageId::CliPairingAnswerCopyStep;
+pub const MARK_PREFIX: crate::i18n::MessageId =
+    crate::i18n::MessageId::CliPairingAnswerCopyMarkPrefix;
+pub const MARK_UNAVAILABLE: crate::i18n::MessageId =
+    crate::i18n::MessageId::CliPairingAnswerCopyMarkUnavailable;
+pub const SUBTEXT: crate::i18n::MessageId = crate::i18n::MessageId::CliPairingAnswerCopySubtext;
+pub const ASK_IDENTIFIED: crate::i18n::MessageId =
+    crate::i18n::MessageId::CliPairingAnswerCopyAskIdentified;
+pub const COULDNT_VERIFY: crate::i18n::MessageId =
+    crate::i18n::MessageId::CliPairingAnswerCopyCouldntVerify;
+pub const BODY_UNAVAILABLE: crate::i18n::MessageId =
+    crate::i18n::MessageId::CliPairingAnswerCopyBodyUnavailable;
+pub const ASK_UNAVAILABLE: crate::i18n::MessageId =
+    crate::i18n::MessageId::CliPairingAnswerCopyAskUnavailable;
+pub const PAIRED: crate::i18n::MessageId = crate::i18n::MessageId::CliPairingAnswerCopyPaired;
+pub const NOT_PAIRED: crate::i18n::MessageId =
+    crate::i18n::MessageId::CliPairingAnswerCopyNotPaired;
+pub const MISMATCH_BODY: crate::i18n::MessageId =
+    crate::i18n::MessageId::CliPairingAnswerCopyMismatchBody;
+pub const CANCEL: crate::i18n::MessageId = crate::i18n::MessageId::CliPairingAnswerCopyCancel;
+pub const HELD: crate::i18n::MessageId = crate::i18n::MessageId::CliPairingAnswerCopyHeld;
+pub const RUN_LINE: crate::i18n::MessageId = crate::i18n::MessageId::CliPairingAnswerCopyRunLine;
+pub const CONFIRM_DONE: crate::i18n::MessageId =
+    crate::i18n::MessageId::CliPairingAnswerCopyConfirmDone;
+pub const CONFIRM_UNPAIRED: crate::i18n::MessageId =
+    crate::i18n::MessageId::CliPairingAnswerCopyConfirmUnpaired;
+pub const SETUP_NO_TERMINAL: crate::i18n::MessageId =
+    crate::i18n::MessageId::CliPairingAnswerCopySetupNoTerminal;
+pub const CONFIRM_NO_TERMINAL: crate::i18n::MessageId =
+    crate::i18n::MessageId::CliPairingAnswerCopyConfirmNoTerminal;
+pub const MARK_HELP: crate::i18n::MessageId = crate::i18n::MessageId::CliPairingAnswerCopyMarkHelp;
+pub const MARK_USAGE: crate::i18n::MessageId =
+    crate::i18n::MessageId::CliPairingAnswerCopyMarkUsage;
+pub const MARK_MISMATCH: crate::i18n::MessageId =
+    crate::i18n::MessageId::CliPairingAnswerCopyMarkMismatch;
+pub const MARK_UNVERIFIABLE_SETUP: crate::i18n::MessageId =
+    crate::i18n::MessageId::CliPairingAnswerCopyMarkUnverifiableSetup;
+pub const MARK_UNVERIFIABLE_CONFIRM: crate::i18n::MessageId =
+    crate::i18n::MessageId::CliPairingAnswerCopyMarkUnverifiableConfirm;
+pub const STATUS_HELD_PAIRING: crate::i18n::MessageId =
+    crate::i18n::MessageId::CliPairingAnswerCopyStatusHeldPairing;
+pub const STATUS_HELD_CONFIRM: crate::i18n::MessageId =
+    crate::i18n::MessageId::CliPairingAnswerCopyStatusHeldConfirm;
 
 pub const ANSWER_FILENAME: &str = "pairing-answer.json";
 pub const ANSWER_LOCK_FILENAME: &str = ".solstone-tmux.answer.lock";
@@ -79,6 +95,100 @@ impl<T> From<Option<T>> for TerminalSeat<T> {
     }
 }
 
+/// Parser codes are protocol choices, independent of the display language.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AnswerToken {
+    Yes,
+    No,
+    Continue,
+    Cancel,
+}
+
+pub fn parse_answer_token(value: &str) -> Option<AnswerToken> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "yes" | "y" => Some(AnswerToken::Yes),
+        "no" | "n" => Some(AnswerToken::No),
+        "continue" => Some(AnswerToken::Continue),
+        "cancel" => Some(AnswerToken::Cancel),
+        _ => None,
+    }
+}
+
+pub fn answer_decision(token: Option<AnswerToken>, identified: bool) -> Option<TerminalDecision> {
+    match (identified, token) {
+        (true, Some(AnswerToken::Yes)) | (false, Some(AnswerToken::Continue)) => {
+            Some(TerminalDecision::Yes)
+        }
+        (true, Some(AnswerToken::No)) | (false, Some(AnswerToken::Cancel)) => {
+            Some(TerminalDecision::No)
+        }
+        _ => None,
+    }
+}
+
+/// An isolated experiment, never called by the production parser. Acceptance
+/// of localized aliases remains a product decision.
+#[cfg(test)]
+fn parse_alias_option(value: &str, aliases: &[(&str, AnswerToken)]) -> Option<AnswerToken> {
+    let canonical = parse_answer_token(value);
+    let matches = aliases
+        .iter()
+        .filter(|(alias, _)| *alias == value.trim())
+        .collect::<Vec<_>>();
+    match matches.as_slice() {
+        [] => canonical,
+        [(_, token)] if canonical.is_none_or(|original| original == *token) => Some(*token),
+        _ => None,
+    }
+}
+
+fn identified_prompt(mark: &str) -> String {
+    crate::i18n::render(
+        crate::i18n::MessageId::CliPairingPromptIdentified,
+        &[
+            ("step", crate::i18n::ArgValue::Text(STEP.text().into())),
+            (
+                "mark_prefix",
+                crate::i18n::ArgValue::Text(MARK_PREFIX.text().into()),
+            ),
+            ("mark", crate::i18n::ArgValue::Text(mark.into())),
+            (
+                "subtext",
+                crate::i18n::ArgValue::Text(SUBTEXT.text().into()),
+            ),
+            (
+                "question",
+                crate::i18n::ArgValue::Text(ASK_IDENTIFIED.text().into()),
+            ),
+        ],
+    )
+}
+
+fn unavailable_prompt() -> String {
+    crate::i18n::render(
+        crate::i18n::MessageId::CliPairingPromptUnavailable,
+        &[
+            ("step", crate::i18n::ArgValue::Text(STEP.text().into())),
+            (
+                "mark_line",
+                crate::i18n::ArgValue::Text(MARK_UNAVAILABLE.text().into()),
+            ),
+            (
+                "summary",
+                crate::i18n::ArgValue::Text(COULDNT_VERIFY.text().into()),
+            ),
+            (
+                "body",
+                crate::i18n::ArgValue::Text(BODY_UNAVAILABLE.text().into()),
+            ),
+            (
+                "question",
+                crate::i18n::ArgValue::Text(ASK_UNAVAILABLE.text().into()),
+            ),
+        ],
+    )
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TerminalDecision {
     Yes,
@@ -89,8 +199,11 @@ pub enum TerminalDecision {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
     Diagnostic(DiagnosticCode),
-    Usage(&'static str),
-    Owner { code: i32, lines: Vec<String> },
+    Usage(crate::i18n::MessageId),
+    Owner {
+        code: i32,
+        lines: Vec<crate::i18n::MessageId>,
+    },
 }
 
 pub fn open_owner_terminal() -> Option<File> {
@@ -126,14 +239,12 @@ pub async fn ask_terminal_question_production(file: File, instance_id: &str) -> 
     let spoken_mark = format_spoken_mark(instance_id);
     let is_identified = spoken_mark.is_some();
     if let Some(ref spoken) = spoken_mark {
-        let prompt = format!("{STEP}\n\n{MARK_PREFIX}{spoken}\n\n{SUBTEXT}\n{ASK_IDENTIFIED}\n");
+        let prompt = identified_prompt(spoken);
         use std::io::Write;
         let _ = (&mut async_fd.get_ref()).write_all(prompt.as_bytes());
         let _ = (&mut async_fd.get_ref()).flush();
     } else {
-        let prompt = format!(
-            "{STEP}\n\n{MARK_UNAVAILABLE}\n\n{COULDNT_VERIFY}\n{BODY_UNAVAILABLE}\n{ASK_UNAVAILABLE}\n"
-        );
+        let prompt = unavailable_prompt();
         use std::io::Write;
         let _ = (&mut async_fd.get_ref()).write_all(prompt.as_bytes());
         let _ = (&mut async_fd.get_ref()).flush();
@@ -203,23 +314,14 @@ pub async fn ask_terminal_question_production(file: File, instance_id: &str) -> 
         let trimmed = line_str.trim().to_ascii_lowercase();
         line_buf.clear();
 
+        if let Some(decision) = answer_decision(parse_answer_token(&trimmed), is_identified) {
+            return decision;
+        }
         if is_identified {
-            if trimmed == "yes" || trimmed == "y" {
-                return TerminalDecision::Yes;
-            }
-            if trimmed == "no" || trimmed == "n" {
-                return TerminalDecision::No;
-            }
             use std::io::Write;
             let _ = (&mut async_fd.get_ref()).write_all(format!("{ASK_IDENTIFIED}\n").as_bytes());
             let _ = (&mut async_fd.get_ref()).flush();
         } else {
-            if trimmed == "continue" {
-                return TerminalDecision::Yes;
-            }
-            if trimmed == "cancel" {
-                return TerminalDecision::No;
-            }
             use std::io::Write;
             let _ = (&mut async_fd.get_ref()).write_all(format!("{ASK_UNAVAILABLE}\n").as_bytes());
             let _ = (&mut async_fd.get_ref()).flush();
@@ -234,13 +336,11 @@ pub async fn ask_terminal_question_scripted<T: std::io::Write + std::io::Read + 
     let spoken_mark = format_spoken_mark(instance_id);
     let is_identified = spoken_mark.is_some();
     if let Some(ref spoken) = spoken_mark {
-        let prompt = format!("{STEP}\n\n{MARK_PREFIX}{spoken}\n\n{SUBTEXT}\n{ASK_IDENTIFIED}\n");
+        let prompt = identified_prompt(spoken);
         let _ = terminal.write_all(prompt.as_bytes());
         let _ = terminal.flush();
     } else {
-        let prompt = format!(
-            "{STEP}\n\n{MARK_UNAVAILABLE}\n\n{COULDNT_VERIFY}\n{BODY_UNAVAILABLE}\n{ASK_UNAVAILABLE}\n"
-        );
+        let prompt = unavailable_prompt();
         let _ = terminal.write_all(prompt.as_bytes());
         let _ = terminal.flush();
     }
@@ -266,22 +366,13 @@ pub async fn ask_terminal_question_scripted<T: std::io::Write + std::io::Read + 
             }
         }
         let trimmed = line.trim().to_ascii_lowercase();
+        if let Some(decision) = answer_decision(parse_answer_token(&trimmed), is_identified) {
+            return decision;
+        }
         if is_identified {
-            if trimmed == "yes" || trimmed == "y" {
-                return TerminalDecision::Yes;
-            }
-            if trimmed == "no" || trimmed == "n" {
-                return TerminalDecision::No;
-            }
             let _ = terminal.write_all(format!("{ASK_IDENTIFIED}\n").as_bytes());
             let _ = terminal.flush();
         } else {
-            if trimmed == "continue" {
-                return TerminalDecision::Yes;
-            }
-            if trimmed == "cancel" {
-                return TerminalDecision::No;
-            }
             let _ = terminal.write_all(format!("{ASK_UNAVAILABLE}\n").as_bytes());
             let _ = terminal.flush();
         }
@@ -582,4 +673,33 @@ pub async fn retire_credential(credential: &Credential, config_root: &Path) {
         bridge.shutdown().await;
     })
     .await;
+}
+
+#[cfg(test)]
+mod locale_parser_tests {
+    use super::*;
+    #[test]
+    fn aliases_are_an_isolated_non_enabled_option() {
+        let aliases = [
+            ("sí", AnswerToken::Yes),
+            ("nein", AnswerToken::No),
+            ("weiter", AnswerToken::Continue),
+            ("abbrechen", AnswerToken::Cancel),
+        ];
+        for (word, token) in aliases {
+            assert_eq!(parse_answer_token(word), None);
+            assert_eq!(parse_alias_option(word, &aliases), Some(token));
+        }
+        assert_eq!(parse_alias_option("unknown", &aliases), None);
+        assert_eq!(
+            parse_alias_option(
+                "go",
+                &[("go", AnswerToken::Yes), ("go", AnswerToken::Continue)]
+            ),
+            None
+        );
+        assert_eq!(parse_alias_option("yes", &[("yes", AnswerToken::No)]), None);
+        assert_eq!(answer_decision(Some(AnswerToken::Continue), true), None);
+        assert_eq!(answer_decision(Some(AnswerToken::Yes), false), None);
+    }
 }

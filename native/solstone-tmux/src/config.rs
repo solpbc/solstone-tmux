@@ -98,13 +98,14 @@ impl RuntimeConfig {
                 }
                 fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).map_err(
                     |source| ConfigError::Io {
-                        operation: "set native config permissions",
+                        operation: crate::i18n::MessageId::CliConfigLoadSetNativeConfigPermissions
+                            .text(),
                         path: path.clone(),
                         source,
                     },
                 )?;
                 let bytes = fs::read(&path).map_err(|source| ConfigError::Io {
-                    operation: "read native config",
+                    operation: crate::i18n::MessageId::CliConfigLoadReadNativeConfig.text(),
                     path: path.clone(),
                     source,
                 })?;
@@ -118,7 +119,7 @@ impl RuntimeConfig {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => ConfigFile::default(),
             Err(source) => {
                 return Err(ConfigError::Io {
-                    operation: "inspect native config",
+                    operation: crate::i18n::MessageId::CliConfigLoadInspectNativeConfig.text(),
                     path,
                     source,
                 });
@@ -235,8 +236,12 @@ pub(crate) fn default_stream(hostname: &str) -> Result<String, ConfigError> {
             }
         });
     if !valid {
-        return Err(ConfigError::InvalidHostname(format!(
-            "hostname {hostname:?} cannot form a native stream name"
+        return Err(ConfigError::InvalidHostname(crate::i18n::render(
+            crate::i18n::MessageId::CliConfigDefaultStreamHostnameCannotFormANativeStreamName,
+            &[(
+                "hostname",
+                crate::i18n::ArgValue::Text(format!("{:?}", hostname)),
+            )],
         )));
     }
     Ok(stream)
@@ -270,29 +275,63 @@ impl fmt::Display for ConfigError {
         match self {
             Self::InvalidTarget(path) => write!(
                 formatter,
-                "native config {} must be a regular file, not a symlink or special target",
-                path.display()
+                "{}",
+                crate::i18n::render(
+                    crate::i18n::MessageId::CliConfigFmtNativeConfigMustBeARegularFileNot,
+                    &[(
+                        "arg0",
+                        crate::i18n::ArgValue::Text((path.display()).to_string())
+                    )]
+                )
             ),
             Self::InvalidConfig { path, detail } => write!(
                 formatter,
-                "native config {} is invalid: {detail}",
-                path.display()
+                "{}",
+                crate::i18n::render(
+                    crate::i18n::MessageId::CliConfigFmtNativeConfigIsInvalid,
+                    &[
+                        (
+                            "arg0",
+                            crate::i18n::ArgValue::Text((path.display()).to_string())
+                        ),
+                        ("detail", crate::i18n::ArgValue::Text((detail).to_string()))
+                    ]
+                )
             ),
             Self::InvalidStream { identity, source } => write!(
                 formatter,
-                "native stream name {identity:?} is invalid: {source}; update stream in config.json"
+                "{}",
+                crate::i18n::render(
+                    crate::i18n::MessageId::CliConfigFmtNativeStreamNameIsInvalidUpdateStreamIn,
+                    &[
+                        (
+                            "identity",
+                            crate::i18n::ArgValue::Text(format!("{:?}", identity))
+                        ),
+                        ("source", crate::i18n::ArgValue::Text((source).to_string()))
+                    ]
+                )
             ),
             Self::InvalidInterval { field } => write!(
                 formatter,
-                "native config {field} must be greater than zero seconds"
+                "{}",
+                crate::i18n::render(
+                    crate::i18n::MessageId::CliConfigFmtNativeConfigMustBeGreaterThanZeroSeconds,
+                    &[("field", crate::i18n::ArgValue::Text((field).to_string()))]
+                )
             ),
             Self::InvalidSource => write!(
                 formatter,
-                "native config source must be a nonempty string matching [a-z0-9][a-z0-9_-]* and at most 64 bytes; update source in config.json"
+                "{}",
+                crate::i18n::MessageId::CliConfigFmtNativeConfigSourceMustBeANonemptyString.text()
             ),
             Self::InvalidHostname(detail) => write!(
                 formatter,
-                "could not derive the default native stream from this hostname: {detail}; set stream in config.json"
+                "{}",
+                crate::i18n::render(
+                    crate::i18n::MessageId::CliConfigFmtCouldNotDeriveTheDefaultNativeStreamFrom,
+                    &[("detail", crate::i18n::ArgValue::Text((detail).to_string()))]
+                )
             ),
             Self::Io {
                 operation,
@@ -300,8 +339,21 @@ impl fmt::Display for ConfigError {
                 source,
             } => write!(
                 formatter,
-                "{operation} failed for {}: {source}",
-                path.display()
+                "{}",
+                crate::i18n::render(
+                    crate::i18n::MessageId::CliConfigFmtFailedFor,
+                    &[
+                        (
+                            "operation",
+                            crate::i18n::ArgValue::Text((operation).to_string())
+                        ),
+                        (
+                            "arg0",
+                            crate::i18n::ArgValue::Text((path.display()).to_string())
+                        ),
+                        ("source", crate::i18n::ArgValue::Text((source).to_string()))
+                    ]
+                )
             ),
         }
     }

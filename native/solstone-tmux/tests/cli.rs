@@ -55,7 +55,10 @@ fn about_prints_two_copyable_lines_without_starting_the_observer() {
     let lines = text.lines().collect::<Vec<_>>();
     assert_eq!(lines.len(), 2);
     assert!(lines[0].starts_with(&format!("tmux app {} · ", env!("CARGO_PKG_VERSION"))));
-    assert_eq!(lines[1], "journal unknown");
+    assert_eq!(
+        lines[1],
+        solstone_tmux::i18n::MessageId::CliAboutSnapshotJournalUnknown.text()
+    );
     assert!(text.ends_with('\n'));
     assert!(!text.contains("development"));
     assert!(output.stderr.is_empty());
@@ -108,7 +111,20 @@ fn invalid_arguments_keep_stderr_and_exit_two() {
     assert!(output.stdout.is_empty());
     assert_eq!(
         output.stderr,
-        format!("unknown command 'unknown'\n{}\n", usage()).as_bytes()
+        format!(
+            "{}\n",
+            solstone_tmux::i18n::render(
+                solstone_tmux::i18n::MessageId::CliCliParseArgsUnknownCommand,
+                &[
+                    (
+                        "arg0",
+                        solstone_tmux::i18n::ArgValue::Text("unknown".into())
+                    ),
+                    ("arg1", solstone_tmux::i18n::ArgValue::Text(usage()))
+                ]
+            )
+        )
+        .as_bytes()
     );
 
     let output = run(&["status", "extra"]);
@@ -116,7 +132,17 @@ fn invalid_arguments_keep_stderr_and_exit_two() {
     assert!(output.stdout.is_empty());
     assert_eq!(
         output.stderr,
-        format!("unexpected argument 'extra'\n{}\n", usage()).as_bytes()
+        format!(
+            "{}\n",
+            solstone_tmux::i18n::render(
+                solstone_tmux::i18n::MessageId::CliCliParseArgsUnexpectedArgument,
+                &[
+                    ("arg0", solstone_tmux::i18n::ArgValue::Text("extra".into())),
+                    ("arg1", solstone_tmux::i18n::ArgValue::Text(usage()))
+                ]
+            )
+        )
+        .as_bytes()
     );
 }
 

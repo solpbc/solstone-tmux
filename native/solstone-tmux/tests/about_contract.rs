@@ -135,7 +135,7 @@ fn current_last_known_legacy_unknown_and_crossed_versions_use_one_renderer() {
             Some(0),
             172800
         ),
-        "journal unknown"
+        solstone_tmux::i18n::MessageId::CliAboutSnapshotJournalUnknown.text()
     );
 }
 
@@ -184,6 +184,8 @@ fn report_preserves_snapshot_bytes_and_projects_out_populated_private_fields() {
     let facts = decode_about(&serde_json::to_vec(&resource).unwrap()).unwrap();
     assert!(!serde_json::to_string(&facts).unwrap().contains("PRIVATE_"));
     let block = AboutBlock {
+        canonical_text:
+            "tmux app 2.0.11 · macos 26.5 · arm64\njournal 2.0.29 · ubuntu 24.04 · x86_64".into(),
         text: format!("tmux app 2.0.11 · macos 26.5 · arm64\n{}", facts.about),
         host: HostFacts {
             os: "macos".into(),

@@ -1,0 +1,32 @@
+{
+  "id": "cli.cli.parse-args.unknown-command",
+  "fluent_id": "cli-cli-parse-args-unknown-command",
+  "args": [
+    {
+      "name": "arg0",
+      "type": "text",
+      "rust_format_spec": "",
+      "description": "Rejected CLI input"
+    },
+    {
+      "name": "arg1",
+      "type": "text",
+      "rust_format_spec": "",
+      "description": "Preformatted diagnostic or display value; preserve exactly"
+    }
+  ],
+  "description": "CLI usage error. arg0 is the rejected command or argument exactly as supplied; arg1 is the complete localized usage text.",
+  "surfaces": [
+    "terminal"
+  ],
+  "max_length": null,
+  "risk": "routine",
+  "screenshots": [],
+  "source_revision": "2cc01d9c029cac7c6aa7beeed2f4fdd2c3188c05",
+  "sources": [
+    {
+      "path": "native/solstone-tmux/src/cli.rs",
+      "line": 56
+    }
+  ]
+}

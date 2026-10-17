@@ -942,7 +942,7 @@ pub async fn delete_confirmed_segment(
                 .join(candidate.stream())
                 .join(candidate.segment());
             if cap_dir.exists() {
-                eprintln!("solstone-tmux: confirmed segment was not removed");
+                eprintln!("{}", crate::i18n::MessageId::CliSyncDeleteConfirmedSegmentSolstoneTmuxConfirmedSegmentWasNotRemoved.text());
             }
             false
         }
@@ -980,7 +980,7 @@ pub async fn delete_empty_segment(
                 .join(candidate.stream())
                 .join(candidate.segment());
             if cap_dir.exists() {
-                eprintln!("solstone-tmux: confirmed segment was not removed");
+                eprintln!("{}", crate::i18n::MessageId::CliSyncDeleteConfirmedSegmentSolstoneTmuxConfirmedSegmentWasNotRemoved.text());
             }
             false
         }
@@ -1014,9 +1014,9 @@ impl fmt::Display for SyncOperationError {
             Self::RetainCandidate { diagnostic, .. } | Self::EndSweepDiagnostic(_, diagnostic) => {
                 formatter.write_str(diagnostic.message())
             }
-            Self::SegmentRemoved => {
-                formatter.write_str("segment removed on journal; unlinked locally")
-            }
+            Self::SegmentRemoved => formatter.write_str(
+                crate::i18n::MessageId::CliSyncFmtSegmentRemovedOnJournalUnlinkedLocally.text(),
+            ),
             Self::EndSweep(failure) => {
                 formatter.write_str(diagnostic_for_failure(*failure).message())
             }
@@ -2058,10 +2058,7 @@ impl SyncScheduler {
                             }
                         }
                         Receipt::Invalid(fault) => {
-                            eprintln!(
-                                "solstone-tmux: upload was not acknowledged ({})",
-                                fault.as_str()
-                            );
+                            eprintln!("{}", crate::i18n::render(crate::i18n::MessageId::CliSyncRunSweepSolstoneTmuxUploadWasNotAcknowledged, &[("arg0", crate::i18n::ArgValue::Text((fault.as_str()).to_string()))]));
                             let answer = format!("invalid:{}", fault.as_str());
                             if fault == ReceiptFault::ReceivedNotWritten {
                                 state.answer = Some(answer);
@@ -2097,9 +2094,7 @@ impl SyncScheduler {
                             }
                         }
                         Receipt::Absent => {
-                            eprintln!(
-                                "solstone-tmux: upload was not acknowledged (descriptors_absent)"
-                            );
+                            eprintln!("{}", crate::i18n::MessageId::CliSyncRunSweepSolstoneTmuxUploadWasNotAcknowledgedDescriptorsAbsent.text());
                             let answer = "absent:descriptors_absent".to_owned();
                             if state.answer.as_deref() == Some(&answer) {
                                 state.answer_count = state.answer_count.saturating_add(1);

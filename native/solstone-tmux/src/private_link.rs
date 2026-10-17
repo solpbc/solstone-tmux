@@ -412,7 +412,9 @@ where
     }
 
     let mut terminal_reader = match &mark {
-        MarkOption::MissingValue | MarkOption::Repeated => return Outcome::Usage(MARK_USAGE),
+        MarkOption::MissingValue | MarkOption::Repeated => {
+            return Outcome::Usage(MARK_USAGE);
+        }
         MarkOption::Value(val) => {
             let words = split_mark_words(val);
             if words.len() != 2 {
@@ -425,7 +427,7 @@ where
                 let Some(file) = open_owner_terminal() else {
                     return Outcome::Owner {
                         code: 1,
-                        lines: vec![SETUP_NO_TERMINAL.to_owned()],
+                        lines: vec![SETUP_NO_TERMINAL],
                     };
                 };
                 Some(TerminalQuestionReader::Production(file))
@@ -434,7 +436,7 @@ where
             TerminalSeat::Scripted(None) => {
                 return Outcome::Owner {
                     code: 1,
-                    lines: vec![SETUP_NO_TERMINAL.to_owned()],
+                    lines: vec![SETUP_NO_TERMINAL],
                 };
             }
         },
@@ -489,12 +491,12 @@ where
                     if write_ans.is_err() {
                         Outcome::Owner {
                             code: 5,
-                            lines: vec![HELD.to_owned(), RUN_LINE.to_owned()],
+                            lines: vec![HELD, RUN_LINE],
                         }
                     } else {
                         Outcome::Owner {
                             code: 0,
-                            lines: vec![PAIRED.to_owned()],
+                            lines: vec![PAIRED],
                         }
                     }
                 }
@@ -503,15 +505,12 @@ where
                     if !is_identified {
                         Outcome::Owner {
                             code: 1,
-                            lines: vec![
-                                COULDNT_VERIFY.to_owned(),
-                                MARK_UNVERIFIABLE_SETUP.to_owned(),
-                            ],
+                            lines: vec![COULDNT_VERIFY, MARK_UNVERIFIABLE_SETUP],
                         }
                     } else {
                         Outcome::Owner {
                             code: 1,
-                            lines: vec![NOT_PAIRED.to_owned(), MARK_MISMATCH.to_owned()],
+                            lines: vec![NOT_PAIRED, MARK_MISMATCH],
                         }
                     }
                 }
@@ -542,12 +541,12 @@ where
                     if write_ans.is_err() {
                         Outcome::Owner {
                             code: 5,
-                            lines: vec![HELD.to_owned(), RUN_LINE.to_owned()],
+                            lines: vec![HELD, RUN_LINE],
                         }
                     } else {
                         Outcome::Owner {
                             code: 0,
-                            lines: vec![PAIRED.to_owned()],
+                            lines: vec![PAIRED],
                         }
                     }
                 }
@@ -556,12 +555,12 @@ where
                     if is_identified {
                         Outcome::Owner {
                             code: 1,
-                            lines: vec![NOT_PAIRED.to_owned(), MISMATCH_BODY.to_owned()],
+                            lines: vec![NOT_PAIRED, MISMATCH_BODY],
                         }
                     } else {
                         Outcome::Owner {
                             code: 1,
-                            lines: vec![CANCEL.to_owned()],
+                            lines: vec![CANCEL],
                         }
                     }
                 }
@@ -579,7 +578,7 @@ where
                         retire_credential(&credential, &config_root).await;
                         Outcome::Owner {
                             code: 1,
-                            lines: vec![CANCEL.to_owned()],
+                            lines: vec![CANCEL],
                         }
                     } else {
                         let persist_res = persist_credential(&config_root, &credential);
@@ -590,7 +589,7 @@ where
                         crate::journal_version::clear_cached_version(&config_root);
                         Outcome::Owner {
                             code: 5,
-                            lines: vec![HELD.to_owned(), RUN_LINE.to_owned()],
+                            lines: vec![HELD, RUN_LINE],
                         }
                     }
                 }
@@ -613,7 +612,9 @@ where
     let seat = seat.into();
 
     match &mark {
-        MarkOption::MissingValue | MarkOption::Repeated => return Outcome::Usage(MARK_USAGE),
+        MarkOption::MissingValue | MarkOption::Repeated => {
+            return Outcome::Usage(MARK_USAGE);
+        }
         MarkOption::Value(val) => {
             let words = split_mark_words(val);
             if words.len() != 2 {
@@ -645,7 +646,7 @@ where
         Ok(None) => {
             return Outcome::Owner {
                 code: 1,
-                lines: vec![CONFIRM_UNPAIRED.to_owned()],
+                lines: vec![CONFIRM_UNPAIRED],
             };
         }
         Err(DiagnosticCode::PrivateStateInvalid) => {
@@ -657,7 +658,7 @@ where
     if is_pairing_confirmed(&config_root, &saved_cred) {
         return Outcome::Owner {
             code: 0,
-            lines: vec![CONFIRM_DONE.to_owned()],
+            lines: vec![CONFIRM_DONE],
         };
     }
 
@@ -673,7 +674,7 @@ where
                 let Some(file) = open_owner_terminal() else {
                     return Outcome::Owner {
                         code: 1,
-                        lines: vec![CONFIRM_NO_TERMINAL.to_owned()],
+                        lines: vec![CONFIRM_NO_TERMINAL],
                     };
                 };
                 Some(TerminalQuestionReader::Production(file))
@@ -682,7 +683,7 @@ where
             TerminalSeat::Scripted(None) => {
                 return Outcome::Owner {
                     code: 1,
-                    lines: vec![CONFIRM_NO_TERMINAL.to_owned()],
+                    lines: vec![CONFIRM_NO_TERMINAL],
                 };
             }
         },
@@ -722,7 +723,7 @@ where
                     } else {
                         Outcome::Owner {
                             code: 0,
-                            lines: vec![PAIRED.to_owned()],
+                            lines: vec![PAIRED],
                         }
                     }
                 }
@@ -730,7 +731,7 @@ where
                     if !is_identified {
                         Outcome::Owner {
                             code: 5,
-                            lines: vec![MARK_UNVERIFIABLE_CONFIRM.to_owned()],
+                            lines: vec![MARK_UNVERIFIABLE_CONFIRM],
                         }
                     } else {
                         retire_credential(&saved_cred, &config_root).await;
@@ -758,7 +759,7 @@ where
                         } else {
                             Outcome::Owner {
                                 code: 1,
-                                lines: vec![NOT_PAIRED.to_owned(), MARK_MISMATCH.to_owned()],
+                                lines: vec![NOT_PAIRED, MARK_MISMATCH],
                             }
                         }
                     }
@@ -800,7 +801,7 @@ where
                     } else {
                         Outcome::Owner {
                             code: 0,
-                            lines: vec![PAIRED.to_owned()],
+                            lines: vec![PAIRED],
                         }
                     }
                 }
@@ -830,18 +831,18 @@ where
                     } else if is_identified {
                         Outcome::Owner {
                             code: 1,
-                            lines: vec![NOT_PAIRED.to_owned(), MISMATCH_BODY.to_owned()],
+                            lines: vec![NOT_PAIRED, MISMATCH_BODY],
                         }
                     } else {
                         Outcome::Owner {
                             code: 1,
-                            lines: vec![CANCEL.to_owned()],
+                            lines: vec![CANCEL],
                         }
                     }
                 }
                 TerminalDecision::WalkedAway => Outcome::Owner {
                     code: 5,
-                    lines: vec![HELD.to_owned(), RUN_LINE.to_owned()],
+                    lines: vec![HELD, RUN_LINE],
                 },
             }
         }

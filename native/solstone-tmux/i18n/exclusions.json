@@ -1,0 +1,3506 @@
+[
+  {
+    "path": "native/solstone-tmux/src/about.rs",
+    "value": " \u00b7 ",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/about.rs",
+    "value": "aarch64",
+    "classification": "machine",
+    "reason": "Protocol about validation, host fact, or subprocess parser token"
+  },
+  {
+    "path": "native/solstone-tmux/src/about.rs",
+    "value": "ARM64",
+    "classification": "machine",
+    "reason": "Protocol about validation, host fact, or subprocess parser token"
+  },
+  {
+    "path": "native/solstone-tmux/src/about.rs",
+    "value": "arm64-v8a",
+    "classification": "machine",
+    "reason": "Protocol about validation, host fact, or subprocess parser token"
+  },
+  {
+    "path": "native/solstone-tmux/src/about.rs",
+    "value": "arm64",
+    "classification": "machine",
+    "reason": "Protocol about validation, host fact, or subprocess parser token"
+  },
+  {
+    "path": "native/solstone-tmux/src/about.rs",
+    "value": "arm64",
+    "classification": "machine",
+    "reason": "Protocol about validation, host fact, or subprocess parser token"
+  },
+  {
+    "path": "native/solstone-tmux/src/about.rs",
+    "value": "amd64",
+    "classification": "machine",
+    "reason": "Protocol about validation, host fact, or subprocess parser token"
+  },
+  {
+    "path": "native/solstone-tmux/src/about.rs",
+    "value": "x64",
+    "classification": "machine",
+    "reason": "Protocol about validation, host fact, or subprocess parser token"
+  },
+  {
+    "path": "native/solstone-tmux/src/about.rs",
+    "value": "AMD64",
+    "classification": "machine",
+    "reason": "Protocol about validation, host fact, or subprocess parser token"
+  },
+  {
+    "path": "native/solstone-tmux/src/about.rs",
+    "value": "x86_64",
+    "classification": "machine",
+    "reason": "Protocol about validation, host fact, or subprocess parser token"
+  },
+  {
+    "path": "native/solstone-tmux/src/about.rs",
+    "value": "x86_64",
+    "classification": "machine",
+    "reason": "Protocol about validation, host fact, or subprocess parser token"
+  },
+  {
+    "path": "native/solstone-tmux/src/about.rs",
+    "value": "{name} {}",
+    "classification": "machine",
+    "reason": "Protocol about validation, host fact, or subprocess parser token"
+  },
+  {
+    "path": "native/solstone-tmux/src/about.rs",
+    "value": " ({build})",
+    "classification": "machine",
+    "reason": "Protocol about validation, host fact, or subprocess parser token"
+  },
+  {
+    "path": "native/solstone-tmux/src/about.rs",
+    "value": "journal",
+    "classification": "machine",
+    "reason": "Protocol about validation, host fact, or subprocess parser token"
+  },
+  {
+    "path": "native/solstone-tmux/src/about.rs",
+    "value": "build",
+    "classification": "machine",
+    "reason": "Protocol about validation, host fact, or subprocess parser token"
+  },
+  {
+    "path": "native/solstone-tmux/src/about.rs",
+    "value": "._-",
+    "classification": "machine",
+    "reason": "Protocol about validation, host fact, or subprocess parser token"
+  },
+  {
+    "path": "native/solstone-tmux/src/about.rs",
+    "value": "ID",
+    "classification": "machine",
+    "reason": "Protocol about validation, host fact, or subprocess parser token"
+  },
+  {
+    "path": "native/solstone-tmux/src/about.rs",
+    "value": "linux",
+    "classification": "machine",
+    "reason": "Protocol about validation, host fact, or subprocess parser token"
+  },
+  {
+    "path": "native/solstone-tmux/src/about.rs",
+    "value": "VERSION_ID",
+    "classification": "machine",
+    "reason": "Protocol about validation, host fact, or subprocess parser token"
+  },
+  {
+    "path": "native/solstone-tmux/src/about.rs",
+    "value": "arm64",
+    "classification": "machine",
+    "reason": "Protocol about validation, host fact, or subprocess parser token"
+  },
+  {
+    "path": "native/solstone-tmux/src/about.rs",
+    "value": "/etc/os-release",
+    "classification": "machine",
+    "reason": "Protocol about validation, host fact, or subprocess parser token"
+  },
+  {
+    "path": "native/solstone-tmux/src/about.rs",
+    "value": "/usr/lib/os-release",
+    "classification": "machine",
+    "reason": "Protocol about validation, host fact, or subprocess parser token"
+  },
+  {
+    "path": "native/solstone-tmux/src/about.rs",
+    "value": "linux",
+    "classification": "machine",
+    "reason": "Protocol about validation, host fact, or subprocess parser token"
+  },
+  {
+    "path": "native/solstone-tmux/src/about.rs",
+    "value": "linux",
+    "classification": "machine",
+    "reason": "Protocol about validation, host fact, or subprocess parser token"
+  },
+  {
+    "path": "native/solstone-tmux/src/about.rs",
+    "value": "/usr/sbin/sysctl",
+    "classification": "machine",
+    "reason": "Protocol about validation, host fact, or subprocess parser token"
+  },
+  {
+    "path": "native/solstone-tmux/src/about.rs",
+    "value": "-n",
+    "classification": "machine",
+    "reason": "Protocol about validation, host fact, or subprocess parser token"
+  },
+  {
+    "path": "native/solstone-tmux/src/about.rs",
+    "value": "sysctl.proc_translated",
+    "classification": "machine",
+    "reason": "Protocol about validation, host fact, or subprocess parser token"
+  },
+  {
+    "path": "native/solstone-tmux/src/about.rs",
+    "value": "1\n",
+    "classification": "machine",
+    "reason": "Protocol about validation, host fact, or subprocess parser token"
+  },
+  {
+    "path": "native/solstone-tmux/src/about.rs",
+    "value": "0\n",
+    "classification": "machine",
+    "reason": "Protocol about validation, host fact, or subprocess parser token"
+  },
+  {
+    "path": "native/solstone-tmux/src/about.rs",
+    "value": "unknown oid",
+    "classification": "machine",
+    "reason": "Protocol about validation, host fact, or subprocess parser token"
+  },
+  {
+    "path": "native/solstone-tmux/src/about.rs",
+    "value": "hw.machine",
+    "classification": "machine",
+    "reason": "Protocol about validation, host fact, or subprocess parser token"
+  },
+  {
+    "path": "native/solstone-tmux/src/about.rs",
+    "value": "kern.osproductversion",
+    "classification": "machine",
+    "reason": "Protocol about validation, host fact, or subprocess parser token"
+  },
+  {
+    "path": "native/solstone-tmux/src/about.rs",
+    "value": "macos",
+    "classification": "machine",
+    "reason": "Protocol about validation, host fact, or subprocess parser token"
+  },
+  {
+    "path": "native/solstone-tmux/src/about.rs",
+    "value": "CARGO_PKG_VERSION",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/about.rs",
+    "value": "{own}\n{journal}",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/about.rs",
+    "value": "journal",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/about.rs",
+    "value": "",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/about.rs",
+    "value": "",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/about.rs",
+    "value": "",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/cli.rs",
+    "value": "run",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/cli.rs",
+    "value": "setup",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/cli.rs",
+    "value": "confirm",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/cli.rs",
+    "value": "status",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/cli.rs",
+    "value": "about",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/cli.rs",
+    "value": "install-service",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/cli.rs",
+    "value": "uninstall-service",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/cli.rs",
+    "value": "-h",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/cli.rs",
+    "value": "--help",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/cli.rs",
+    "value": "-V",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/cli.rs",
+    "value": "--version",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/cli.rs",
+    "value": "--mark",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/cli.rs",
+    "value": "--mark",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/cli.rs",
+    "value": "SOLSTONE_TMUX_SOURCE_COMMIT",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/cli.rs",
+    "value": "development",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/cli.rs",
+    "value": "CARGO_PKG_VERSION",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/client_metadata.rs",
+    "value": "terminal",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/client_metadata.rs",
+    "value": "solstone-tmux",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/client_metadata.rs",
+    "value": "reported",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/client_metadata.rs",
+    "value": "owner_label",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/client_metadata.rs",
+    "value": "display_label",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/client_metadata.rs",
+    "value": "updated_at",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/client_metadata.rs",
+    "value": "journal",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/client_metadata.rs",
+    "value": "reported",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/client_metadata.rs",
+    "value": "name",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/client_metadata.rs",
+    "value": "platform",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/client_metadata.rs",
+    "value": "device_type",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/client_metadata.rs",
+    "value": "app_id",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/client_metadata.rs",
+    "value": "app_version",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/client_metadata.rs",
+    "value": "reported",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/client_metadata.rs",
+    "value": "journal",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/client_metadata.rs",
+    "value": "name",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/client_metadata.rs",
+    "value": "version",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/clock.rs",
+    "value": "instant seconds fit jiff Timestamp range",
+    "classification": "internal",
+    "reason": "Programmer assertion, not an owner message contract"
+  },
+  {
+    "path": "native/solstone-tmux/src/clock.rs",
+    "value": "jiff offset fits time UtcOffset range",
+    "classification": "internal",
+    "reason": "Programmer assertion, not an owner message contract"
+  },
+  {
+    "path": "native/solstone-tmux/src/clock.rs",
+    "value": "time UtcOffset seconds fit jiff Offset range",
+    "classification": "internal",
+    "reason": "Programmer assertion, not an owner message contract"
+  },
+  {
+    "path": "native/solstone-tmux/src/clock.rs",
+    "value": "test wall clock poisoned",
+    "classification": "internal",
+    "reason": "Programmer assertion, not an owner message contract"
+  },
+  {
+    "path": "native/solstone-tmux/src/clock.rs",
+    "value": "test monotonic clock poisoned",
+    "classification": "internal",
+    "reason": "Programmer assertion, not an owner message contract"
+  },
+  {
+    "path": "native/solstone-tmux/src/clock.rs",
+    "value": "test wall clock poisoned",
+    "classification": "internal",
+    "reason": "Programmer assertion, not an owner message contract"
+  },
+  {
+    "path": "native/solstone-tmux/src/clock.rs",
+    "value": "test monotonic clock poisoned",
+    "classification": "internal",
+    "reason": "Programmer assertion, not an owner message contract"
+  },
+  {
+    "path": "native/solstone-tmux/src/clock.rs",
+    "value": "{:04}{:02}{:02}",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/clock.rs",
+    "value": "{:02}{:02}{:02}",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/config.rs",
+    "value": "config.json",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/config.rs",
+    "value": "tmux",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/config.rs",
+    "value": "capture_interval",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/config.rs",
+    "value": "segment_interval",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/config.rs",
+    "value": "-",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/config.rs",
+    "value": "{normalized}.tmux",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/config.rs",
+    "value": "..",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/health.rs",
+    "value": "sync-health.json",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/health.rs",
+    "value": "setup_input_invalid",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/health.rs",
+    "value": "setup_unavailable",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/health.rs",
+    "value": "pairing_failed",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/health.rs",
+    "value": "private_state_invalid",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/health.rs",
+    "value": "private_state_io",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/health.rs",
+    "value": "health_snapshot_io",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/health.rs",
+    "value": "bridge_unavailable",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/health.rs",
+    "value": "journal_unavailable",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/health.rs",
+    "value": "journal_timeout",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/health.rs",
+    "value": "journal_response_too_large",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/health.rs",
+    "value": "journal_contract_invalid",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/health.rs",
+    "value": "configured_stream_mismatch",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/health.rs",
+    "value": "local_segment_invalid",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/health.rs",
+    "value": "request_too_large",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/health.rs",
+    "value": "journal_rejected",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/health.rs",
+    "value": "journal_revoked",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/health.rs",
+    "value": "sync_task_exited",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/health.rs",
+    "value": "sync_task_panicked",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/health.rs",
+    "value": "sync_task_cancelled",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/health.rs",
+    "value": "sync_task_timed_out",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/health.rs",
+    "value": "indicator_update_failed",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/health.rs",
+    "value": "unpaired",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/health.rs",
+    "value": "held",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/health.rs",
+    "value": "connected",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/health.rs",
+    "value": "syncing",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/health.rs",
+    "value": "offline",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/health.rs",
+    "value": "update_needed",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/health.rs",
+    "value": "revoked",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/health.rs",
+    "value": "unknown",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/health.rs",
+    "value": "stale",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/indicator.rs",
+    "value": "status-left",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/indicator.rs",
+    "value": "@solstone",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/indicator.rs",
+    "value": "observing",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/indicator.rs",
+    "value": "syncing",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/indicator.rs",
+    "value": "#{?@solstone,#{?#{==:#{@solstone},syncing},#[fg=yellow]\u263c#[default],#[fg=colour245]\u263c#[default]},}",
+    "classification": "machine",
+    "reason": "Tmux format grammar passed verbatim to the child process"
+  },
+  {
+    "path": "native/solstone-tmux/src/indicator.rs",
+    "value": "show-options",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/indicator.rs",
+    "value": "-gv",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/indicator.rs",
+    "value": "set-option",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/indicator.rs",
+    "value": "-g",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/indicator.rs",
+    "value": "set-option",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/indicator.rs",
+    "value": "-gu",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/indicator.rs",
+    "value": "{INDICATOR_PREFIX}{value}",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/indicator.rs",
+    "value": "; ",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/instance_lock.rs",
+    "value": ".solstone-tmux.lock",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/instance_lock.rs",
+    "value": "{:032x}",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal.rs",
+    "value": "/app/devices/ingest",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal.rs",
+    "value": "/api/system/status",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal.rs",
+    "value": "/app/network/api/clients/self",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal.rs",
+    "value": "/app/network/api/relay/access",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal.rs",
+    "value": "/app/network/local-endpoints",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal.rs",
+    "value": "auth_key_invalid",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal.rs",
+    "value": "auth_required",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal.rs",
+    "value": "content_conflict",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal.rs",
+    "value": "feature_unavailable",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal.rs",
+    "value": "ingest_contract_invalid",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal.rs",
+    "value": "ingest_no_files",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal.rs",
+    "value": "ingest_sidecar_conflict",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal.rs",
+    "value": "ingest_storage_failed",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal.rs",
+    "value": "invalid_day",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal.rs",
+    "value": "invalid_segment_or_stream",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal.rs",
+    "value": "local_request_only",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal.rs",
+    "value": "missing_required_field",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal.rs",
+    "value": "linked_device_required",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal.rs",
+    "value": "pl_revoked",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal.rs",
+    "value": "protocol_version_future",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal.rs",
+    "value": "protocol_version_legacy",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal.rs",
+    "value": "segment_removed",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal.rs",
+    "value": "settings_operation_failed",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal.rs",
+    "value": "auth_key_invalid",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal.rs",
+    "value": "auth_required",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal.rs",
+    "value": "content_conflict",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal.rs",
+    "value": "feature_unavailable",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal.rs",
+    "value": "ingest_contract_invalid",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal.rs",
+    "value": "ingest_no_files",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal.rs",
+    "value": "ingest_sidecar_conflict",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal.rs",
+    "value": "ingest_storage_failed",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal.rs",
+    "value": "invalid_day",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal.rs",
+    "value": "invalid_segment_or_stream",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal.rs",
+    "value": "local_request_only",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal.rs",
+    "value": "missing_required_field",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal.rs",
+    "value": "linked_device_required",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal.rs",
+    "value": "pl_revoked",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal.rs",
+    "value": "protocol_version_future",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal.rs",
+    "value": "protocol_version_legacy",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal.rs",
+    "value": "segment_removed",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal.rs",
+    "value": "settings_operation_failed",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal.rs",
+    "value": "descriptors_absent",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal.rs",
+    "value": "malformed_descriptor",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal.rs",
+    "value": "duplicate_submitted",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal.rs",
+    "value": "missing_descriptor",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal.rs",
+    "value": "extra_descriptor",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal.rs",
+    "value": "sha256_mismatch",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal.rs",
+    "value": "sha256_encoding",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal.rs",
+    "value": "size_mismatch",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal.rs",
+    "value": "unknown_disposition",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal.rs",
+    "value": "missing_disposition",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal.rs",
+    "value": "received_not_written",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal.rs",
+    "value": "upload_not_acknowledged",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal.rs",
+    "value": "source",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal.rs",
+    "value": "application/json",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal.rs",
+    "value": "envelope",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal.rs",
+    "value": "application/octet-stream",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal.rs",
+    "value": "files",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal.rs",
+    "value": "/api/system/about",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal.rs",
+    "value": "content-type",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal.rs",
+    "value": "application/json",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal.rs",
+    "value": "submitted",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal.rs",
+    "value": "written",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal.rs",
+    "value": "size",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal.rs",
+    "value": "sha256",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal.rs",
+    "value": "disposition",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal.rs",
+    "value": "written",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal.rs",
+    "value": "already_held",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal.rs",
+    "value": "received_not_written",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal.rs",
+    "value": "received_not_written",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal.rs",
+    "value": "//",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal.rs",
+    "value": "{:x}",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal_version.rs",
+    "value": "journal-version.json",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal_version.rs",
+    "value": "journal-version.lock",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal_version.rs",
+    "value": "unknown",
+    "classification": "machine",
+    "reason": "Existing status field render remains invariant for owner scripts"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal_version.rs",
+    "value": "{} (last known)",
+    "classification": "machine",
+    "reason": "Existing status field render remains invariant for owner scripts"
+  },
+  {
+    "path": "native/solstone-tmux/src/journal_version.rs",
+    "value": "{byte:02x}",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/main.rs",
+    "value": "{error}",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/main.rs",
+    "value": "{}",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/main.rs",
+    "value": "{}",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/main.rs",
+    "value": "{}",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/main.rs",
+    "value": "active",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/main.rs",
+    "value": "inactive",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/main.rs",
+    "value": "absent",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/main.rs",
+    "value": "error",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/main.rs",
+    "value": "held",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/main.rs",
+    "value": "service: {service_line}",
+    "classification": "machine",
+    "reason": "Existing CLI status fields remain invariant for owner scripts"
+  },
+  {
+    "path": "native/solstone-tmux/src/main.rs",
+    "value": "sync-health: {sync_health_str}",
+    "classification": "machine",
+    "reason": "Existing CLI status fields remain invariant for owner scripts"
+  },
+  {
+    "path": "native/solstone-tmux/src/main.rs",
+    "value": "{}",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/main.rs",
+    "value": "{}",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/main.rs",
+    "value": "journal-version: {}",
+    "classification": "machine",
+    "reason": "Existing CLI status fields remain invariant for owner scripts"
+  },
+  {
+    "path": "native/solstone-tmux/src/main.rs",
+    "value": "{}",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/main.rs",
+    "value": "setup was dispatched before service setup",
+    "classification": "internal",
+    "reason": "Programmer assertion, not an owner message contract"
+  },
+  {
+    "path": "native/solstone-tmux/src/main.rs",
+    "value": "confirm was dispatched before service setup",
+    "classification": "internal",
+    "reason": "Programmer assertion, not an owner message contract"
+  },
+  {
+    "path": "native/solstone-tmux/src/main.rs",
+    "value": "run was dispatched before service setup",
+    "classification": "internal",
+    "reason": "Programmer assertion, not an owner message contract"
+  },
+  {
+    "path": "native/solstone-tmux/src/main.rs",
+    "value": "about was dispatched before service setup",
+    "classification": "internal",
+    "reason": "Programmer assertion, not an owner message contract"
+  },
+  {
+    "path": "native/solstone-tmux/src/main.rs",
+    "value": "help was dispatched before service setup",
+    "classification": "internal",
+    "reason": "Programmer assertion, not an owner message contract"
+  },
+  {
+    "path": "native/solstone-tmux/src/main.rs",
+    "value": "version was dispatched before service setup",
+    "classification": "internal",
+    "reason": "Programmer assertion, not an owner message contract"
+  },
+  {
+    "path": "native/solstone-tmux/src/main.rs",
+    "value": "{line}",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/main.rs",
+    "value": "{usage_str}",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/name.rs",
+    "value": "tmux_{}_screen.jsonl",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/name.rs",
+    "value": ".",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/name.rs",
+    "value": "..",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/name.rs",
+    "value": "{byte:02x}",
+    "classification": "internal",
+    "reason": "Programmer assertion, not an owner message contract"
+  },
+  {
+    "path": "native/solstone-tmux/src/name.rs",
+    "value": "writing to a String cannot fail",
+    "classification": "internal",
+    "reason": "Programmer assertion, not an owner message contract"
+  },
+  {
+    "path": "native/solstone-tmux/src/observer.rs",
+    "value": "UTC",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/observer.rs",
+    "value": "{:04}{:02}{:02}",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/observer.rs",
+    "value": "captures",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/observer.rs",
+    "value": "{:02}{:02}{:02}",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/observer.rs",
+    "value": "{:02}{:02}{:02}",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/observer.rs",
+    "value": "{:04}{:02}{:02}",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/observer.rs",
+    "value": "captures",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/observer.rs",
+    "value": "calendar date next day",
+    "classification": "internal",
+    "reason": "Programmer assertion, not an owner message contract"
+  },
+  {
+    "path": "native/solstone-tmux/src/observer.rs",
+    "value": "captures",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/pairing_answer.rs",
+    "value": "pairing-answer.json",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/pairing_answer.rs",
+    "value": ".solstone-tmux.answer.lock",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/pairing_answer.rs",
+    "value": "SOLSTONE_TMUX_TERMINAL",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/pairing_answer.rs",
+    "value": "-",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/pairing_answer.rs",
+    "value": "/dev/tty",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/pairing_answer.rs",
+    "value": "{STEP}\n\n{MARK_PREFIX}{spoken}\n\n{SUBTEXT}\n{ASK_IDENTIFIED}\n",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/pairing_answer.rs",
+    "value": "{STEP}\n\n{MARK_UNAVAILABLE}\n\n{COULDNT_VERIFY}\n{BODY_UNAVAILABLE}\n{ASK_UNAVAILABLE}\n",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/pairing_answer.rs",
+    "value": "yes",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/pairing_answer.rs",
+    "value": "y",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/pairing_answer.rs",
+    "value": "no",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/pairing_answer.rs",
+    "value": "n",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/pairing_answer.rs",
+    "value": "{ASK_IDENTIFIED}\n",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/pairing_answer.rs",
+    "value": "continue",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/pairing_answer.rs",
+    "value": "cancel",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/pairing_answer.rs",
+    "value": "{ASK_UNAVAILABLE}\n",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/pairing_answer.rs",
+    "value": "{STEP}\n\n{MARK_PREFIX}{spoken}\n\n{SUBTEXT}\n{ASK_IDENTIFIED}\n",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/pairing_answer.rs",
+    "value": "{STEP}\n\n{MARK_UNAVAILABLE}\n\n{COULDNT_VERIFY}\n{BODY_UNAVAILABLE}\n{ASK_UNAVAILABLE}\n",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/pairing_answer.rs",
+    "value": "yes",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/pairing_answer.rs",
+    "value": "y",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/pairing_answer.rs",
+    "value": "no",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/pairing_answer.rs",
+    "value": "n",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/pairing_answer.rs",
+    "value": "{ASK_IDENTIFIED}\n",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/pairing_answer.rs",
+    "value": "continue",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/pairing_answer.rs",
+    "value": "cancel",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/pairing_answer.rs",
+    "value": "{ASK_UNAVAILABLE}\n",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/pairing_answer.rs",
+    "value": "",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/pairing_answer.rs",
+    "value": " \u00b7 ",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/pairing_answer.rs",
+    "value": "/app/network/api/clients/sha256:{cert_sha256}",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/pairing_answer.rs",
+    "value": "00000000000000000000000000000000",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/paths/linux.rs",
+    "value": "HOME",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/paths/linux.rs",
+    "value": "XDG_DATA_HOME",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/paths/linux.rs",
+    "value": ".local/share",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/paths/linux.rs",
+    "value": "solstone-tmux",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/paths/linux.rs",
+    "value": "HOME",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/paths/linux.rs",
+    "value": "XDG_CONFIG_HOME",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/paths/linux.rs",
+    "value": ".config",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/paths/linux.rs",
+    "value": "solstone-tmux",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/paths/macos.rs",
+    "value": "HOME",
+    "classification": "machine",
+    "reason": "Filesystem path"
+  },
+  {
+    "path": "native/solstone-tmux/src/paths/macos.rs",
+    "value": "Library/Application Support/solstone-tmux",
+    "classification": "machine",
+    "reason": "Filesystem path"
+  },
+  {
+    "path": "native/solstone-tmux/src/paths.rs",
+    "value": "linux",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/paths.rs",
+    "value": "macos",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/post_connect.rs",
+    "value": " One lane may run its first pass and one coalesced pass. A burst is shared",
+    "classification": "documentation",
+    "reason": "Rust attribute or doc comment, outside runtime messages"
+  },
+  {
+    "path": "native/solstone-tmux/src/post_connect.rs",
+    "value": " so a carrier opened by one optional job cannot manufacture work in another.",
+    "classification": "documentation",
+    "reason": "Rust attribute or doc comment, outside runtime messages"
+  },
+  {
+    "path": "native/solstone-tmux/src/post_connect.rs",
+    "value": "macos",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/post_connect.rs",
+    "value": "post-connect burst did not quiesce",
+    "classification": "internal",
+    "reason": "Programmer assertion, not an owner message contract"
+  },
+  {
+    "path": "native/solstone-tmux/src/post_connect.rs",
+    "value": " A bootstrap/attach/manual event is external. During a burst it only",
+    "classification": "documentation",
+    "reason": "Rust attribute or doc comment, outside runtime messages"
+  },
+  {
+    "path": "native/solstone-tmux/src/post_connect.rs",
+    "value": " asks each lane for its single legal follow-up; after quiescence it starts",
+    "classification": "documentation",
+    "reason": "Rust attribute or doc comment, outside runtime messages"
+  },
+  {
+    "path": "native/solstone-tmux/src/post_connect.rs",
+    "value": " a fresh two-lane burst.",
+    "classification": "documentation",
+    "reason": "Rust attribute or doc comment, outside runtime messages"
+  },
+  {
+    "path": "native/solstone-tmux/src/post_connect.rs",
+    "value": " A bridge dial is job-induced while a burst is active. Once quiescent it",
+    "classification": "documentation",
+    "reason": "Rust attribute or doc comment, outside runtime messages"
+  },
+  {
+    "path": "native/solstone-tmux/src/post_connect.rs",
+    "value": " is an external reconnect and starts exactly one new burst.",
+    "classification": "documentation",
+    "reason": "Rust attribute or doc comment, outside runtime messages"
+  },
+  {
+    "path": "native/solstone-tmux/src/private_link.rs",
+    "value": "credentials.json",
+    "classification": "machine",
+    "reason": "Pairing identity, mark words/colors, URL, headers, or state grammar"
+  },
+  {
+    "path": "native/solstone-tmux/src/private_link.rs",
+    "value": ".solstone-tmux.private-state.lock",
+    "classification": "machine",
+    "reason": "Pairing identity, mark words/colors, URL, headers, or state grammar"
+  },
+  {
+    "path": "native/solstone-tmux/src/private_link.rs",
+    "value": "solstone_tmux_cap",
+    "classification": "machine",
+    "reason": "Pairing identity, mark words/colors, URL, headers, or state grammar"
+  },
+  {
+    "path": "native/solstone-tmux/src/private_link.rs",
+    "value": "solstone_tmux_",
+    "classification": "machine",
+    "reason": "Pairing identity, mark words/colors, URL, headers, or state grammar"
+  },
+  {
+    "path": "native/solstone-tmux/src/private_link.rs",
+    "value": "x-solstone-observer",
+    "classification": "machine",
+    "reason": "Pairing identity, mark words/colors, URL, headers, or state grammar"
+  },
+  {
+    "path": "native/solstone-tmux/src/private_link.rs",
+    "value": "x-solstone-protocol-version",
+    "classification": "machine",
+    "reason": "Pairing identity, mark words/colors, URL, headers, or state grammar"
+  },
+  {
+    "path": "native/solstone-tmux/src/private_link.rs",
+    "value": "3",
+    "classification": "machine",
+    "reason": "Pairing identity, mark words/colors, URL, headers, or state grammar"
+  },
+  {
+    "path": "native/solstone-tmux/src/private_link.rs",
+    "value": "http://127.0.0.1:{}",
+    "classification": "machine",
+    "reason": "Pairing identity, mark words/colors, URL, headers, or state grammar"
+  },
+  {
+    "path": "native/solstone-tmux/src/private_link.rs",
+    "value": " Why the bridge stopped dialing, if it has: the journal refused this device",
+    "classification": "documentation",
+    "reason": "Rust attribute or doc comment, outside runtime messages"
+  },
+  {
+    "path": "native/solstone-tmux/src/private_link.rs",
+    "value": " with access denied (alert 49), or other refusals reached the bridge's bound.",
+    "classification": "documentation",
+    "reason": "Rust attribute or doc comment, outside runtime messages"
+  },
+  {
+    "path": "native/solstone-tmux/src/private_link.rs",
+    "value": " Either way the bridge never dials again and every request answers 502.",
+    "classification": "documentation",
+    "reason": "Rust attribute or doc comment, outside runtime messages"
+  },
+  {
+    "path": "native/solstone-tmux/src/private_link.rs",
+    "value": "tmux",
+    "classification": "machine",
+    "reason": "Pairing identity, mark words/colors, URL, headers, or state grammar"
+  },
+  {
+    "path": "native/solstone-tmux/src/private_link.rs",
+    "value": "client_label",
+    "classification": "machine",
+    "reason": "Pairing identity, mark words/colors, URL, headers, or state grammar"
+  },
+  {
+    "path": "native/solstone-tmux/src/private_link.rs",
+    "value": "platform",
+    "classification": "machine",
+    "reason": "Pairing identity, mark words/colors, URL, headers, or state grammar"
+  },
+  {
+    "path": "native/solstone-tmux/src/private_link.rs",
+    "value": "platform",
+    "classification": "machine",
+    "reason": "Pairing identity, mark words/colors, URL, headers, or state grammar"
+  },
+  {
+    "path": "native/solstone-tmux/src/private_link.rs",
+    "value": " The spoken form of a paired journal's mark: the two chip-tint names and",
+    "classification": "documentation",
+    "reason": "Rust attribute or doc comment, outside runtime messages"
+  },
+  {
+    "path": "native/solstone-tmux/src/private_link.rs",
+    "value": " the two identity words, in the fixed order the mark is read in.",
+    "classification": "documentation",
+    "reason": "Rust attribute or doc comment, outside runtime messages"
+  },
+  {
+    "path": "native/solstone-tmux/src/private_link.rs",
+    "value": " `None` when the paired instance ID is not a well-formed journal ID.",
+    "classification": "documentation",
+    "reason": "Rust attribute or doc comment, outside runtime messages"
+  },
+  {
+    "path": "native/solstone-tmux/src/private_link.rs",
+    "value": "{}, {} \u00b7 {}\u00b7{}",
+    "classification": "machine",
+    "reason": "Pairing identity, mark words/colors, URL, headers, or state grammar"
+  },
+  {
+    "path": "native/solstone-tmux/src/recovery.rs",
+    "value": " Recovers every stream directory under each capture date, not only the",
+    "classification": "documentation",
+    "reason": "Rust attribute or doc comment, outside runtime messages"
+  },
+  {
+    "path": "native/solstone-tmux/src/recovery.rs",
+    "value": " configured stream: a default stream follows the hostname, so a renamed",
+    "classification": "documentation",
+    "reason": "Rust attribute or doc comment, outside runtime messages"
+  },
+  {
+    "path": "native/solstone-tmux/src/recovery.rs",
+    "value": " machine can leave an interrupted segment under the previous stream name.",
+    "classification": "documentation",
+    "reason": "Rust attribute or doc comment, outside runtime messages"
+  },
+  {
+    "path": "native/solstone-tmux/src/recovery.rs",
+    "value": "captures",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/recovery.rs",
+    "value": ".incomplete",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/recovery.rs",
+    "value": ".incomplete.meta",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/recovery.rs",
+    "value": "{stem}.incomplete",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/recovery.rs",
+    "value": "{stem}.incomplete.meta",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/recovery.rs",
+    "value": "injected source rename failure; source and metadata retained",
+    "classification": "internal",
+    "reason": "Synthetic fault injection payload; no translation of test mechanism"
+  },
+  {
+    "path": "native/solstone-tmux/src/recovery.rs",
+    "value": "injected recovered rename parent fsync failure",
+    "classification": "internal",
+    "reason": "Synthetic fault injection payload; no translation of test mechanism"
+  },
+  {
+    "path": "native/solstone-tmux/src/recovery.rs",
+    "value": "meta",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/recovery.rs",
+    "value": "meta",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/recovery.rs",
+    "value": "{stem}.incomplete",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/recovery.rs",
+    "value": "metadata session exists",
+    "classification": "internal",
+    "reason": "Programmer assertion, not an owner message contract"
+  },
+  {
+    "path": "native/solstone-tmux/src/recovery.rs",
+    "value": "\n",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/recovery.rs",
+    "value": "frame_id",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/recovery.rs",
+    "value": "injected repaired JSONL fsync failure",
+    "classification": "internal",
+    "reason": "Synthetic fault injection payload; no translation of test mechanism"
+  },
+  {
+    "path": "native/solstone-tmux/src/recovery.rs",
+    "value": ".incomplete",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/recovery.rs",
+    "value": "segment",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/recovery.rs",
+    "value": ".{number}",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/recovery.rs",
+    "value": "{stem}{suffix}.failed",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/recovery.rs",
+    "value": "{stem}{suffix}.failed.meta",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/relay_access.rs",
+    "value": " Fetch and apply a capability only after the shared SPL validation succeeds.",
+    "classification": "documentation",
+    "reason": "Rust attribute or doc comment, outside runtime messages"
+  },
+  {
+    "path": "native/solstone-tmux/src/relay_access.rs",
+    "value": " Non-200 and malformed optional responses deliberately preserve the useful",
+    "classification": "documentation",
+    "reason": "Rust attribute or doc comment, outside runtime messages"
+  },
+  {
+    "path": "native/solstone-tmux/src/relay_access.rs",
+    "value": " credential already installed in the opener.",
+    "classification": "documentation",
+    "reason": "Rust attribute or doc comment, outside runtime messages"
+  },
+  {
+    "path": "native/solstone-tmux/src/relay_access.rs",
+    "value": "ready",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/relay_access.rs",
+    "value": "not_configured",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/relay_access.rs",
+    "value": "{FAILURE_LINE}",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/relay_access.rs",
+    "value": "{FAILURE_LINE}",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/relay_access.rs",
+    "value": "v",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/relay_access.rs",
+    "value": "endpoints",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/relay_access.rs",
+    "value": "ip",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/relay_access.rs",
+    "value": "port",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/segment.rs",
+    "value": "{stem}.incomplete",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/segment.rs",
+    "value": "{stem}.incomplete.meta",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/segment.rs",
+    "value": "stored segment wall timestamp was previously valid",
+    "classification": "internal",
+    "reason": "Programmer assertion, not an owner message contract"
+  },
+  {
+    "path": "native/solstone-tmux/src/segment.rs",
+    "value": "\n",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/segment.rs",
+    "value": ".incomplete",
+    "classification": "internal",
+    "reason": "Programmer assertion, not an owner message contract"
+  },
+  {
+    "path": "native/solstone-tmux/src/segment.rs",
+    "value": "segment metadata has an incomplete directory name",
+    "classification": "internal",
+    "reason": "Programmer assertion, not an owner message contract"
+  },
+  {
+    "path": "native/solstone-tmux/src/segment.rs",
+    "value": " Whole-second LEN of a segment key: the measured duration bounded to",
+    "classification": "documentation",
+    "reason": "Rust attribute or doc comment, outside runtime messages"
+  },
+  {
+    "path": "native/solstone-tmux/src/segment.rs",
+    "value": " `[1, segment_interval]`. A poll that runs past the rotation mark, a stop",
+    "classification": "documentation",
+    "reason": "Rust attribute or doc comment, outside runtime messages"
+  },
+  {
+    "path": "native/solstone-tmux/src/segment.rs",
+    "value": " that lands after a long suspension, or a segment stopped within its first",
+    "classification": "documentation",
+    "reason": "Rust attribute or doc comment, outside runtime messages"
+  },
+  {
+    "path": "native/solstone-tmux/src/segment.rs",
+    "value": " second never names a span outside what one segment can hold.",
+    "classification": "documentation",
+    "reason": "Rust attribute or doc comment, outside runtime messages"
+  },
+  {
+    "path": "native/solstone-tmux/src/segment.rs",
+    "value": " Records the bounded length of a segment and the finalized name derived",
+    "classification": "documentation",
+    "reason": "Rust attribute or doc comment, outside runtime messages"
+  },
+  {
+    "path": "native/solstone-tmux/src/segment.rs",
+    "value": " from it. Every path that names a finalized segment goes through here.",
+    "classification": "documentation",
+    "reason": "Rust attribute or doc comment, outside runtime messages"
+  },
+  {
+    "path": "native/solstone-tmux/src/segment.rs",
+    "value": "{stem}_{:03}",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/serialize.rs",
+    "value": "pane",
+    "classification": "machine",
+    "reason": "Serialized envelope or support URL payload; byte contract remains invariant"
+  },
+  {
+    "path": "native/solstone-tmux/src/serialize.rs",
+    "value": "panes",
+    "classification": "machine",
+    "reason": "Serialized envelope or support URL payload; byte contract remains invariant"
+  },
+  {
+    "path": "native/solstone-tmux/src/serialize.rs",
+    "value": "Terminal session '{}' with {} {} in window '{}'",
+    "classification": "machine",
+    "reason": "Serialized envelope or support URL payload; byte contract remains invariant"
+  },
+  {
+    "path": "native/solstone-tmux/src/serialize.rs",
+    "value": "tmux",
+    "classification": "machine",
+    "reason": "Serialized envelope or support URL payload; byte contract remains invariant"
+  },
+  {
+    "path": "native/solstone-tmux/src/serialize.rs",
+    "value": "none",
+    "classification": "machine",
+    "reason": "Serialized envelope or support URL payload; byte contract remains invariant"
+  },
+  {
+    "path": "native/solstone-tmux/src/serialize.rs",
+    "value": ", ",
+    "classification": "machine",
+    "reason": "Serialized envelope or support URL payload; byte contract remains invariant"
+  },
+  {
+    "path": "native/solstone-tmux/src/serialize.rs",
+    "value": ", ",
+    "classification": "machine",
+    "reason": "Serialized envelope or support URL payload; byte contract remains invariant"
+  },
+  {
+    "path": "native/solstone-tmux/src/serialize.rs",
+    "value": ": ",
+    "classification": "machine",
+    "reason": "Serialized envelope or support URL payload; byte contract remains invariant"
+  },
+  {
+    "path": "native/solstone-tmux/src/serialize.rs",
+    "value": "\\u{codepoint:04x}",
+    "classification": "machine",
+    "reason": "Serialized envelope or support URL payload; byte contract remains invariant"
+  },
+  {
+    "path": "native/solstone-tmux/src/serialize.rs",
+    "value": "\\u{high:04x}\\u{low:04x}",
+    "classification": "machine",
+    "reason": "Serialized envelope or support URL payload; byte contract remains invariant"
+  },
+  {
+    "path": "native/solstone-tmux/src/serialize.rs",
+    "value": "\\\"",
+    "classification": "machine",
+    "reason": "Serialized envelope or support URL payload; byte contract remains invariant"
+  },
+  {
+    "path": "native/solstone-tmux/src/serialize.rs",
+    "value": "\\\\",
+    "classification": "machine",
+    "reason": "Serialized envelope or support URL payload; byte contract remains invariant"
+  },
+  {
+    "path": "native/solstone-tmux/src/serialize.rs",
+    "value": "/",
+    "classification": "machine",
+    "reason": "Serialized envelope or support URL payload; byte contract remains invariant"
+  },
+  {
+    "path": "native/solstone-tmux/src/serialize.rs",
+    "value": "\\b",
+    "classification": "machine",
+    "reason": "Serialized envelope or support URL payload; byte contract remains invariant"
+  },
+  {
+    "path": "native/solstone-tmux/src/serialize.rs",
+    "value": "\\f",
+    "classification": "machine",
+    "reason": "Serialized envelope or support URL payload; byte contract remains invariant"
+  },
+  {
+    "path": "native/solstone-tmux/src/serialize.rs",
+    "value": "\\n",
+    "classification": "machine",
+    "reason": "Serialized envelope or support URL payload; byte contract remains invariant"
+  },
+  {
+    "path": "native/solstone-tmux/src/serialize.rs",
+    "value": "\\r",
+    "classification": "machine",
+    "reason": "Serialized envelope or support URL payload; byte contract remains invariant"
+  },
+  {
+    "path": "native/solstone-tmux/src/serialize.rs",
+    "value": "\\t",
+    "classification": "machine",
+    "reason": "Serialized envelope or support URL payload; byte contract remains invariant"
+  },
+  {
+    "path": "native/solstone-tmux/src/serialize.rs",
+    "value": "\\u{byte:04x}",
+    "classification": "machine",
+    "reason": "Serialized envelope or support URL payload; byte contract remains invariant"
+  },
+  {
+    "path": "native/solstone-tmux/src/service/launchd.rs",
+    "value": "com.solstone.tmux",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/service/launchd.rs",
+    "value": "Library/LaunchAgents",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/service/launchd.rs",
+    "value": "{LABEL}.plist",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/service/launchd.rs",
+    "value": "    <key>TMUX_TMPDIR</key>\n<string>{tmux_tmpdir}</string>\n",
+    "classification": "machine",
+    "reason": "Service artifact or parsed subprocess grammar; pinned subprocess locale"
+  },
+  {
+    "path": "native/solstone-tmux/src/service/launchd.rs",
+    "value": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n<key>Label</key>\n<string>{LABEL}</string>\n<key>ProgramArguments</key>\n<array>\n<string>{binary}</string>\n<string>run</string>\n</array>\n<key>EnvironmentVariables</key>\n<dict>\n<key>HOME</key>\n<string>{home}</string>\n<key>PATH</key>\n<string>{service_path}</string>\n{tmux_tmpdir_entry}<key>LC_ALL</key>\n<string>UTF-8</string>\n</dict>\n<key>RunAtLoad</key>\n<true/>\n<key>KeepAlive</key>\n<dict>\n<key>SuccessfulExit</key>\n<false/>\n</dict>\n<key>ThrottleInterval</key>\n<integer>5</integer>\n<key>ProcessType</key>\n<string>Background</string>\n</dict>\n</plist>\n",
+    "classification": "machine",
+    "reason": "Service artifact or parsed subprocess grammar; pinned subprocess locale"
+  },
+  {
+    "path": "native/solstone-tmux/src/service/launchd.rs",
+    "value": "install-service",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/service/launchd.rs",
+    "value": "install-service",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/service/launchd.rs",
+    "value": "uninstall-service",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/service/launchd.rs",
+    "value": " Extracts the job's own pid from `launchctl print` stdout.",
+    "classification": "documentation",
+    "reason": "Rust attribute or doc comment, outside runtime messages"
+  },
+  {
+    "path": "native/solstone-tmux/src/service/launchd.rs",
+    "value": "",
+    "classification": "documentation",
+    "reason": "Rust attribute or doc comment, outside runtime messages"
+  },
+  {
+    "path": "native/solstone-tmux/src/service/launchd.rs",
+    "value": " `launchctl print` renders one root block for the service target, so every field the",
+    "classification": "documentation",
+    "reason": "Rust attribute or doc comment, outside runtime messages"
+  },
+  {
+    "path": "native/solstone-tmux/src/service/launchd.rs",
+    "value": " job itself owns sits at exactly one tab of indentation. Nested blocks such as",
+    "classification": "documentation",
+    "reason": "Rust attribute or doc comment, outside runtime messages"
+  },
+  {
+    "path": "native/solstone-tmux/src/service/launchd.rs",
+    "value": " `environment` and `pid-local endpoints` indent further, and no line inside them can",
+    "classification": "documentation",
+    "reason": "Rust attribute or doc comment, outside runtime messages"
+  },
+  {
+    "path": "native/solstone-tmux/src/service/launchd.rs",
+    "value": " be the job's pid however it is spelled. Matching root depth exactly is what makes",
+    "classification": "documentation",
+    "reason": "Rust attribute or doc comment, outside runtime messages"
+  },
+  {
+    "path": "native/solstone-tmux/src/service/launchd.rs",
+    "value": " this an extractor rather than a scan: a deeper `pid = 777` is another dictionary's",
+    "classification": "documentation",
+    "reason": "Rust attribute or doc comment, outside runtime messages"
+  },
+  {
+    "path": "native/solstone-tmux/src/service/launchd.rs",
+    "value": " field, not this job's.",
+    "classification": "documentation",
+    "reason": "Rust attribute or doc comment, outside runtime messages"
+  },
+  {
+    "path": "native/solstone-tmux/src/service/launchd.rs",
+    "value": "",
+    "classification": "documentation",
+    "reason": "Rust attribute or doc comment, outside runtime messages"
+  },
+  {
+    "path": "native/solstone-tmux/src/service/launchd.rs",
+    "value": " The pid stays a digit string. It is only ever compared for equality, never used as a",
+    "classification": "documentation",
+    "reason": "Rust attribute or doc comment, outside runtime messages"
+  },
+  {
+    "path": "native/solstone-tmux/src/service/launchd.rs",
+    "value": " number, so there is no parse and therefore no overflow case for an absurdly long",
+    "classification": "documentation",
+    "reason": "Rust attribute or doc comment, outside runtime messages"
+  },
+  {
+    "path": "native/solstone-tmux/src/service/launchd.rs",
+    "value": " digit run.",
+    "classification": "documentation",
+    "reason": "Rust attribute or doc comment, outside runtime messages"
+  },
+  {
+    "path": "native/solstone-tmux/src/service/launchd.rs",
+    "value": " = ",
+    "classification": "machine",
+    "reason": "Service artifact or parsed subprocess grammar; pinned subprocess locale"
+  },
+  {
+    "path": "native/solstone-tmux/src/service/launchd.rs",
+    "value": "pid",
+    "classification": "machine",
+    "reason": "Service artifact or parsed subprocess grammar; pinned subprocess locale"
+  },
+  {
+    "path": "native/solstone-tmux/src/service/launchd.rs",
+    "value": "Could not find service \"{LABEL}\" in domain for user gui: {user_id}",
+    "classification": "machine",
+    "reason": "Service artifact or parsed subprocess grammar; pinned subprocess locale"
+  },
+  {
+    "path": "native/solstone-tmux/src/service/launchd.rs",
+    "value": " Confirms the job is loaded with a live pid, and \u2014 when the install left an already",
+    "classification": "documentation",
+    "reason": "Rust attribute or doc comment, outside runtime messages"
+  },
+  {
+    "path": "native/solstone-tmux/src/service/launchd.rs",
+    "value": " running job untouched \u2014 that it is still the same pid `expected_pid` carries.",
+    "classification": "documentation",
+    "reason": "Rust attribute or doc comment, outside runtime messages"
+  },
+  {
+    "path": "native/solstone-tmux/src/service/launchd.rs",
+    "value": "bootout",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/service/launchd.rs",
+    "value": "disable",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/service/launchd.rs",
+    "value": "enable",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/service/launchd.rs",
+    "value": "kill",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/service/launchd.rs",
+    "value": "SIGTERM",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/service/launchd.rs",
+    "value": "print",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/service/launchd.rs",
+    "value": "bootstrap",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/service/launchd.rs",
+    "value": "launchctl",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/service/launchd.rs",
+    "value": "<string>{LABEL}</string>",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/service/launchd.rs",
+    "value": "gui/{user_id}",
+    "classification": "machine",
+    "reason": "Service artifact or parsed subprocess grammar; pinned subprocess locale"
+  },
+  {
+    "path": "native/solstone-tmux/src/service/launchd.rs",
+    "value": "{}/{LABEL}",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/service/launchd.rs",
+    "value": "&amp;",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/service/launchd.rs",
+    "value": "&lt;",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/service/launchd.rs",
+    "value": "&gt;",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/service/launchd.rs",
+    "value": "&quot;",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/service/launchd.rs",
+    "value": "&apos;",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/service/systemd.rs",
+    "value": "solstone-tmux.service",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/service/systemd.rs",
+    "value": "Description=Solstone Tmux Observer\n",
+    "classification": "machine",
+    "reason": "Artifact ownership byte marker"
+  },
+  {
+    "path": "native/solstone-tmux/src/service/systemd.rs",
+    "value": ".config/systemd/user",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/service/systemd.rs",
+    "value": "[Unit]\nDescription=Solstone Tmux Observer\nAfter=basic.target\nStartLimitIntervalSec=0\nStartLimitBurst=5\n\n[Service]\nType=simple\nEnvironment=\"PATH={service_path}\"\nExecStart=\"{binary}\" run\nRestart=on-failure\nRestartSec=5\n\n[Install]\nWantedBy=default.target\n",
+    "classification": "machine",
+    "reason": "Service artifact or parsed subprocess grammar; pinned subprocess locale"
+  },
+  {
+    "path": "native/solstone-tmux/src/service/systemd.rs",
+    "value": "--user",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/service/systemd.rs",
+    "value": "stop",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/service/systemd.rs",
+    "value": "--user",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/service/systemd.rs",
+    "value": "daemon-reload",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/service/systemd.rs",
+    "value": "--user",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/service/systemd.rs",
+    "value": "enable",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/service/systemd.rs",
+    "value": "--now",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/service/systemd.rs",
+    "value": "--user",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/service/systemd.rs",
+    "value": "is-active",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/service/systemd.rs",
+    "value": "active",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/service/systemd.rs",
+    "value": "--user",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/service/systemd.rs",
+    "value": "disable",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/service/systemd.rs",
+    "value": "--now",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/service/systemd.rs",
+    "value": "--user",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/service/systemd.rs",
+    "value": "daemon-reload",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/service/systemd.rs",
+    "value": "--user",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/service/systemd.rs",
+    "value": "is-active",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/service/systemd.rs",
+    "value": "active",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/service/systemd.rs",
+    "value": "inactive",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/service/systemd.rs",
+    "value": "failed",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/service/systemd.rs",
+    "value": "activating",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/service/systemd.rs",
+    "value": "deactivating",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/service/systemd.rs",
+    "value": "\\\\",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/service/systemd.rs",
+    "value": "\\\"",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/service/systemd.rs",
+    "value": "%%",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/service/systemd.rs",
+    "value": "systemctl",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/service.rs",
+    "value": "local-observer.json",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/service.rs",
+    "value": "TMUX_TMPDIR",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/service.rs",
+    "value": "\"tmux_path\"",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/service.rs",
+    "value": "/usr/local/bin",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/service.rs",
+    "value": "/usr/bin",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/service.rs",
+    "value": "/bin",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/service.rs",
+    "value": "/opt/homebrew/bin",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/service.rs",
+    "value": "/usr/local/bin",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/service.rs",
+    "value": "/usr/bin",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/service.rs",
+    "value": "/bin",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/service.rs",
+    "value": "HOME",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/service.rs",
+    "value": "PATH",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/service.rs",
+    "value": "tmux",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/service.rs",
+    "value": "\"tmux_path\"",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/service.rs",
+    "value": "\"tmux_path\"",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/service.rs",
+    "value": "not found",
+    "classification": "machine",
+    "reason": "English subprocess parser vocabulary; service child locale pinned to C"
+  },
+  {
+    "path": "native/solstone-tmux/src/service.rs",
+    "value": "not loaded",
+    "classification": "machine",
+    "reason": "English subprocess parser vocabulary; service child locale pinned to C"
+  },
+  {
+    "path": "native/solstone-tmux/src/service.rs",
+    "value": "could not be found",
+    "classification": "machine",
+    "reason": "English subprocess parser vocabulary; service child locale pinned to C"
+  },
+  {
+    "path": "native/solstone-tmux/src/service.rs",
+    "value": "no such process",
+    "classification": "machine",
+    "reason": "English subprocess parser vocabulary; service child locale pinned to C"
+  },
+  {
+    "path": "native/solstone-tmux/src/storage.rs",
+    "value": " Segment length bounded to `[1 s, segment interval]`; names `finalized_dir`.",
+    "classification": "documentation",
+    "reason": "Rust attribute or doc comment, outside runtime messages"
+  },
+  {
+    "path": "native/solstone-tmux/src/storage.rs",
+    "value": "{finalized_name}.zone.json",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/storage.rs",
+    "value": "injected {stage:?} failure",
+    "classification": "internal",
+    "reason": "Synthetic fault injection payload; no translation of test mechanism"
+  },
+  {
+    "path": "native/solstone-tmux/src/storage.rs",
+    "value": "newly inserted JSONL handle",
+    "classification": "internal",
+    "reason": "Programmer assertion, not an owner message contract"
+  },
+  {
+    "path": "native/solstone-tmux/src/storage.rs",
+    "value": "append",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/storage.rs",
+    "value": "flush",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/storage.rs",
+    "value": "ok",
+    "classification": "machine",
+    "reason": "Diagnostic status token passed as an argument"
+  },
+  {
+    "path": "native/solstone-tmux/src/storage.rs",
+    "value": "ok",
+    "classification": "machine",
+    "reason": "Diagnostic status token passed as an argument"
+  },
+  {
+    "path": "native/solstone-tmux/src/storage.rs",
+    "value": ".{name}.{}.{}.tmp",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/storage.rs",
+    "value": "injected atomic write fault before rename",
+    "classification": "internal",
+    "reason": "Synthetic fault injection payload; no translation of test mechanism"
+  },
+  {
+    "path": "native/solstone-tmux/src/storage.rs",
+    "value": "injected atomic write fault before rename",
+    "classification": "internal",
+    "reason": "Synthetic fault injection payload; no translation of test mechanism"
+  },
+  {
+    "path": "native/solstone-tmux/src/storage.rs",
+    "value": "injected atomic write fault after rename",
+    "classification": "internal",
+    "reason": "Synthetic fault injection payload; no translation of test mechanism"
+  },
+  {
+    "path": "native/solstone-tmux/src/storage.rs",
+    "value": "injected atomic write fault after rename",
+    "classification": "internal",
+    "reason": "Synthetic fault injection payload; no translation of test mechanism"
+  },
+  {
+    "path": "native/solstone-tmux/src/storage.rs",
+    "value": " Limit an injected atomic-write fault to one file. Integration tests run in",
+    "classification": "documentation",
+    "reason": "Rust attribute or doc comment, outside runtime messages"
+  },
+  {
+    "path": "native/solstone-tmux/src/storage.rs",
+    "value": " parallel, so an unrelated state publication must not consume a credential",
+    "classification": "documentation",
+    "reason": "Rust attribute or doc comment, outside runtime messages"
+  },
+  {
+    "path": "native/solstone-tmux/src/storage.rs",
+    "value": " persistence fault before its owner reaches the write.",
+    "classification": "documentation",
+    "reason": "Rust attribute or doc comment, outside runtime messages"
+  },
+  {
+    "path": "native/solstone-tmux/src/support.rs",
+    "value": "https://support.solstone.app",
+    "classification": "machine",
+    "reason": "Serialized envelope or support URL payload; byte contract remains invariant"
+  },
+  {
+    "path": "native/solstone-tmux/src/support.rs",
+    "value": "report",
+    "classification": "machine",
+    "reason": "Serialized envelope or support URL payload; byte contract remains invariant"
+  },
+  {
+    "path": "native/solstone-tmux/src/support.rs",
+    "value": "v1",
+    "classification": "machine",
+    "reason": "Serialized envelope or support URL payload; byte contract remains invariant"
+  },
+  {
+    "path": "native/solstone-tmux/src/support.rs",
+    "value": "app",
+    "classification": "machine",
+    "reason": "Serialized envelope or support URL payload; byte contract remains invariant"
+  },
+  {
+    "path": "native/solstone-tmux/src/support.rs",
+    "value": "solstone for tmux",
+    "classification": "machine",
+    "reason": "Serialized envelope or support URL payload; byte contract remains invariant"
+  },
+  {
+    "path": "native/solstone-tmux/src/support.rs",
+    "value": "CARGO_PKG_VERSION",
+    "classification": "machine",
+    "reason": "Serialized envelope or support URL payload; byte contract remains invariant"
+  },
+  {
+    "path": "native/solstone-tmux/src/support.rs",
+    "value": "version",
+    "classification": "machine",
+    "reason": "Serialized envelope or support URL payload; byte contract remains invariant"
+  },
+  {
+    "path": "native/solstone-tmux/src/support.rs",
+    "value": "os",
+    "classification": "machine",
+    "reason": "Serialized envelope or support URL payload; byte contract remains invariant"
+  },
+  {
+    "path": "native/solstone-tmux/src/support.rs",
+    "value": "os_version",
+    "classification": "machine",
+    "reason": "Serialized envelope or support URL payload; byte contract remains invariant"
+  },
+  {
+    "path": "native/solstone-tmux/src/support.rs",
+    "value": "state",
+    "classification": "machine",
+    "reason": "Serialized envelope or support URL payload; byte contract remains invariant"
+  },
+  {
+    "path": "native/solstone-tmux/src/support.rs",
+    "value": "about",
+    "classification": "machine",
+    "reason": "Serialized envelope or support URL payload; byte contract remains invariant"
+  },
+  {
+    "path": "native/solstone-tmux/src/support.rs",
+    "value": "{}={}",
+    "classification": "machine",
+    "reason": "Serialized envelope or support URL payload; byte contract remains invariant"
+  },
+  {
+    "path": "native/solstone-tmux/src/support.rs",
+    "value": "&",
+    "classification": "machine",
+    "reason": "Serialized envelope or support URL payload; byte contract remains invariant"
+  },
+  {
+    "path": "native/solstone-tmux/src/support.rs",
+    "value": "{HELP_URL}/#{fragment}",
+    "classification": "machine",
+    "reason": "Serialized envelope or support URL payload; byte contract remains invariant"
+  },
+  {
+    "path": "native/solstone-tmux/src/support.rs",
+    "value": "%{byte:02X}",
+    "classification": "internal",
+    "reason": "Programmer assertion, not an owner message contract"
+  },
+  {
+    "path": "native/solstone-tmux/src/support.rs",
+    "value": "writing to a string cannot fail",
+    "classification": "internal",
+    "reason": "Programmer assertion, not an owner message contract"
+  },
+  {
+    "path": "native/solstone-tmux/src/sync.rs",
+    "value": " Points at which sweep progress was published to the health file.",
+    "classification": "documentation",
+    "reason": "Rust attribute or doc comment, outside runtime messages"
+  },
+  {
+    "path": "native/solstone-tmux/src/sync.rs",
+    "value": " Ownership captured before an access GET begins.  A response may publish",
+    "classification": "documentation",
+    "reason": "Rust attribute or doc comment, outside runtime messages"
+  },
+  {
+    "path": "native/solstone-tmux/src/sync.rs",
+    "value": " only while this exact accepted credential revision remains current.",
+    "classification": "documentation",
+    "reason": "Rust attribute or doc comment, outside runtime messages"
+  },
+  {
+    "path": "native/solstone-tmux/src/sync.rs",
+    "value": " A transport callback has no async return path. It leases the accepted",
+    "classification": "documentation",
+    "reason": "Rust attribute or doc comment, outside runtime messages"
+  },
+  {
+    "path": "native/solstone-tmux/src/sync.rs",
+    "value": " adapter generation and queues publication; it never mutates state in",
+    "classification": "documentation",
+    "reason": "Rust attribute or doc comment, outside runtime messages"
+  },
+  {
+    "path": "native/solstone-tmux/src/sync.rs",
+    "value": " the callback itself.",
+    "classification": "documentation",
+    "reason": "Rust attribute or doc comment, outside runtime messages"
+  },
+  {
+    "path": "native/solstone-tmux/src/sync.rs",
+    "value": " Persist and install Ready as a single ordered owner operation.  The",
+    "classification": "documentation",
+    "reason": "Rust attribute or doc comment, outside runtime messages"
+  },
+  {
+    "path": "native/solstone-tmux/src/sync.rs",
+    "value": " receiver may be dropped by a caller timeout; the queued write and the",
+    "classification": "documentation",
+    "reason": "Rust attribute or doc comment, outside runtime messages"
+  },
+  {
+    "path": "native/solstone-tmux/src/sync.rs",
+    "value": " corresponding opener replacement continue to completion.",
+    "classification": "documentation",
+    "reason": "Rust attribute or doc comment, outside runtime messages"
+  },
+  {
+    "path": "native/solstone-tmux/src/sync.rs",
+    "value": " Ordered disable is the sole route used by relay access. It changes the",
+    "classification": "documentation",
+    "reason": "Rust attribute or doc comment, outside runtime messages"
+  },
+  {
+    "path": "native/solstone-tmux/src/sync.rs",
+    "value": " live opener before attempting durability, so a failed disk write cannot",
+    "classification": "documentation",
+    "reason": "Rust attribute or doc comment, outside runtime messages"
+  },
+  {
+    "path": "native/solstone-tmux/src/sync.rs",
+    "value": " leave a relay-only credential usable in this process.",
+    "classification": "documentation",
+    "reason": "Rust attribute or doc comment, outside runtime messages"
+  },
+  {
+    "path": "native/solstone-tmux/src/sync.rs",
+    "value": " Serialize journal-version publication with credential mutations while",
+    "classification": "documentation",
+    "reason": "Rust attribute or doc comment, outside runtime messages"
+  },
+  {
+    "path": "native/solstone-tmux/src/sync.rs",
+    "value": " keeping its separate file and identity checks in VersionRefreshState.",
+    "classification": "documentation",
+    "reason": "Rust attribute or doc comment, outside runtime messages"
+  },
+  {
+    "path": "native/solstone-tmux/src/sync.rs",
+    "value": "macos",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/sync.rs",
+    "value": " Test and lifecycle receipt for the bounded optional burst. It does not",
+    "classification": "documentation",
+    "reason": "Rust attribute or doc comment, outside runtime messages"
+  },
+  {
+    "path": "native/solstone-tmux/src/sync.rs",
+    "value": " affect ingest work and is useful when callers need publication to have",
+    "classification": "documentation",
+    "reason": "Rust attribute or doc comment, outside runtime messages"
+  },
+  {
+    "path": "native/solstone-tmux/src/sync.rs",
+    "value": " reached its terminal owner state.",
+    "classification": "documentation",
+    "reason": "Rust attribute or doc comment, outside runtime messages"
+  },
+  {
+    "path": "native/solstone-tmux/src/sync.rs",
+    "value": " The journal whose answer set this retry schedule. A schedule set by",
+    "classification": "documentation",
+    "reason": "Rust attribute or doc comment, outside runtime messages"
+  },
+  {
+    "path": "native/solstone-tmux/src/sync.rs",
+    "value": " any other journal, or by none, never delays delivery.",
+    "classification": "documentation",
+    "reason": "Rust attribute or doc comment, outside runtime messages"
+  },
+  {
+    "path": "native/solstone-tmux/src/sync.rs",
+    "value": "ack.json",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/sync.rs",
+    "value": "upload",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/sync.rs",
+    "value": "written",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/sync.rs",
+    "value": "already_held",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/sync.rs",
+    "value": "ack.json",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/sync.rs",
+    "value": "upload",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/sync.rs",
+    "value": "state.json",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/sync.rs",
+    "value": "state.json",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/sync.rs",
+    "value": "hold.json",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/sync.rs",
+    "value": "ack.json",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/sync.rs",
+    "value": "state.json",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/sync.rs",
+    "value": "ack.json",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/sync.rs",
+    "value": "state.json",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/sync.rs",
+    "value": "captures",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/sync.rs",
+    "value": "sync-ledger",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/sync.rs",
+    "value": " Finishes local removals for acknowledged and empty candidates. Returns",
+    "classification": "documentation",
+    "reason": "Rust attribute or doc comment, outside runtime messages"
+  },
+  {
+    "path": "native/solstone-tmux/src/sync.rs",
+    "value": " false when a shutdown request stopped it before every candidate was",
+    "classification": "documentation",
+    "reason": "Rust attribute or doc comment, outside runtime messages"
+  },
+  {
+    "path": "native/solstone-tmux/src/sync.rs",
+    "value": " visited.",
+    "classification": "documentation",
+    "reason": "Rust attribute or doc comment, outside runtime messages"
+  },
+  {
+    "path": "native/solstone-tmux/src/sync.rs",
+    "value": "written",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/sync.rs",
+    "value": "invalid:{}",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/sync.rs",
+    "value": "absent:descriptors_absent",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/sync.rs",
+    "value": " A bridge 502 after the bridge stopped dialing is the journal refusing this device, not an",
+    "classification": "documentation",
+    "reason": "Rust attribute or doc comment, outside runtime messages"
+  },
+  {
+    "path": "native/solstone-tmux/src/sync.rs",
+    "value": " outage: the bridge stops on access denied (49) and once other refusals reach its bound.",
+    "classification": "documentation",
+    "reason": "Rust attribute or doc comment, outside runtime messages"
+  },
+  {
+    "path": "native/solstone-tmux/src/sync.rs",
+    "value": "failed reconnect has a retry deadline",
+    "classification": "internal",
+    "reason": "Programmer assertion, not an owner message contract"
+  },
+  {
+    "path": "native/solstone-tmux/src/sync.rs",
+    "value": "{status}:request_too_large",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/sync.rs",
+    "value": "local:request_too_large",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/sync.rs",
+    "value": "{status}:local_segment_invalid",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/sync.rs",
+    "value": "local:local_segment_invalid",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/sync.rs",
+    "value": "{status}:content_conflict",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/sync.rs",
+    "value": "409:content_conflict",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/sync.rs",
+    "value": "ingest_no_files",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/sync.rs",
+    "value": "ingest_sidecar_conflict",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/sync.rs",
+    "value": "ingest_contract_invalid",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/sync.rs",
+    "value": "{status}:{code_str}",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/sync.rs",
+    "value": "400:{code_str}",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/sync.rs",
+    "value": " Enumerates every stream directory under each capture day, not only the",
+    "classification": "documentation",
+    "reason": "Rust attribute or doc comment, outside runtime messages"
+  },
+  {
+    "path": "native/solstone-tmux/src/sync.rs",
+    "value": " stream this run captures into: a default stream follows the hostname, so a",
+    "classification": "documentation",
+    "reason": "Rust attribute or doc comment, outside runtime messages"
+  },
+  {
+    "path": "native/solstone-tmux/src/sync.rs",
+    "value": " renamed machine leaves its earlier segments under the previous stream name.",
+    "classification": "documentation",
+    "reason": "Rust attribute or doc comment, outside runtime messages"
+  },
+  {
+    "path": "native/solstone-tmux/src/sync.rs",
+    "value": " The upload carries no stream, so those segments deliver like any other.",
+    "classification": "documentation",
+    "reason": "Rust attribute or doc comment, outside runtime messages"
+  },
+  {
+    "path": "native/solstone-tmux/src/sync.rs",
+    "value": ".retention-conflict-{index}",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/sync.rs",
+    "value": "tmux_",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/sync.rs",
+    "value": "_screen.jsonl",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/tmux.rs",
+    "value": "list-clients",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/tmux.rs",
+    "value": "-F",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/tmux.rs",
+    "value": "#{client_session} #{client_activity}",
+    "classification": "machine",
+    "reason": "Tmux format grammar passed verbatim to the child process"
+  },
+  {
+    "path": "native/solstone-tmux/src/tmux.rs",
+    "value": "validated window set has one active window",
+    "classification": "internal",
+    "reason": "Programmer assertion, not an owner message contract"
+  },
+  {
+    "path": "native/solstone-tmux/src/tmux.rs",
+    "value": "list-windows",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/tmux.rs",
+    "value": "-t",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/tmux.rs",
+    "value": "-F",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/tmux.rs",
+    "value": "#{window_active} #{window_id} #{window_index} #{window_name}",
+    "classification": "machine",
+    "reason": "Tmux format grammar passed verbatim to the child process"
+  },
+  {
+    "path": "native/solstone-tmux/src/tmux.rs",
+    "value": "list-panes",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/tmux.rs",
+    "value": "-t",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/tmux.rs",
+    "value": "-F",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/tmux.rs",
+    "value": "#{pane_id} #{pane_index} #{pane_left} #{pane_top} #{pane_width} #{pane_height} #{pane_active}",
+    "classification": "machine",
+    "reason": "Tmux format grammar passed verbatim to the child process"
+  },
+  {
+    "path": "native/solstone-tmux/src/tmux.rs",
+    "value": "capture-pane",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/tmux.rs",
+    "value": "-p",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/tmux.rs",
+    "value": "-e",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/tmux.rs",
+    "value": "-t",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/tmux.rs",
+    "value": "0",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  },
+  {
+    "path": "native/solstone-tmux/src/tmux.rs",
+    "value": "1",
+    "classification": "machine",
+    "reason": "Non-prose identifier, parser token, path, URL, wire key, formatting glue, or state value"
+  }
+]

@@ -81,12 +81,13 @@ fn linked_device_sweep_diagnostics_are_actionable() {
     );
     assert_eq!(
         DiagnosticCode::ConfiguredStreamMismatch.message(),
-        "set stream to the hostname-derived tmux name and restart"
+        solstone_tmux::i18n::MessageId::CliHealthMessageSetStreamToTheHostnameDerivedTmuxName
+            .text()
     );
     assert_eq!(DiagnosticCode::JournalRejected.as_str(), "journal_rejected");
     assert_eq!(
         DiagnosticCode::JournalRejected.message(),
-        "journal request was rejected"
+        solstone_tmux::i18n::MessageId::CliHealthMessageJournalRequestWasRejected.text()
     );
 }
 

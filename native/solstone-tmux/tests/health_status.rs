@@ -335,7 +335,10 @@ fn status_is_read_only_when_native_state_is_absent() {
     assert_eq!(lines[1], "sync-health: unknown");
     assert_eq!(lines[2], "journal-version: unknown");
     assert!(lines[3].starts_with("tmux app "));
-    assert_eq!(lines[4], "journal unknown");
+    assert_eq!(
+        lines[4],
+        solstone_tmux::i18n::MessageId::CliAboutSnapshotJournalUnknown.text()
+    );
     assert_eq!(lines[5], "get help: https://support.solstone.app");
     assert!(lines[6].starts_with(
         "report a problem: https://support.solstone.app/#report=v1&app=solstone+for+tmux"

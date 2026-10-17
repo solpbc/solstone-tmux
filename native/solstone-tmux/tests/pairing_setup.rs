@@ -319,7 +319,7 @@ fn relay_pairing_returns_the_paired_journals_spoken_mark() {
         match outcome {
             solstone_tmux::pairing_answer::Outcome::Owner { code, lines } => {
                 assert_eq!(code, 0);
-                assert_eq!(lines, vec![PAIRED.to_string()]);
+                assert_eq!(lines, vec![PAIRED]);
             }
             other => panic!("expected Owner outcome 0, got {other:?}"),
         }
@@ -352,16 +352,24 @@ fn direct_pairing_without_a_well_formed_journal_id_still_succeeds_with_no_spoken
         match outcome {
             solstone_tmux::pairing_answer::Outcome::Owner { code, lines } => {
                 assert_eq!(code, 0);
-                assert_eq!(lines, vec![PAIRED.to_string()]);
+                assert_eq!(lines, vec![PAIRED]);
             }
             other => panic!("expected Owner outcome 0, got {other:?}"),
         }
         let output_str = String::from_utf8_lossy(&output_ref.lock().expect("lock")).into_owned();
-        let step_pos = output_str.find(STEP).expect("step");
-        let mark_pos = output_str.find(MARK_UNAVAILABLE).expect("mark unavailable");
-        let verify_pos = output_str.find(COULDNT_VERIFY).expect("couldn't verify");
-        let body_pos = output_str.find(BODY_UNAVAILABLE).expect("body unavailable");
-        let ask_pos = output_str.find(ASK_UNAVAILABLE).expect("ask unavailable");
+        let step_pos = output_str.find(STEP.text()).expect("step");
+        let mark_pos = output_str
+            .find(MARK_UNAVAILABLE.text())
+            .expect("mark unavailable");
+        let verify_pos = output_str
+            .find(COULDNT_VERIFY.text())
+            .expect("couldn't verify");
+        let body_pos = output_str
+            .find(BODY_UNAVAILABLE.text())
+            .expect("body unavailable");
+        let ask_pos = output_str
+            .find(ASK_UNAVAILABLE.text())
+            .expect("ask unavailable");
         assert!(step_pos < mark_pos);
         assert!(mark_pos < verify_pos);
         assert!(verify_pos < body_pos);

@@ -1,0 +1,39 @@
+{
+  "id": "cli.pairing.prompt.unavailable",
+  "fluent_id": "cli-pairing-prompt-unavailable",
+  "args": [
+    {
+      "name": "step",
+      "type": "text",
+      "description": "Preformatted diagnostic or display value; preserve exactly"
+    },
+    {
+      "name": "mark_line",
+      "type": "text",
+      "description": "Preformatted diagnostic or display value; preserve exactly"
+    },
+    {
+      "name": "summary",
+      "type": "text",
+      "description": "Preformatted diagnostic or display value; preserve exactly"
+    },
+    {
+      "name": "body",
+      "type": "text",
+      "description": "Preformatted diagnostic or display value; preserve exactly"
+    },
+    {
+      "name": "question",
+      "type": "text",
+      "description": "Preformatted diagnostic or display value; preserve exactly"
+    }
+  ],
+  "description": "Whole owner message template with named typed arguments",
+  "surfaces": [
+    "terminal"
+  ],
+  "max_length": null,
+  "risk": "routine",
+  "screenshots": [],
+  "source_revision": "2cc01d9c029cac7c6aa7beeed2f4fdd2c3188c05"
+}

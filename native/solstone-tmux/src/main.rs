@@ -32,7 +32,16 @@ use solstone_tmux::tmux::TmuxAdapter;
 
 fn main() {
     let exit_code = run().unwrap_or_else(|error| {
-        eprintln!("solstone-tmux: {error}");
+        eprintln!(
+            "{}",
+            solstone_tmux::i18n::render(
+                solstone_tmux::i18n::MessageId::CliMainMainSolstoneTmux,
+                &[(
+                    "error",
+                    solstone_tmux::i18n::ArgValue::Text((error).to_string())
+                )]
+            )
+        );
         1
     });
     if exit_code != 0 {
@@ -41,7 +50,9 @@ fn main() {
 }
 
 fn run() -> Result<i32, String> {
-    let command = match cli::parse_args(std::env::args_os()) {
+    let args = solstone_tmux::i18n::process_arguments(std::env::args_os().collect())
+        .map_err(str::to_owned)?;
+    let command = match cli::parse_args(args) {
         Ok(command) => command,
         Err(error) => {
             let _ = writeln!(std::io::stderr().lock(), "{error}");
@@ -105,8 +116,15 @@ fn run() -> Result<i32, String> {
         command => {
             let runtime = runtime()?;
             let runner = TokioCommandRunner;
-            let binary = std::env::current_exe()
-                .map_err(|error| format!("could not find the solstone-tmux executable: {error}"))?;
+            let binary = std::env::current_exe().map_err(|error| {
+                solstone_tmux::i18n::render(
+                    solstone_tmux::i18n::MessageId::CliMainRunCouldNotFindTheSolstoneTmuxExecutable,
+                    &[(
+                        "error",
+                        solstone_tmux::i18n::ArgValue::Text((error).to_string()),
+                    )],
+                )
+            })?;
             let service = ServiceController::new(platform, &environment, &runner, binary);
             runtime.block_on(async {
                 match command {
@@ -154,8 +172,14 @@ fn run() -> Result<i32, String> {
                         println!("service: {service_line}");
                         println!("sync-health: {sync_health_str}");
                         if print_held_lines {
-                            println!("{}", solstone_tmux::pairing_answer::STATUS_HELD_PAIRING);
-                            println!("{}", solstone_tmux::pairing_answer::STATUS_HELD_CONFIRM);
+                            println!(
+                                "{}",
+                                solstone_tmux::pairing_answer::STATUS_HELD_PAIRING.text()
+                            );
+                            println!(
+                                "{}",
+                                solstone_tmux::pairing_answer::STATUS_HELD_CONFIRM.text()
+                            );
                         }
                         println!("journal-version: {}", journal_version.render());
                         let data_root_opt = resolve_data_root(platform, &environment).ok();
@@ -167,13 +191,45 @@ fn run() -> Result<i32, String> {
                         )
                         .await;
                         println!("{}", block.text);
-                        println!("get help: {}", solstone_tmux::support::HELP_URL);
                         println!(
-                            "report a problem: {}",
-                            solstone_tmux::support::report_url(sync_health_str, &block)
+                            "{}",
+                            solstone_tmux::i18n::render(
+                                solstone_tmux::i18n::MessageId::CliMainRunGetHelp,
+                                &[(
+                                    "arg0",
+                                    solstone_tmux::i18n::ArgValue::Text(
+                                        (solstone_tmux::support::HELP_URL).to_string()
+                                    )
+                                )]
+                            )
+                        );
+                        println!(
+                            "{}",
+                            solstone_tmux::i18n::render(
+                                solstone_tmux::i18n::MessageId::CliMainRunReportAProblem,
+                                &[(
+                                    "arg0",
+                                    solstone_tmux::i18n::ArgValue::Text(
+                                        (solstone_tmux::support::report_url(
+                                            sync_health_str,
+                                            &block
+                                        ))
+                                        .to_string()
+                                    )
+                                )]
+                            )
                         );
                         if let Err(error) = &status {
-                            eprintln!("solstone-tmux: {error}");
+                            eprintln!(
+                                "{}",
+                                solstone_tmux::i18n::render(
+                                    solstone_tmux::i18n::MessageId::CliMainMainSolstoneTmux,
+                                    &[(
+                                        "error",
+                                        solstone_tmux::i18n::ArgValue::Text((error).to_string())
+                                    )]
+                                )
+                            );
                         }
                         Ok(status_exit_code(status))
                     }
@@ -230,8 +286,12 @@ fn run_native(
     let config_root =
         resolve_config_root(platform, environment).map_err(|error| error.to_string())?;
     ensure_private_directory(&config_root).map_err(|error| error.to_string())?;
-    let _private_state_lock = private_link::acquire_private_state_lock(&config_root)
-        .map_err(|_| "private state is already in use".to_owned())?;
+    let _private_state_lock =
+        private_link::acquire_private_state_lock(&config_root).map_err(|_| {
+            solstone_tmux::i18n::MessageId::CliMainRunNativePrivateStateIsAlreadyInUse
+                .text()
+                .to_owned()
+        })?;
     let hostname = system_hostname().map_err(|error| error.to_string())?;
     let config = RuntimeConfig::load(&config_root, &hostname).map_err(|error| error.to_string())?;
     let local_observer = load_local_observer(&config_root).map_err(|error| error.to_string())?;
@@ -249,10 +309,26 @@ fn run_native(
             RecoveryAction::Retain | RecoveryAction::Quarantine | RecoveryAction::Failed
         ) {
             eprintln!(
-                "solstone-tmux: warning: recovery {:?} for {}: {}",
-                record.action,
-                record.candidate.display(),
-                record.detail
+                "{}",
+                solstone_tmux::i18n::render(
+                    solstone_tmux::i18n::MessageId::CliMainRunNativeSolstoneTmuxWarningRecoveryFor,
+                    &[
+                        (
+                            "arg0",
+                            solstone_tmux::i18n::ArgValue::Text(format!("{:?}", record.action))
+                        ),
+                        (
+                            "arg1",
+                            solstone_tmux::i18n::ArgValue::Text(
+                                (record.candidate.display()).to_string()
+                            )
+                        ),
+                        (
+                            "arg2",
+                            solstone_tmux::i18n::ArgValue::Text((record.detail).to_string())
+                        )
+                    ]
+                )
             );
         }
     }
@@ -347,7 +423,16 @@ fn run_native(
         },
     ));
     for failure in &exit.failures {
-        eprintln!("solstone-tmux: {failure}");
+        eprintln!(
+            "{}",
+            solstone_tmux::i18n::render(
+                solstone_tmux::i18n::MessageId::CliMainRunNativeSolstoneTmux,
+                &[(
+                    "failure",
+                    solstone_tmux::i18n::ArgValue::Text((failure).to_string())
+                )]
+            )
+        );
     }
     Ok(exit.exit_code)
 }
@@ -355,9 +440,7 @@ fn run_native(
 fn startup_error(segment: &mut SegmentState, error: String) -> Result<i32, String> {
     match segment.remove_confirmed_empty() {
         Ok(_) => Err(error),
-        Err(cleanup) => Err(format!(
-            "{error}; removing the empty startup segment also failed: {cleanup}"
-        )),
+        Err(cleanup) => Err(solstone_tmux::i18n::render(solstone_tmux::i18n::MessageId::CliMainStartupErrorRemovingTheEmptyStartupSegmentAlsoFailed, &[("error", solstone_tmux::i18n::ArgValue::Text((error).to_string())), ("cleanup", solstone_tmux::i18n::ArgValue::Text((cleanup).to_string()))])),
     }
 }
 
@@ -366,5 +449,13 @@ fn runtime() -> Result<tokio::runtime::Runtime, String> {
         .enable_io()
         .enable_time()
         .build()
-        .map_err(|error| format!("could not start the async runtime: {error}"))
+        .map_err(|error| {
+            solstone_tmux::i18n::render(
+                solstone_tmux::i18n::MessageId::CliMainRuntimeCouldNotStartTheAsyncRuntime,
+                &[(
+                    "error",
+                    solstone_tmux::i18n::ArgValue::Text((error).to_string()),
+                )],
+            )
+        })
 }

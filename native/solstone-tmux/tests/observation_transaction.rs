@@ -332,7 +332,9 @@ fn invocation(operation: TmuxOperation, args: &[&str]) -> CommandInvocation {
     CommandInvocation {
         operation: CommandOperation::Tmux(operation),
         executable: PathBuf::from(TMUX),
-        args: args.iter().map(OsString::from).collect(),
+        args: std::iter::once(OsString::from("-u"))
+            .chain(args.iter().map(OsString::from))
+            .collect(),
         timeout: TMUX_TIMEOUT,
     }
 }

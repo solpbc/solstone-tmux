@@ -67,3 +67,5 @@ with `--mark "word word"`. If needed, `confirm` can verify the mark later.
 ## License
 
 AGPL-3.0-only. Copyright (c) 2026 sol pbc.
+
+The isolated [localization experiment](native/solstone-tmux/i18n/README.md) documents its catalog, fixtures, and validation boundaries.

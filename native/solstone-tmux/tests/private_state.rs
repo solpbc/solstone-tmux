@@ -123,7 +123,9 @@ fn assert_invalid_setup_input_creates_no_observer_runtime_state(roots: &Isolated
 
     assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("setup input is invalid"));
+    assert!(
+        stderr.contains(solstone_tmux::i18n::MessageId::CliHealthMessageSetupInputIsInvalid.text())
+    );
     assert!(!stderr.contains(input));
     assert!(!roots.data_root().join(LOCK_FILENAME).exists());
     assert!(!roots.data_root().join("captures").exists());

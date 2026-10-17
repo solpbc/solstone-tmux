@@ -1,0 +1,19 @@
+{
+  "id": "cli.name.fmt.identity-must-not-contain-path-traversal",
+  "fluent_id": "cli-name-fmt-identity-must-not-contain-path-traversal",
+  "args": [],
+  "description": "Terminal diagnostic detail for name.rs. Explain the failed operation. Dynamic arguments are preformatted diagnostic facts, paths, codes, or nested errors and must remain unchanged.",
+  "surfaces": [
+    "terminal"
+  ],
+  "max_length": null,
+  "risk": "routine",
+  "screenshots": [],
+  "source_revision": "2cc01d9c029cac7c6aa7beeed2f4fdd2c3188c05",
+  "sources": [
+    {
+      "path": "native/solstone-tmux/src/name.rs",
+      "line": 46
+    }
+  ]
+}

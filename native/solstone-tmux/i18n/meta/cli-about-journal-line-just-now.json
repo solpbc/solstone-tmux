@@ -1,0 +1,19 @@
+{
+  "id": "cli.about.journal-line.just-now",
+  "fluent_id": "cli-about-journal-line-just-now",
+  "args": [],
+  "description": "Human terminal About display. OS, architecture, version, and build values remain unchanged; protocol About and support-report payloads use canonical English.",
+  "surfaces": [
+    "terminal"
+  ],
+  "max_length": null,
+  "risk": "routine",
+  "screenshots": [],
+  "source_revision": "2cc01d9c029cac7c6aa7beeed2f4fdd2c3188c05",
+  "sources": [
+    {
+      "path": "native/solstone-tmux/src/about.rs",
+      "line": 270
+    }
+  ]
+}

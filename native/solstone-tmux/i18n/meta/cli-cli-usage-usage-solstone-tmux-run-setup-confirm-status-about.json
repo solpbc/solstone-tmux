@@ -1,0 +1,26 @@
+{
+  "id": "cli.cli.usage.usage-solstone-tmux-run-setup-confirm-status-about",
+  "fluent_id": "cli-cli-usage-usage-solstone-tmux-run-setup-confirm-status-about",
+  "args": [
+    {
+      "name": "arg0",
+      "type": "text",
+      "rust_format_spec": "",
+      "description": "Preformatted diagnostic or display value; preserve exactly"
+    }
+  ],
+  "description": "CLI help showing valid command syntax and exit outcomes. arg0 is the mark-option explanation. Preserve all commands, flags, and exit numbers.",
+  "surfaces": [
+    "terminal"
+  ],
+  "max_length": null,
+  "risk": "routine",
+  "screenshots": [],
+  "source_revision": "2cc01d9c029cac7c6aa7beeed2f4fdd2c3188c05",
+  "sources": [
+    {
+      "path": "native/solstone-tmux/src/cli.rs",
+      "line": 111
+    }
+  ]
+}

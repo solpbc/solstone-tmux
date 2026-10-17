@@ -8,7 +8,7 @@ use crate::command::{CommandInvocation, CommandOperation, CommandRunner, Service
 
 use super::{
     COMMAND_TIMEOUT, ServiceError, ServiceStatus, install_artifact, manager_error,
-    remove_owned_regular_file, reports_absent, require_success, utf8_os, utf8_path,
+    remove_owned_regular_file, reports_absent_c_locale, require_success, utf8_os, utf8_path,
     validate_regular_file,
 };
 
@@ -63,12 +63,15 @@ pub async fn prepare_install(
             &["--user", "stop", UNIT_NAME],
         )
         .await?;
-        if output.status != 0 && !reports_absent(&output) {
-            return Err(manager_error("systemd stop", &output));
+        if output.status != 0 && !reports_absent_c_locale(&output) {
+            return Err(manager_error(
+                crate::i18n::MessageId::CliServiceSystemdPrepareInstallSystemdStop.text(),
+                &output,
+            ));
         }
         install_artifact(&path, &bytes)?;
         require_success(
-            "systemd daemon-reload",
+            crate::i18n::MessageId::CliServiceSystemdPrepareInstallSystemdDaemonReload.text(),
             run(
                 runner,
                 ServiceOperation::SystemdDaemonReload,
@@ -82,7 +85,7 @@ pub async fn prepare_install(
 
 pub async fn activate(runner: &dyn CommandRunner) -> Result<(), ServiceError> {
     require_success(
-        "systemd enable",
+        crate::i18n::MessageId::CliServiceSystemdActivateSystemdEnable.text(),
         run(
             runner,
             ServiceOperation::SystemdEnableNow,
@@ -97,7 +100,10 @@ pub async fn activate(runner: &dyn CommandRunner) -> Result<(), ServiceError> {
     )
     .await?;
     if active.status != 0 || String::from_utf8_lossy(&active.stdout).trim() != "active" {
-        return Err(manager_error("systemd active check", &active));
+        return Err(manager_error(
+            crate::i18n::MessageId::CliServiceSystemdActivateSystemdActiveCheck.text(),
+            &active,
+        ));
     }
     Ok(())
 }
@@ -113,12 +119,15 @@ pub async fn uninstall(runner: &dyn CommandRunner, home: &Path) -> Result<(), Se
         &["--user", "disable", "--now", UNIT_NAME],
     )
     .await?;
-    if disabled.status != 0 && !reports_absent(&disabled) {
-        return Err(manager_error("systemd disable", &disabled));
+    if disabled.status != 0 && !reports_absent_c_locale(&disabled) {
+        return Err(manager_error(
+            crate::i18n::MessageId::CliServiceSystemdUninstallSystemdDisable.text(),
+            &disabled,
+        ));
     }
     remove_owned_regular_file(&path, Some(OWNERSHIP_MARKER))?;
     require_success(
-        "systemd daemon-reload",
+        crate::i18n::MessageId::CliServiceSystemdPrepareInstallSystemdDaemonReload.text(),
         run(
             runner,
             ServiceOperation::SystemdDaemonReload,
@@ -143,7 +152,7 @@ pub async fn status(
     .await?;
     if output.status == 0 && String::from_utf8_lossy(&output.stdout).trim() == "active" {
         Ok(ServiceStatus::Active)
-    } else if reports_absent(&output)
+    } else if reports_absent_c_locale(&output)
         || matches!(
             String::from_utf8_lossy(&output.stdout).trim(),
             "inactive" | "failed" | "activating" | "deactivating"
@@ -151,7 +160,10 @@ pub async fn status(
     {
         Ok(ServiceStatus::Inactive)
     } else {
-        Err(manager_error("systemd status", &output))
+        Err(manager_error(
+            crate::i18n::MessageId::CliServiceSystemdStatusSystemdStatus.text(),
+            &output,
+        ))
     }
 }
 
@@ -162,7 +174,7 @@ fn validate_unit(path: &Path) -> Result<bool, ServiceError> {
 fn escape_unit_value(value: &str) -> Result<String, ServiceError> {
     if value.chars().any(char::is_control) {
         return Err(ServiceError::InvalidState(
-            "service paths must not contain control characters".to_owned(),
+            crate::i18n::MessageId::CliServiceSystemdEscapeUnitValueServicePathsMustNotContainControlCharacters.text().to_owned(),
         ));
     }
     let mut escaped = String::with_capacity(value.len());

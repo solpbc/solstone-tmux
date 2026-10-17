@@ -188,6 +188,8 @@ pub async fn host_facts(_runner: &dyn CommandRunner) -> HostFacts {
                 b"0\n" => Some(false),
                 _ => None,
             },
+            // Narrow C-locale parser exception. A generic nonzero exit cannot
+            // prove this sysctl is absent; native version evidence is needed.
             Some(output) if String::from_utf8_lossy(&output.stderr).contains("unknown oid") => {
                 Some(false)
             }
@@ -212,6 +214,7 @@ pub async fn host_facts(_runner: &dyn CommandRunner) -> HostFacts {
 #[derive(Clone, Debug)]
 pub struct AboutBlock {
     pub text: String,
+    pub canonical_text: String,
     pub host: HostFacts,
 }
 
@@ -223,23 +226,42 @@ impl AboutBlock {
         runner: &dyn CommandRunner,
     ) -> Self {
         let host = host_facts(runner).await;
-        let own = render_line(
-            "tmux app",
-            env!("CARGO_PKG_VERSION"),
-            None,
-            &host.os,
-            &host.os_version,
-            &host.arch,
-        );
-        let journal = match (config_root, data_root) {
-            (Some(config), Some(data)) => {
-                let (status, facts, seen_at) = read_journal_about(config, data, now);
-                journal_line(&status, facts.as_ref(), seen_at, now)
-            }
-            _ => "journal unknown".into(),
+        let observed = match (config_root, data_root) {
+            (Some(config), Some(data)) => Some(read_journal_about(config, data, now)),
+            _ => None,
         };
+        let render = |locale| {
+            crate::i18n::with_locale(locale, || {
+                let own = render_line(
+                    crate::i18n::MessageId::CliAboutSnapshotTmuxApp.text(),
+                    env!("CARGO_PKG_VERSION"),
+                    None,
+                    &host.os,
+                    &host.os_version,
+                    &host.arch,
+                );
+                let journal = match &observed {
+                    Some((status, facts, seen_at)) => {
+                        journal_line(status, facts.as_ref(), *seen_at, now)
+                    }
+                    None => crate::i18n::MessageId::CliAboutSnapshotJournalUnknown
+                        .text()
+                        .into(),
+                };
+                crate::i18n::render(
+                    crate::i18n::MessageId::CliAboutBlockLines,
+                    &[
+                        ("own", crate::i18n::ArgValue::Text(own)),
+                        ("journal", crate::i18n::ArgValue::Text(journal)),
+                    ],
+                )
+            })
+        };
+        let text = render(crate::i18n::current_locale());
+        let canonical_text = render(crate::i18n::Locale::EnUs);
         Self {
-            text: format!("{own}\n{journal}"),
+            text,
+            canonical_text,
             host,
         }
     }
@@ -252,31 +274,61 @@ pub fn journal_line(
     now: i64,
 ) -> String {
     let (version, current) = match status {
-        JournalVersionStatus::Unknown => return "journal unknown".into(),
+        JournalVersionStatus::Unknown => {
+            return crate::i18n::MessageId::CliAboutSnapshotJournalUnknown
+                .text()
+                .into();
+        }
         JournalVersionStatus::Current(version) => (version, true),
         JournalVersionStatus::LastKnown(version) => (version, false),
     };
     let facts = facts.filter(|facts| {
         facts.valid() && facts.version.trim_start_matches('v') == version.trim_start_matches('v')
     });
-    let mut line = facts
-        .map(|facts| facts.about.clone())
-        .unwrap_or_else(|| render_line("journal", version, None, "", "", ""));
+    let line = facts
+        .map(|facts| {
+            render_line(
+                crate::i18n::MessageId::CliAboutLabelJournal.text(),
+                &facts.version,
+                facts.build.as_deref(),
+                &facts.os,
+                &facts.os_version,
+                &facts.arch,
+            )
+        })
+        .unwrap_or_else(|| {
+            render_line(
+                crate::i18n::MessageId::CliAboutLabelJournal.text(),
+                version,
+                None,
+                "",
+                "",
+                "",
+            )
+        });
     if !current && let Some(seen_at) = seen_at {
         let seconds = u64::try_from(now)
             .unwrap_or_default()
             .saturating_sub(seen_at);
         let age = match seconds {
-            0..60 => "just now".into(),
-            60..3600 => relative(seconds / 60, "minute"),
-            3600..86400 => relative(seconds / 3600, "hour"),
-            _ => relative(seconds / 86400, "day"),
+            0..60 => crate::i18n::MessageId::CliAboutJournalLineJustNow
+                .text()
+                .into(),
+            60..3600 => relative(seconds / 60, crate::i18n::MessageId::CliAboutAgeMinute),
+            3600..86400 => relative(seconds / 3600, crate::i18n::MessageId::CliAboutAgeHour),
+            _ => relative(seconds / 86400, crate::i18n::MessageId::CliAboutAgeDay),
         };
-        line.push_str(&format!("{SEPARATOR}last seen {age}"));
+        return crate::i18n::render(
+            crate::i18n::MessageId::CliAboutAgeLastSeen,
+            &[
+                ("journal", crate::i18n::ArgValue::Text(line)),
+                ("age", crate::i18n::ArgValue::Text(age)),
+            ],
+        );
     }
     line
 }
 
-fn relative(value: u64, unit: &str) -> String {
-    format!("{value} {unit}{} ago", if value == 1 { "" } else { "s" })
+fn relative(value: u64, message: crate::i18n::MessageId) -> String {
+    crate::i18n::render(message, &[("value", crate::i18n::ArgValue::Number(value))])
 }

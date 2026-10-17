@@ -90,8 +90,24 @@ fn invalid_stream_and_intervals_are_actionable() {
     )
     .expect("write overlong stream");
     let error = RuntimeConfig::load(temporary.path(), "ignored").expect_err("overlong stream");
-    assert!(error.to_string().contains("update stream in config.json"));
-    assert!(error.to_string().contains("201 bytes"));
+    let nested = solstone_tmux::i18n::render(
+        solstone_tmux::i18n::MessageId::CliNameFmtDerivedIdentityIsBytesTheLimitIsBytes,
+        &[
+            ("actual", solstone_tmux::i18n::ArgValue::Text("201".into())),
+            ("limit", solstone_tmux::i18n::ArgValue::Text("200".into())),
+        ],
+    );
+    let expected = solstone_tmux::i18n::render(
+        solstone_tmux::i18n::MessageId::CliConfigFmtNativeStreamNameIsInvalidUpdateStreamIn,
+        &[
+            (
+                "identity",
+                solstone_tmux::i18n::ArgValue::Text(format!("{:?}", "a".repeat(201))),
+            ),
+            ("source", solstone_tmux::i18n::ArgValue::Text(nested)),
+        ],
+    );
+    assert_eq!(error.to_string(), expected);
 
     fs::write(
         &path,

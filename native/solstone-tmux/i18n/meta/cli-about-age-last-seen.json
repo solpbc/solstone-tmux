@@ -1,0 +1,24 @@
+{
+  "id": "cli.about.age.last-seen",
+  "fluent_id": "cli-about-age-last-seen",
+  "args": [
+    {
+      "name": "journal",
+      "type": "text",
+      "description": "Preformatted diagnostic or display value; preserve exactly"
+    },
+    {
+      "name": "age",
+      "type": "text",
+      "description": "Preformatted diagnostic or display value; preserve exactly"
+    }
+  ],
+  "description": "About/status relative age of the last journal observation. value is an integer count of last-seen units; use locale plural grammar.",
+  "surfaces": [
+    "terminal"
+  ],
+  "max_length": null,
+  "risk": "routine",
+  "screenshots": [],
+  "source_revision": "2cc01d9c029cac7c6aa7beeed2f4fdd2c3188c05"
+}

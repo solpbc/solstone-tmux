@@ -1,0 +1,31 @@
+{
+  "id": "cli.tmux.parse-windows.empty-successful-output",
+  "fluent_id": "cli-tmux-parse-windows-empty-successful-output",
+  "args": [],
+  "description": "Terminal diagnostic detail for tmux.rs. Explain the failed operation. Dynamic arguments are preformatted diagnostic facts, paths, codes, or nested errors and must remain unchanged.",
+  "surfaces": [
+    "terminal"
+  ],
+  "max_length": null,
+  "risk": "routine",
+  "screenshots": [],
+  "source_revision": "2cc01d9c029cac7c6aa7beeed2f4fdd2c3188c05",
+  "sources": [
+    {
+      "path": "native/solstone-tmux/src/tmux.rs",
+      "line": 325
+    },
+    {
+      "path": "native/solstone-tmux/src/tmux.rs",
+      "line": 351
+    },
+    {
+      "path": "native/solstone-tmux/src/tmux.rs",
+      "line": 361
+    },
+    {
+      "path": "native/solstone-tmux/src/tmux.rs",
+      "line": 396
+    }
+  ]
+}

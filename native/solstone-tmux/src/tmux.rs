@@ -24,7 +24,16 @@ pub struct StderrWarnings;
 
 impl WarningSink for StderrWarnings {
     fn warn(&self, message: &str) {
-        eprintln!("solstone-tmux: warning: {message}");
+        eprintln!(
+            "{}",
+            crate::i18n::render(
+                crate::i18n::MessageId::CliTmuxWarnSolstoneTmuxWarning,
+                &[(
+                    "message",
+                    crate::i18n::ArgValue::Text((message).to_string())
+                )]
+            )
+        );
     }
 }
 
@@ -53,8 +62,14 @@ impl fmt::Display for TmuxError {
             Self::ExecutableMustBeAbsolute(path) => {
                 write!(
                     formatter,
-                    "tmux executable must be absolute: {}",
-                    path.display()
+                    "{}",
+                    crate::i18n::render(
+                        crate::i18n::MessageId::CliTmuxFmtTmuxExecutableMustBeAbsolute,
+                        &[(
+                            "arg0",
+                            crate::i18n::ArgValue::Text((path.display()).to_string())
+                        )]
+                    )
                 )
             }
             Self::Command(error) => error.fmt(formatter),
@@ -64,17 +79,53 @@ impl fmt::Display for TmuxError {
                 stderr,
             } => write!(
                 formatter,
-                "{operation:?} exited with status {status}: {}",
-                stderr.trim_end()
+                "{}",
+                crate::i18n::render(
+                    crate::i18n::MessageId::CliTmuxFmtExitedWithStatus,
+                    &[
+                        (
+                            "operation",
+                            crate::i18n::ArgValue::Text(format!("{:?}", operation))
+                        ),
+                        ("status", crate::i18n::ArgValue::Text((status).to_string())),
+                        (
+                            "arg0",
+                            crate::i18n::ArgValue::Text((stderr.trim_end()).to_string())
+                        )
+                    ]
+                )
             ),
             Self::InvalidUtf8 { operation, source } => {
                 write!(
                     formatter,
-                    "{operation:?} returned non-UTF-8 output: {source}"
+                    "{}",
+                    crate::i18n::render(
+                        crate::i18n::MessageId::CliTmuxFmtReturnedNonUtfOutput,
+                        &[
+                            (
+                                "operation",
+                                crate::i18n::ArgValue::Text(format!("{:?}", operation))
+                            ),
+                            ("source", crate::i18n::ArgValue::Text((source).to_string()))
+                        ]
+                    )
                 )
             }
             Self::Malformed { operation, detail } => {
-                write!(formatter, "malformed {operation:?} output: {detail}")
+                write!(
+                    formatter,
+                    "{}",
+                    crate::i18n::render(
+                        crate::i18n::MessageId::CliTmuxFmtMalformedOutput,
+                        &[
+                            (
+                                "operation",
+                                crate::i18n::ArgValue::Text(format!("{:?}", operation))
+                            ),
+                            ("detail", crate::i18n::ArgValue::Text((detail).to_string()))
+                        ]
+                    )
+                )
             }
         }
     }
@@ -142,19 +193,31 @@ where
         let mut seen: HashMap<String, usize> = HashMap::new();
         for row in stdout.lines() {
             if row.is_empty() {
-                self.warn_client_row(row, "empty row");
+                self.warn_client_row(
+                    row,
+                    crate::i18n::MessageId::CliTmuxListClientsEmptyRow.text(),
+                );
                 continue;
             }
             let Some((session, activity)) = row.rsplit_once(' ') else {
-                self.warn_client_row(row, "missing activity separator");
+                self.warn_client_row(
+                    row,
+                    crate::i18n::MessageId::CliTmuxListClientsMissingActivitySeparator.text(),
+                );
                 continue;
             };
             if session.is_empty() {
-                self.warn_client_row(row, "empty session identity");
+                self.warn_client_row(
+                    row,
+                    crate::i18n::MessageId::CliTmuxListClientsEmptySessionIdentity.text(),
+                );
                 continue;
             }
             let Ok(activity) = activity.parse::<i64>() else {
-                self.warn_client_row(row, "activity is not an integer");
+                self.warn_client_row(
+                    row,
+                    crate::i18n::MessageId::CliTmuxListClientsActivityIsNotAnInteger.text(),
+                );
                 continue;
             };
             if let Some(index) = seen.get(session).copied() {
@@ -209,17 +272,20 @@ where
         let mut captures = Vec::new();
         for client in clients {
             if let Err(error) = derive_component(&client.session) {
-                self.warnings.warn(&format!(
-                    "session {:?} was skipped before observation: {error}",
-                    client.session
-                ));
+                self.warnings.warn(&crate::i18n::render(crate::i18n::MessageId::CliTmuxCaptureSessionsSessionWasSkippedBeforeObservation, &[("arg0", crate::i18n::ArgValue::Text(format!("{:?}", client.session))), ("error", crate::i18n::ArgValue::Text((error).to_string()))]));
                 continue;
             }
             match self.capture_session(&client.session).await {
                 Ok(capture) => captures.push(capture),
-                Err(error) => self.warnings.warn(&format!(
-                    "session {:?} observation failed: {error}",
-                    client.session
+                Err(error) => self.warnings.warn(&crate::i18n::render(
+                    crate::i18n::MessageId::CliTmuxCaptureSessionsSessionObservationFailed,
+                    &[
+                        (
+                            "arg0",
+                            crate::i18n::ArgValue::Text(format!("{:?}", client.session)),
+                        ),
+                        ("error", crate::i18n::ArgValue::Text((error).to_string())),
+                    ],
                 )),
             }
         }
@@ -298,7 +364,7 @@ where
             .run(CommandInvocation {
                 operation: CommandOperation::Tmux(operation.clone()),
                 executable: self.executable.clone(),
-                args: args.into(),
+                args: std::iter::once(OsString::from("-u")).chain(args).collect(),
                 timeout: TMUX_TIMEOUT,
             })
             .await
@@ -314,15 +380,22 @@ where
     }
 
     fn warn_client_row(&self, row: &str, reason: &str) {
-        self.warnings.warn(&format!(
-            "dropping malformed list-clients row {row:?}: {reason}"
+        self.warnings.warn(&crate::i18n::render(
+            crate::i18n::MessageId::CliTmuxWarnClientRowDroppingMalformedListClientsRow,
+            &[
+                ("row", crate::i18n::ArgValue::Text(format!("{:?}", row))),
+                ("reason", crate::i18n::ArgValue::Text((reason).to_string())),
+            ],
         ));
     }
 }
 
 fn parse_windows(stdout: &str, operation: TmuxOperation) -> Result<Vec<WindowInfo>, TmuxError> {
     if stdout.is_empty() {
-        return malformed(operation, "empty successful output");
+        return malformed(
+            operation,
+            crate::i18n::MessageId::CliTmuxParseWindowsEmptySuccessfulOutput.text(),
+        );
     }
     let mut windows = Vec::new();
     let mut ids = HashSet::new();
@@ -330,15 +403,40 @@ fn parse_windows(stdout: &str, operation: TmuxOperation) -> Result<Vec<WindowInf
     for row in stdout.lines() {
         let fields = row.splitn(4, ' ').collect::<Vec<_>>();
         if fields.len() != 4 || fields[1].is_empty() || fields[3].is_empty() {
-            return malformed(operation, format!("invalid row {row:?}"));
+            return malformed(
+                operation,
+                crate::i18n::render(
+                    crate::i18n::MessageId::CliTmuxParseWindowsInvalidRow,
+                    &[("row", crate::i18n::ArgValue::Text(format!("{:?}", row)))],
+                ),
+            );
         }
-        let active = parse_active(fields[0])
-            .ok_or_else(|| malformed_error(operation.clone(), format!("invalid row {row:?}")))?;
-        let index = fields[2]
-            .parse::<u32>()
-            .map_err(|_| malformed_error(operation.clone(), format!("invalid row {row:?}")))?;
+        let active = parse_active(fields[0]).ok_or_else(|| {
+            malformed_error(
+                operation.clone(),
+                crate::i18n::render(
+                    crate::i18n::MessageId::CliTmuxParseWindowsInvalidRow,
+                    &[("row", crate::i18n::ArgValue::Text(format!("{:?}", row)))],
+                ),
+            )
+        })?;
+        let index = fields[2].parse::<u32>().map_err(|_| {
+            malformed_error(
+                operation.clone(),
+                crate::i18n::render(
+                    crate::i18n::MessageId::CliTmuxParseWindowsInvalidRow,
+                    &[("row", crate::i18n::ArgValue::Text(format!("{:?}", row)))],
+                ),
+            )
+        })?;
         if !ids.insert(fields[1].to_owned()) || !indexes.insert(index) {
-            return malformed(operation, format!("duplicate ID or index in row {row:?}"));
+            return malformed(
+                operation,
+                crate::i18n::render(
+                    crate::i18n::MessageId::CliTmuxParseWindowsDuplicateIdOrIndexInRow,
+                    &[("row", crate::i18n::ArgValue::Text(format!("{:?}", row)))],
+                ),
+            );
         }
         windows.push(WindowInfo {
             id: fields[1].to_owned(),
@@ -348,17 +446,26 @@ fn parse_windows(stdout: &str, operation: TmuxOperation) -> Result<Vec<WindowInf
         });
     }
     if windows.is_empty() {
-        return malformed(operation, "empty successful output");
+        return malformed(
+            operation,
+            crate::i18n::MessageId::CliTmuxParseWindowsEmptySuccessfulOutput.text(),
+        );
     }
     if windows.iter().filter(|window| window.active).count() != 1 {
-        return malformed(operation, "expected exactly one active window");
+        return malformed(
+            operation,
+            crate::i18n::MessageId::CliTmuxParseWindowsExpectedExactlyOneActiveWindow.text(),
+        );
     }
     Ok(windows)
 }
 
 fn parse_panes(stdout: &str, operation: TmuxOperation) -> Result<Vec<PaneInfo>, TmuxError> {
     if stdout.is_empty() {
-        return malformed(operation, "empty successful output");
+        return malformed(
+            operation,
+            crate::i18n::MessageId::CliTmuxParseWindowsEmptySuccessfulOutput.text(),
+        );
     }
     let mut panes = Vec::new();
     let mut ids = HashSet::new();
@@ -366,7 +473,13 @@ fn parse_panes(stdout: &str, operation: TmuxOperation) -> Result<Vec<PaneInfo>, 
     for row in stdout.lines() {
         let fields = row.split(' ').collect::<Vec<_>>();
         if fields.len() != 7 || fields[0].is_empty() {
-            return malformed(operation, format!("invalid row {row:?}"));
+            return malformed(
+                operation,
+                crate::i18n::render(
+                    crate::i18n::MessageId::CliTmuxParseWindowsInvalidRow,
+                    &[("row", crate::i18n::ArgValue::Text(format!("{:?}", row)))],
+                ),
+            );
         }
         let index = parse_u32(fields[1], &operation, row)?;
         let left = parse_u32(fields[2], &operation, row)?;
@@ -374,12 +487,31 @@ fn parse_panes(stdout: &str, operation: TmuxOperation) -> Result<Vec<PaneInfo>, 
         let width = parse_u32(fields[4], &operation, row)?;
         let height = parse_u32(fields[5], &operation, row)?;
         if width == 0 || height == 0 {
-            return malformed(operation, format!("nonpositive pane size in row {row:?}"));
+            return malformed(
+                operation,
+                crate::i18n::render(
+                    crate::i18n::MessageId::CliTmuxParsePanesNonpositivePaneSizeInRow,
+                    &[("row", crate::i18n::ArgValue::Text(format!("{:?}", row)))],
+                ),
+            );
         }
-        let active = parse_active(fields[6])
-            .ok_or_else(|| malformed_error(operation.clone(), format!("invalid row {row:?}")))?;
+        let active = parse_active(fields[6]).ok_or_else(|| {
+            malformed_error(
+                operation.clone(),
+                crate::i18n::render(
+                    crate::i18n::MessageId::CliTmuxParseWindowsInvalidRow,
+                    &[("row", crate::i18n::ArgValue::Text(format!("{:?}", row)))],
+                ),
+            )
+        })?;
         if !ids.insert(fields[0].to_owned()) || !indexes.insert(index) {
-            return malformed(operation, format!("duplicate ID or index in row {row:?}"));
+            return malformed(
+                operation,
+                crate::i18n::render(
+                    crate::i18n::MessageId::CliTmuxParseWindowsDuplicateIdOrIndexInRow,
+                    &[("row", crate::i18n::ArgValue::Text(format!("{:?}", row)))],
+                ),
+            );
         }
         panes.push(PaneInfo {
             id: fields[0].to_owned(),
@@ -393,18 +525,30 @@ fn parse_panes(stdout: &str, operation: TmuxOperation) -> Result<Vec<PaneInfo>, 
         });
     }
     if panes.is_empty() {
-        return malformed(operation, "empty successful output");
+        return malformed(
+            operation,
+            crate::i18n::MessageId::CliTmuxParseWindowsEmptySuccessfulOutput.text(),
+        );
     }
     if panes.iter().filter(|pane| pane.active).count() != 1 {
-        return malformed(operation, "expected exactly one active pane");
+        return malformed(
+            operation,
+            crate::i18n::MessageId::CliTmuxParsePanesExpectedExactlyOneActivePane.text(),
+        );
     }
     Ok(panes)
 }
 
 fn parse_u32(value: &str, operation: &TmuxOperation, row: &str) -> Result<u32, TmuxError> {
-    value
-        .parse::<u32>()
-        .map_err(|_| malformed_error(operation.clone(), format!("invalid row {row:?}")))
+    value.parse::<u32>().map_err(|_| {
+        malformed_error(
+            operation.clone(),
+            crate::i18n::render(
+                crate::i18n::MessageId::CliTmuxParseWindowsInvalidRow,
+                &[("row", crate::i18n::ArgValue::Text(format!("{:?}", row)))],
+            ),
+        )
+    })
 }
 
 fn parse_active(value: &str) -> Option<bool> {

@@ -1,0 +1,19 @@
+{
+  "id": "cli.pairing-answer.copy.body-unavailable",
+  "fluent_id": "cli-pairing-answer-copy-body-unavailable",
+  "args": [],
+  "description": "Terminal journal-pairing ceremony: body unavailable. Keep command names, answer tokens, identity words, and colors unchanged; surrounding copy may translate.",
+  "surfaces": [
+    "terminal"
+  ],
+  "max_length": null,
+  "risk": "account",
+  "screenshots": [],
+  "source_revision": "2cc01d9c029cac7c6aa7beeed2f4fdd2c3188c05",
+  "sources": [
+    {
+      "path": "native/solstone-tmux/src/pairing_answer.rs",
+      "line": 30
+    }
+  ]
+}
