@@ -43,7 +43,7 @@ const LINKED_DEVICE_FILE: &str = "tmux_linked_device_screen.jsonl";
 const LINKED_DEVICE_BYTES: &[u8] = b"linked-device candidate\n";
 // A configured stream that does not derive from the running hostname, so the
 // binding check must refuse before any network work happens.
-const CUSTOM_STREAM_CONFIG: &[u8] = br#"{"stream":"extro.tmux","capture_interval":7,"segment_interval":600,"cache_retention_days":14,"status_indicator":false}"#;
+const CUSTOM_STREAM_CONFIG: &[u8] = br#"{"stream":"fixture.tmux","capture_interval":7,"segment_interval":600,"cache_retention_days":14,"status_indicator":false}"#;
 
 #[tokio::test]
 async fn custom_stream_refuses_before_network_while_capture_continues() {

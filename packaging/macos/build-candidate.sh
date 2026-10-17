@@ -189,22 +189,19 @@ fi
 # -S "$scratch_tmux_socket". Not TMUX_TMPDIR. Not a bare `tmux`. -S.
 #
 # TMUX_TMPDIR IS NOT ISOLATION. When $TMUX is set in the environment — which it
-# is any time this script runs inside a tmux pane, and it always does: the
-# release playbook drives it as
-#     ssh -tt pro5e.local 'tmux-run some-window-name ... build-candidate.sh ...'
-# and `tmux-run` executes it inside a tmux session — tmux reads its socket path
-# out of $TMUX and ignores TMUX_TMPDIR completely. In that context
+# is any time this script runs inside a tmux pane, including a build launched
+# over SSH. tmux reads its socket path out of $TMUX and ignores TMUX_TMPDIR
+# completely. In that context
 #
 #     TMUX_TMPDIR=/some/scratch tmux kill-server
 #
 # is a plain `tmux kill-server` against the scratch host's REAL server —
-# including the very `tmux-run` session this script is running inside.
+# including the parent session this script is running inside.
 #
 # The Linux twin of this bug (packaging/linux/build-release-lane.sh, same
-# TMUX_TMPDIR-as-isolation mistake) killed the extro box's live tmux server
-# twice on 2026-08-08, taking down every pane, the hub daemon and every running
-# lane. That script's DANGER block carries the full incident. This file had the
-# identical defect at five call sites; do not reintroduce it.
+# TMUX_TMPDIR-as-isolation mistake) terminated a build machine's live tmux
+# sessions. This file had the identical defect at five call sites; do not
+# reintroduce it.
 #
 # -S (and -L) are the ONLY forms that override $TMUX. Both halves below are
 # load-bearing; removing either one re-arms the failure:
@@ -285,7 +282,7 @@ else
 fi
 # -S, always. See the DANGER block above. Without it this preflight pair would
 # create a session on, and then kill, the scratch host's live tmux server —
-# including the tmux-run session this script is executing inside.
+# including the parent session this script is executing inside.
 operator_exec tmux -S "$scratch_tmux_socket" -f /dev/null new-session -d -s preflight
 operator_exec tmux -S "$scratch_tmux_socket" kill-server
 

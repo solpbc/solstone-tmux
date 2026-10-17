@@ -80,19 +80,16 @@ work_root="$(mktemp -d "$output_parent/.solstone-tmux-release.XXXXXX")"
 #
 # TMUX_TMPDIR IS NOT ISOLATION. When $TMUX is set in the environment — which it
 # is any time this lane runs inside a tmux pane, i.e. every automated build,
-# every `tmux-run`, every operator shell — tmux reads its socket path out of $TMUX and
+# every nested build session and operator shell — tmux reads its socket path out of $TMUX and
 # ignores TMUX_TMPDIR completely. In that context
 #
 #     TMUX_TMPDIR=/some/scratch tmux kill-server
 #
 # is a plain `tmux kill-server` against the operator's REAL server.
 #
-# This is not hypothetical. That exact line, in this exact cleanup function,
-# killed the extro box's live tmux server twice on 2026-08-08 (13:49 and 14:51
-# MDT), each time ~75s after `make release-linux` started, taking down every
-# pane, the hub daemon, and every running lane with it. The same script run over
-# `ssh spark` on the same afternoon was harmless — because ssh does not carry
-# $TMUX. That asymmetry is exactly how the bug stayed hidden.
+# This mistake has terminated a build machine's live tmux server during a
+# release, taking down its running sessions. Runs over SSH can hide the defect
+# because SSH normally does not carry $TMUX.
 #
 # -S (and -L) are the ONLY forms that override $TMUX. Both halves below are
 # load-bearing; removing either one re-arms the failure:
