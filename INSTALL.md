@@ -123,9 +123,11 @@ binary, but only the pkg is notarized and stapled.
 
 ## Pair and activate
 
+In your journal, open **network** and choose **pair a device**. Copy the pairing link into a plain-text file named `pairing-link.txt` on the computer running tmux. Use it while the dialog is open; the link expires after five minutes and works once. Keep it private.
+
 `setup` and `install-service` are separate steps:
 
-1. `setup` reads one private network pairing link from standard input. Pairing is
+1. `setup` reads one pairing link from standard input. Pairing is
    not complete until you confirm your journal's mark, either interactively or
    with `--mark "word word"`. If needed, `confirm` can verify the mark later:
 

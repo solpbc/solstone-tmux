@@ -6,6 +6,10 @@ Format adapted from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- the install guide now shows where to make a pairing link in your journal and how to use it with solstone-tmux.
+
 ## [2.0.15] - 2026-10-09
 
 ### Fixed
