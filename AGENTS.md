@@ -46,7 +46,7 @@ native/solstone-tmux/
         config.rs                  Native config and hostname-derived defaults
         health.rs                  Closed diagnostics and health snapshots
         indicator.rs               Owned tmux status indicator
-        foreground.rs             Checked foreground executable lookup
+        foreground.rs                Checked foreground executable lookup
         instance_lock.rs           Exclusive data-root lock
         journal.rs                 Journal observer-client protocol
         journal_version.rs         Journal version probing and post-connect trigger
@@ -65,6 +65,7 @@ native/solstone-tmux/
         sync.rs                    Bounded sync and custody
         tmux.rs                    Tmux grammar and transactions
     tests/
+        cases/                     Integration test bodies included by the root *.rs files
         data/                      Golden, tmux, launchd, signature data
         support/                   Shared private-link and package test support
         *.rs                       Integration and contract tests
@@ -136,7 +137,7 @@ network access.
 - Route blocking filesystem and hashing work through Tokio's blocking pool.
 - Use owner-only directories and regular-file, symlink-refusing state access.
 - Use `storage::atomic_write_bytes` and directory sync for durable state.
-- Keep platform adaptation in `paths` and `service`.
+- Keep platform adaptation in `paths`, `foreground`, and `service`.
 - Tests never touch real tmux, systemd, launchd, Apple signing tools, GitHub, or
   external network services.
 - Use existing environment, clock, command, storage, shutdown, dispatcher, and
