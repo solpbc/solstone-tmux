@@ -57,7 +57,7 @@ fn activity_rows_are_compact_and_omit_unspecified_fields() {
         br#"{"v":1,"t":"desktop_activity","kind":"terminal","method":"tmux","ts":1234,"end_ts":1234,"session":"main","window":"dev","pane_title":"title"}"#
         .iter()
         .copied()
-        .chain([b'\n'])
+        .chain(*b"\n")
         .collect::<Vec<_>>()
 );
     assert!(!bytes.windows(4).any(|window| window == b"null"));

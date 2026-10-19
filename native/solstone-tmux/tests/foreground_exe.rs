@@ -5,8 +5,8 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use solstone_tmux::foreground::{
-    ExeFailure, exe_basename, linux_exe_link, linux_exe_path_for_stat, linux_foreground_pgrp,
-    macos_foreground_pid, map_io_error,
+    ExeFailure, exe_basename, linux_exe_path_for_stat, linux_foreground_pgrp, macos_foreground_pid,
+    map_io_error,
 };
 
 #[test]

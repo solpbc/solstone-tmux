@@ -345,14 +345,14 @@ impl SegmentLifecycle for SegmentManager {
                 return Err(operation_error(error));
             }
         }
-        if !activity_jsonl.is_empty() {
-            if let Err(error) = self.segment.append_activity(activity_jsonl, monotonic_now) {
-                if error.is_recoverable_append() {
-                    self.warnings
-                        .warn("activity append rolled back and will retry");
-                } else {
-                    return Err(operation_error(error));
-                }
+        if !activity_jsonl.is_empty()
+            && let Err(error) = self.segment.append_activity(activity_jsonl, monotonic_now)
+        {
+            if error.is_recoverable_append() {
+                self.warnings
+                    .warn("activity append rolled back and will retry");
+            } else {
+                return Err(operation_error(error));
             }
         }
         Ok(())
