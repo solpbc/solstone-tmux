@@ -5,6 +5,7 @@ mod support;
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::future::Future;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -19,13 +20,14 @@ use solstone_tmux::journal::{
     LocalFile, ParsedDescriptor, UploadResult, UploadStatus, decode_upload_response,
     inventory_files,
 };
-use solstone_tmux::model::CaptureResult;
+use solstone_tmux::model::{CaptureResult, PollOutcome};
 use solstone_tmux::observer::{
     CaptureProvider, ObserverConfig, ObserverOperationError, SegmentLifecycle, ShutdownEvent,
     run_observer, shutdown_barrier,
 };
 use solstone_tmux::paths::ensure_private_directory;
-use solstone_tmux::segment::SegmentClose;
+use solstone_tmux::recovery::recover_stream;
+use solstone_tmux::segment::{SegmentClose, SegmentState};
 use solstone_tmux::storage::{
     AtomicWriteFault, CaptureTime, set_atomic_write_fault, set_atomic_write_fault_for_prefix,
 };
@@ -65,6 +67,154 @@ fn one_snapshot_attempts_every_candidate_once_and_yields_between_batches() {
         assert_eq!(instrumentation.batch_yields, instrumentation.batches - 1);
         assert_eq!(journal.uploads().len(), 17);
     });
+}
+
+#[test]
+fn sync_scheduler_activity_only_segment_uploads_writer_and_id_members_without_journal_identity() {
+    run(async {
+        let temporary = TestDirectory::new("activity-only-upload");
+        let day = "20260701";
+        let segment = "120000_300";
+        let directory = segment_path(&temporary, day, segment);
+        std::fs::create_dir_all(&directory).expect("segment directory");
+        let writer = b"{\"v\":1,\"t\":\"desktop_activity\",\"kind\":\"terminal\"}\n";
+        let id_bytes = b"{\"v\":1,\"t\":\"desktop_activity\",\"kind\":\"terminal\"}\n";
+        std::fs::write(directory.join("120000_desktop_activity.jsonl"), writer)
+            .expect("writer activity");
+        std::fs::write(
+            directory.join("120000_opaque-id_desktop_activity.jsonl"),
+            id_bytes,
+        )
+        .expect("id activity");
+
+        let mut scheduler = scheduler(&temporary, SyncWake::default());
+        let mut journal = FakeJournal::default();
+        let summary = scheduler.run_sweep(&mut journal, no_shutdown()).await;
+
+        assert_eq!(summary.custodied, 1);
+        assert_eq!(journal.uploads(), [segment]);
+        assert_eq!(journal.uploaded_bytes.len(), 2);
+        assert_uploaded_activity(
+            &journal.uploaded_bytes,
+            "120000_desktop_activity.jsonl",
+            writer,
+        );
+        assert_uploaded_activity(
+            &journal.uploaded_bytes,
+            "120000_opaque-id_desktop_activity.jsonl",
+            id_bytes,
+        );
+    });
+}
+
+#[test]
+fn sync_scheduler_interrupted_activity_append_recovers_prefix_and_uploads_unchanged_bytes() {
+    run(async {
+        let temporary = TestDirectory::new("interrupted-activity-upload");
+        let day = "20260710";
+        let stream = temporary.path().join("captures").join(day).join(STREAM);
+        std::fs::create_dir_all(&stream).expect("stream directory");
+        let wall = PrimitiveDateTime::new(
+            Date::from_calendar_date(2026, Month::July, 10).expect("date"),
+            Time::from_hms(12, 0, 0).expect("time"),
+        )
+        .assume_utc();
+        let mut active = SegmentState::create(
+            &stream,
+            "120000",
+            wall,
+            Duration::ZERO,
+            UtcOffset::UTC,
+            None,
+            Duration::from_secs(300),
+        )
+        .expect("active segment");
+        let acknowledged = b"{\"v\":1,\"kind\":\"terminal\"}\n";
+        active
+            .append_activity(acknowledged, Duration::from_secs(1))
+            .expect("durable activity prefix");
+        let writer = active
+            .incomplete_dir()
+            .join("120000_desktop_activity.jsonl");
+        drop(active);
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&writer)
+            .expect("open interrupted writer")
+            .write_all(b"{\"v\":1,\"kind\":\"uncommitted\"}\n")
+            .expect("append uncommitted row");
+
+        let lock = InstanceLock::acquire(temporary.path()).expect("recovery lock");
+        let records = recover_stream(&lock, temporary.path(), &stream, Duration::from_secs(300))
+            .expect("recover active segment");
+        assert_eq!(
+            records[0].action,
+            solstone_tmux::recovery::RecoveryAction::RepairThenFinalize
+        );
+        let finalized = &records[0].candidate;
+        assert_eq!(
+            std::fs::read(finalized.join("120000_desktop_activity.jsonl"))
+                .expect("recovered prefix"),
+            acknowledged
+        );
+
+        let mut scheduler = scheduler(&temporary, SyncWake::default());
+        let mut journal = FakeJournal::default();
+        let summary = scheduler.run_sweep(&mut journal, no_shutdown()).await;
+        assert_eq!(summary.custodied, 1);
+        assert_uploaded_activity(
+            &journal.uploaded_bytes,
+            "120000_desktop_activity.jsonl",
+            acknowledged,
+        );
+    });
+}
+
+#[test]
+fn sync_scheduler_nonmatching_activity_member_is_local_segment_invalid_and_not_uploaded() {
+    run(async {
+        let temporary = TestDirectory::new("invalid-activity-member-upload");
+        create_segment(&temporary, "20260701", "120000_300", b"screen\n");
+        std::fs::write(
+            segment_path(&temporary, "20260701", "120000_300").join("not-a-valid_activity.jsonl"),
+            b"invalid member\n",
+        )
+        .expect("invalid member");
+        let mut scheduler = scheduler(&temporary, SyncWake::default());
+        let mut journal = FakeJournal::default();
+
+        let summary = scheduler.run_sweep(&mut journal, no_shutdown()).await;
+
+        assert_eq!(
+            summary.diagnostic,
+            Some(DiagnosticCode::LocalSegmentInvalid)
+        );
+        assert!(journal.uploads().is_empty());
+    });
+}
+
+fn assert_uploaded_activity(uploaded: &[(String, Vec<u8>)], name: &str, expected: &[u8]) {
+    let bytes = uploaded
+        .iter()
+        .find(|(uploaded_name, _)| uploaded_name == name)
+        .map(|(_, bytes)| bytes)
+        .expect("activity member uploaded");
+    assert_eq!(bytes, expected);
+    for line in bytes
+        .split(|byte| *byte == b'\n')
+        .filter(|line| !line.is_empty())
+    {
+        let value: serde_json::Value = serde_json::from_slice(line).expect("activity row JSON");
+        for key in [
+            "client_id",
+            "credential",
+            "observer",
+            "journal",
+            "source_id",
+        ] {
+            assert!(value.get(key).is_none(), "activity row contains {key}");
+        }
+    }
 }
 
 #[test]
@@ -3521,6 +3671,7 @@ struct FakeJournal {
     remote: HashMap<String, HashMap<String, Vec<LocalFile>>>,
     upload_outcomes: HashMap<String, VecDeque<Result<UploadResult, SyncOperationError>>>,
     status_outcomes: VecDeque<Result<(), SyncOperationError>>,
+    uploaded_bytes: Vec<(String, Vec<u8>)>,
     /// Rewrites one file after the receipt is computed, as if the file changed
     /// while the upload was in flight.
     rewrite_after_receipt: Option<(PathBuf, Vec<u8>)>,
@@ -3604,6 +3755,15 @@ impl SyncJournal for FakeJournal {
                     descriptors: None,
                 });
             }
+            for path in &files {
+                let name = path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .expect("uploaded member name")
+                    .to_owned();
+                let bytes = std::fs::read(path).expect("uploaded member bytes");
+                self.uploaded_bytes.push((name, bytes));
+            }
             let inventory = inventory_files(files, None).await.map_err(|_| {
                 SyncOperationError::RetainCandidate {
                     diagnostic: DiagnosticCode::LocalSegmentInvalid,
@@ -3682,13 +3842,16 @@ struct CountingCapture(Arc<AtomicUsize>);
 impl CaptureProvider for CountingCapture {
     fn poll<'a>(
         &'a self,
-        _wall_unix_seconds: i64,
+        _wall_now: time::OffsetDateTime,
         _capture_interval: Duration,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<CaptureResult>, ObserverOperationError>> + Send + 'a>>
+    ) -> Pin<Box<dyn Future<Output = Result<PollOutcome, ObserverOperationError>> + Send + 'a>>
     {
         Box::pin(async move {
             self.0.fetch_add(1, Ordering::SeqCst);
-            Ok(Vec::new())
+            Ok(PollOutcome {
+                captures: Vec::new(),
+                activity_jsonl: Vec::new(),
+            })
         })
     }
 }
@@ -3699,6 +3862,7 @@ impl SegmentLifecycle for CountingSegment {
     fn process_poll(
         &mut self,
         _captures: &[CaptureResult],
+        _activity_jsonl: &[u8],
         _wall_now: time::OffsetDateTime,
         _monotonic_now: Duration,
         _segment_interval: Duration,

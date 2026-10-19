@@ -21,6 +21,9 @@ fn missing_config_uses_hostname_defaults() {
     assert_eq!(config.segment_interval, Duration::from_secs(300));
     assert_eq!(config.cache_retention_days, 7);
     assert!(config.status_indicator);
+    assert!(!config.pane_title);
+    assert!(!config.working_directory);
+    assert!(!config.executable);
     assert_eq!(config.source, DEFAULT_SOURCE);
 }
 
@@ -45,6 +48,9 @@ fn present_config_defaults_status_indicator_to_true() {
         RuntimeConfig::load(temporary.path(), "ignored").expect("load defaulted indicator");
 
     assert!(config.status_indicator);
+    assert!(!config.pane_title);
+    assert!(!config.working_directory);
+    assert!(!config.executable);
     assert_eq!(config.source, DEFAULT_SOURCE);
 }
 
@@ -66,6 +72,9 @@ fn present_config_overrides_defaults_and_is_private() {
     assert_eq!(config.segment_interval, Duration::from_secs(30));
     assert_eq!(config.cache_retention_days, -1);
     assert!(!config.status_indicator);
+    assert!(!config.pane_title);
+    assert!(!config.working_directory);
+    assert!(!config.executable);
     assert_eq!(config.source, DEFAULT_SOURCE);
     assert_eq!(
         fs::metadata(path)
@@ -206,4 +215,41 @@ fn unknown_config_fields_are_still_rejected() {
         RuntimeConfig::load(temporary.path(), "ignored"),
         Err(ConfigError::InvalidConfig { .. })
     ));
+}
+
+#[test]
+fn config_pane_context_switches_default_false_and_enable_independently() {
+    let temporary = TestDirectory::new("config-pane-context");
+    let path = temporary.path().join(CONFIG_FILENAME);
+    fs::write(
+        &path,
+        br#"{"stream":"main","capture_interval":5,"segment_interval":300,"pane_title":false,"working_directory":false,"executable":false}"#,
+    )
+    .expect("write explicit false switches");
+    let config = RuntimeConfig::load(temporary.path(), "ignored").expect("false switches");
+    assert!(!config.pane_title && !config.working_directory && !config.executable);
+
+    for (enabled, expected) in [
+        ("pane_title", (true, false, false)),
+        ("working_directory", (false, true, false)),
+        ("executable", (false, false, true)),
+    ] {
+        let body = format!(
+            "{{\"stream\":\"main\",\"capture_interval\":5,\"segment_interval\":300,\"pane_title\":{},\"working_directory\":{},\"executable\":{}}}",
+            enabled == "pane_title",
+            enabled == "working_directory",
+            enabled == "executable"
+        );
+        fs::write(&path, body).expect("write one enabled switch");
+        let config = RuntimeConfig::load(temporary.path(), "ignored").expect("enabled switch");
+        assert_eq!(
+            (
+                config.pane_title,
+                config.working_directory,
+                config.executable
+            ),
+            expected,
+            "{enabled} is independent"
+        );
+    }
 }

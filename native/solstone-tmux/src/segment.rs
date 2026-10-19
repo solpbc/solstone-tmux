@@ -100,6 +100,7 @@ impl SegmentState {
             last_durable_frame_id: 0,
             durable_frame_count: 0,
             has_durable_frames: false,
+            activity_durable_offset: 0,
             sessions: Default::default(),
         };
         record_length(&mut metadata, Duration::ZERO, segment_interval);
@@ -197,6 +198,53 @@ impl SegmentState {
         Ok(AppendOutcome::Appended { frame_id })
     }
 
+    pub fn append_activity(
+        &mut self,
+        bytes: &[u8],
+        now_monotonic: Duration,
+    ) -> Result<(), SegmentError> {
+        if bytes.is_empty() {
+            return Ok(());
+        }
+        if self.poisoned {
+            return Err(SegmentError::Poisoned);
+        }
+        if self.closed.is_some() {
+            return Err(SegmentError::Closed);
+        }
+        let filename = format!(
+            "{}_desktop_activity.jsonl",
+            segment_stem(self.metadata.incomplete_dir.as_str())
+        );
+        let previous_offset = self.metadata.activity_durable_offset;
+        let mut proposed = self.metadata.clone();
+        proposed.activity_durable_offset = previous_offset
+            .checked_add(bytes.len() as u64)
+            .ok_or(SegmentError::ActivityOffsetOverflow)?;
+        record_length(
+            &mut proposed,
+            now_monotonic.saturating_sub(self.start_monotonic),
+            self.segment_interval,
+        );
+        let durable = self.storage.append_frame(AppendFrame {
+            filename: &filename,
+            previous_offset,
+            bytes,
+            proposed_metadata: proposed,
+        });
+        let durable = match durable {
+            Ok(durable) => durable,
+            Err(error) => {
+                if error.is_poisoned() {
+                    self.poisoned = true;
+                }
+                return Err(SegmentError::Storage(error));
+            }
+        };
+        self.metadata = durable.into_metadata();
+        Ok(())
+    }
+
     pub fn rotation_due(&self, now_monotonic: Duration, interval: Duration) -> bool {
         now_monotonic.saturating_sub(self.start_monotonic) >= interval
     }
@@ -214,7 +262,7 @@ impl SegmentState {
         if self.poisoned {
             return Err(SegmentError::Poisoned);
         }
-        if !self.metadata.has_durable_frames {
+        if !self.metadata.has_durable_frames && self.metadata.activity_durable_offset == 0 {
             return self.remove_confirmed_empty();
         }
 
@@ -261,6 +309,7 @@ impl SegmentState {
             return Ok(closed.clone());
         }
         if self.metadata.has_durable_frames
+            || self.metadata.activity_durable_offset != 0
             || self.metadata.durable_frame_count != 0
             || self
                 .metadata
@@ -418,6 +467,7 @@ pub enum SegmentError {
     Closed,
     NotEmpty,
     FrameIdOverflow,
+    ActivityOffsetOverflow,
 }
 
 impl From<StorageError> for SegmentError {
@@ -455,6 +505,7 @@ impl fmt::Display for SegmentError {
             Self::Closed => write!(formatter, "segment is already closed"),
             Self::NotEmpty => write!(formatter, "segment is not metadata-confirmed empty"),
             Self::FrameIdOverflow => write!(formatter, "segment frame_id overflow"),
+            Self::ActivityOffsetOverflow => write!(formatter, "segment activity offset overflow"),
         }
     }
 }

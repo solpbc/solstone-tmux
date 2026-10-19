@@ -63,6 +63,10 @@ with `--mark "word word"`. If needed, `confirm` can verify the mark later.
   has proven custody.
 - Keeps taking in what you share when pairing or sync is unavailable.
 - Emits diagnostics that exclude pane content and tmux session names.
+- Pane titles, working directories, and executable names are off by default; set
+  `pane_title`, `working_directory`, or `executable` in `config.json` to record
+  each independently. Titles and paths can be sensitive; restart the service
+  after changing them.
 
 ## License
 

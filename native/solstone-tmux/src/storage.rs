@@ -43,6 +43,8 @@ pub struct SegmentMetadata {
     pub last_durable_frame_id: u64,
     pub durable_frame_count: u64,
     pub has_durable_frames: bool,
+    #[serde(default)]
+    pub activity_durable_offset: u64,
     pub sessions: BTreeMap<String, SessionMetadata>,
 }
 

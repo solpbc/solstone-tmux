@@ -5,13 +5,17 @@ use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::fmt;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::command::{
-    CommandError, CommandInvocation, CommandOperation, CommandOutput, CommandRunner, TmuxOperation,
+    CommandError, CommandInvocation, CommandOperation, CommandOutput, CommandRunner, DisplayField,
+    TmuxOperation,
 };
-use crate::model::{CaptureResult, ClientInfo, PaneInfo, WindowInfo};
+use crate::foreground::{ExeFailure, ForegroundLookup, SystemLookup};
+use crate::model::{CaptureResult, ClientInfo, PaneInfo, PollOutcome, WindowInfo};
 use crate::name::derive_component;
+use crate::serialize::{serialize_availability_activity, serialize_terminal_activity};
 
 pub const TMUX_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -100,6 +104,10 @@ pub struct TmuxAdapter<R, W = StderrWarnings> {
     runner: R,
     warnings: W,
     executable: PathBuf,
+    pane_title: bool,
+    working_directory: bool,
+    executable_enabled: bool,
+    lookup: Arc<dyn ForegroundLookup>,
 }
 
 impl<R> TmuxAdapter<R, StderrWarnings>
@@ -124,7 +132,191 @@ where
             runner,
             warnings,
             executable,
+            pane_title: false,
+            working_directory: false,
+            executable_enabled: false,
+            lookup: Arc::new(SystemLookup),
         })
+    }
+
+    pub fn with_context(
+        executable: PathBuf,
+        runner: R,
+        warnings: W,
+        pane_title: bool,
+        working_directory: bool,
+        executable_enabled: bool,
+        lookup: Arc<dyn ForegroundLookup>,
+    ) -> Result<Self, TmuxError> {
+        if !executable.is_absolute() {
+            return Err(TmuxError::ExecutableMustBeAbsolute(executable));
+        }
+        Ok(Self {
+            runner,
+            warnings,
+            executable,
+            pane_title,
+            working_directory,
+            executable_enabled,
+            lookup,
+        })
+    }
+
+    pub async fn poll_context(
+        &self,
+        wall_now: time::OffsetDateTime,
+        capture_interval: Duration,
+    ) -> Result<PollOutcome, TmuxError> {
+        let clients = self
+            .list_active_clients(wall_now.unix_timestamp(), capture_interval)
+            .await?;
+        let mut captures = Vec::new();
+        let mut activity_jsonl = Vec::new();
+        let mut any_failure = false;
+        let mut any_unavailable = false;
+        let ts = (wall_now.unix_timestamp_nanos() / 1_000_000) as i64;
+
+        for client in clients {
+            if let Err(error) = derive_component(&client.session) {
+                self.warnings.warn(&format!(
+                    "session {:?} was skipped before observation: {error}",
+                    client.session
+                ));
+                continue;
+            }
+            let capture = match self.capture_session(&client.session).await {
+                Ok(capture) => capture,
+                Err(error) => {
+                    self.warnings.warn(&format!(
+                        "session {:?} observation failed: {error}",
+                        client.session
+                    ));
+                    continue;
+                }
+            };
+            if self.pane_title || self.working_directory || self.executable_enabled {
+                for pane in &capture.panes {
+                    let mut pane_title = None;
+                    let mut cwd = None;
+                    let mut exe = None;
+
+                    if self.pane_title {
+                        match self
+                            .display_message(&pane.id, DisplayField::PaneTitle)
+                            .await
+                        {
+                            Ok(value) => pane_title = Some(value),
+                            Err(()) => {
+                                any_failure = true;
+                                any_unavailable = true;
+                                self.warnings
+                                    .warn("pane title was not recorded (unavailable)");
+                            }
+                        }
+                    }
+                    if self.working_directory {
+                        match self
+                            .display_message(&pane.id, DisplayField::PaneCurrentPath)
+                            .await
+                        {
+                            Ok(value) => cwd = Some(value),
+                            Err(()) => {
+                                any_failure = true;
+                                any_unavailable = true;
+                                self.warnings
+                                    .warn("working directory was not recorded (unavailable)");
+                            }
+                        }
+                    }
+                    if self.executable_enabled {
+                        let pid = self.display_message(&pane.id, DisplayField::PanePid).await;
+                        let tty = self.display_message(&pane.id, DisplayField::PaneTty).await;
+                        let pid = match pid {
+                            Ok(value) => value.parse::<u32>().ok().filter(|pid| *pid != 0),
+                            Err(()) => None,
+                        };
+                        let tty = match tty {
+                            Ok(value) if !value.is_empty() => Some(value),
+                            _ => None,
+                        };
+                        if pid.is_none() {
+                            any_failure = true;
+                            any_unavailable = true;
+                            self.warnings
+                                .warn("executable was not recorded (unavailable)");
+                        }
+                        if tty.is_none() {
+                            any_failure = true;
+                            any_unavailable = true;
+                            self.warnings
+                                .warn("executable was not recorded (unavailable)");
+                        }
+                        if let (Some(pid), Some(tty)) = (pid, tty) {
+                            match self.lookup.lookup(&tty, pid).await {
+                                Ok(value) if !value.is_empty() => exe = Some(value),
+                                Ok(_) | Err(ExeFailure::Unavailable) => {
+                                    any_failure = true;
+                                    any_unavailable = true;
+                                    self.warnings
+                                        .warn("executable was not recorded (unavailable)");
+                                }
+                                Err(ExeFailure::Unsupported) => {
+                                    any_failure = true;
+                                    self.warnings
+                                        .warn("executable was not recorded (unsupported)");
+                                }
+                            }
+                        }
+                    }
+                    if pane_title.is_some() || cwd.is_some() || exe.is_some() {
+                        activity_jsonl.extend(serialize_terminal_activity(
+                            ts,
+                            &capture.session,
+                            &capture.window.name,
+                            pane_title.as_deref(),
+                            cwd.as_deref(),
+                            exe.as_deref(),
+                        ));
+                    }
+                }
+            }
+            captures.push(capture);
+        }
+
+        if any_failure {
+            let status = if any_unavailable {
+                "unavailable"
+            } else {
+                "unsupported"
+            };
+            activity_jsonl.extend(serialize_availability_activity(ts, status));
+        }
+        Ok(PollOutcome {
+            captures,
+            activity_jsonl,
+        })
+    }
+
+    async fn display_message(&self, target: &str, field: DisplayField) -> Result<String, ()> {
+        let operation = TmuxOperation::DisplayMessage {
+            target: target.to_owned(),
+            field,
+        };
+        let output = self
+            .run(
+                operation,
+                [
+                    OsString::from("display-message"),
+                    OsString::from("-p"),
+                    OsString::from("-t"),
+                    OsString::from(target),
+                    OsString::from(field.format()),
+                ],
+            )
+            .await
+            .map_err(|_| ())?;
+        let value = std::str::from_utf8(&output.stdout).map_err(|_| ())?;
+        value.strip_suffix('\n').map(str::to_owned).ok_or(())
     }
 
     pub async fn list_clients(&self) -> Result<Vec<ClientInfo>, TmuxError> {

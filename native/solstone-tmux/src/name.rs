@@ -112,3 +112,16 @@ pub fn derive_component(raw: &str) -> Result<DerivedName, NameError> {
     }
     Ok(DerivedName(component))
 }
+
+pub fn valid_activity_filename(name: &str, stem: &str) -> bool {
+    if name == format!("{stem}_desktop_activity.jsonl") {
+        return derive_component(name).is_ok_and(|component| component.as_str() == name);
+    }
+    let Some(id) = name
+        .strip_prefix(&format!("{stem}_"))
+        .and_then(|value| value.strip_suffix("_desktop_activity.jsonl"))
+    else {
+        return false;
+    };
+    !id.is_empty() && derive_component(name).is_ok_and(|component| component.as_str() == name)
+}

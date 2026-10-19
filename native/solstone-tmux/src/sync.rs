@@ -32,7 +32,7 @@ use crate::journal::{
     stream_sha256_hex,
 };
 use crate::journal_version::{VersionRefreshState, hex_encode};
-use crate::name::{DerivedName, derive_component};
+use crate::name::{DerivedName, derive_component, valid_activity_filename};
 use crate::paths::{self, PlatformKind};
 use crate::private_link::{
     PrivateLinkBridge, PrivateLinkOpener, load_credential, persist_credential,
@@ -2827,7 +2827,10 @@ fn resolve_segment_files(
         let Ok(name) = entry.file_name().into_string() else {
             return ResolvedSegmentFiles::Invalid;
         };
-        if !valid_capture_filename(&name) || !plain_regular_entry(&entry) {
+        let stem = candidate.segment().split_once('_').map(|(stem, _)| stem);
+        let valid_member = valid_capture_filename(&name)
+            || stem.is_some_and(|stem| valid_activity_filename(&name, stem));
+        if !valid_member || !plain_regular_entry(&entry) {
             return ResolvedSegmentFiles::Invalid;
         }
         let Some(component) = exact_component(&name) else {

@@ -34,3 +34,9 @@ pub struct CaptureResult {
     pub windows: Vec<WindowInfo>,
     pub panes: Vec<PaneInfo>,
 }
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PollOutcome {
+    pub captures: Vec<CaptureResult>,
+    pub activity_jsonl: Vec<u8>,
+}

@@ -12,7 +12,7 @@ use serde_json::Value;
 use time::{Date, Month, OffsetDateTime, UtcOffset};
 
 use crate::instance_lock::InstanceLock;
-use crate::name::derive_component;
+use crate::name::{derive_component, valid_activity_filename};
 use crate::segment::{finalized_name, record_length};
 use crate::storage::{
     CaptureTime, MetadataLifecycle, SegmentMetadata, atomic_write_metadata, sync_directory,
@@ -269,6 +269,7 @@ fn recover_candidate(
             || (metadata.durable_frame_count == 0
                 && metadata.last_durable_frame_id == 0
                 && !metadata.has_durable_frames
+                && metadata.activity_durable_offset == 0
                 && metadata
                     .sessions
                     .values()
@@ -354,49 +355,53 @@ fn recover_candidate(
     if metadata.durable_frame_count == 0
         && metadata.last_durable_frame_id == 0
         && !metadata.has_durable_frames
+        && metadata.activity_durable_offset == 0
         && metadata
             .sessions
             .values()
             .all(|session| session.durable_offset == 0)
     {
-        if let Some(validated) = validated_empty_files(&source)? {
-            if let Some(before_empty_removal) = options.before_empty_removal {
-                before_empty_removal(&source).map_err(|source_error| RecoveryError::Io {
-                    operation: "run confirmed-empty pre-removal hook",
+        truncate_uncommitted_activity_writer(&source, stem)?;
+        if !has_nonempty_id_activity_file(&source, stem)? {
+            if let Some(validated) = validated_empty_files(&source)? {
+                if let Some(before_empty_removal) = options.before_empty_removal {
+                    before_empty_removal(&source).map_err(|source_error| RecoveryError::Io {
+                        operation: "run confirmed-empty pre-removal hook",
+                        path: source.clone(),
+                        source: source_error,
+                    })?;
+                }
+                if !remove_validated_empty_files(&source, &validated)? {
+                    return Ok(record(
+                        source,
+                        RecoveryAction::Retain,
+                        "confirmed-empty segment changed before removal; retained without deleting unvalidated entries",
+                    ));
+                }
+                fs::remove_dir(&source).map_err(|source_error| RecoveryError::Io {
+                    operation: "remove confirmed-empty segment",
                     path: source.clone(),
                     source: source_error,
                 })?;
-            }
-            if !remove_validated_empty_files(&source, &validated)? {
+                fs::remove_file(&metadata_path).map_err(|source_error| RecoveryError::Io {
+                    operation: "remove confirmed-empty metadata",
+                    path: metadata_path.clone(),
+                    source: source_error,
+                })?;
+                sync_directory(stream_dir)?;
                 return Ok(record(
                     source,
-                    RecoveryAction::Retain,
-                    "confirmed-empty segment changed before removal; retained without deleting unvalidated entries",
+                    RecoveryAction::Remove,
+                    "valid metadata positively confirmed an empty segment",
                 ));
             }
-            fs::remove_dir(&source).map_err(|source_error| RecoveryError::Io {
-                operation: "remove confirmed-empty segment",
-                path: source.clone(),
-                source: source_error,
-            })?;
-            fs::remove_file(&metadata_path).map_err(|source_error| RecoveryError::Io {
-                operation: "remove confirmed-empty metadata",
-                path: metadata_path.clone(),
-                source: source_error,
-            })?;
-            sync_directory(stream_dir)?;
-            return Ok(record(
-                source,
-                RecoveryAction::Remove,
-                "valid metadata positively confirmed an empty segment",
-            ));
+            return quarantine(
+                stream_dir,
+                &source,
+                &metadata_path,
+                "empty metadata contradicts JSONL bytes",
+            );
         }
-        return quarantine(
-            stream_dir,
-            &source,
-            &metadata_path,
-            "empty metadata contradicts JSONL bytes",
-        );
     }
 
     let validation = validate_files(&source, &metadata)?;
@@ -452,7 +457,7 @@ fn recover_candidate(
             RecoveryAction::Finalized
         },
         if repaired {
-            "repaired only a torn final line and finalized"
+            "repaired durable file tails and finalized"
         } else {
             "validated durable bytes and finalized"
         },
@@ -528,7 +533,9 @@ fn metadata_is_consistent(metadata: &SegmentMetadata, stem: &str) -> bool {
         || metadata.has_durable_frames != (metadata.durable_frame_count > 0)
         || metadata.durable_frame_count != metadata.last_durable_frame_id
         || (metadata.lifecycle == MetadataLifecycle::Creating
-            && (metadata.durable_frame_count != 0 || !metadata.sessions.is_empty()))
+            && (metadata.durable_frame_count != 0
+                || metadata.activity_durable_offset != 0
+                || !metadata.sessions.is_empty()))
     {
         return false;
     }
@@ -580,6 +587,10 @@ fn validate_files(
         .values()
         .map(|session| session.filename.as_str())
         .collect::<BTreeSet<_>>();
+    let stem = metadata
+        .incomplete_dir
+        .strip_suffix(".incomplete")
+        .expect("consistent metadata has an incomplete directory name");
     for entry in fs::read_dir(directory).map_err(|source| RecoveryError::Io {
         operation: "scan incomplete segment",
         path: directory.to_owned(),
@@ -599,7 +610,10 @@ fn validate_files(
         let Some(name) = name.to_str() else {
             return Ok(contradiction("non-UTF-8 filename in segment"));
         };
-        if kind.is_symlink() || !kind.is_file() || !expected.contains(name) {
+        if kind.is_symlink()
+            || !kind.is_file()
+            || (!expected.contains(name) && !valid_activity_filename(name, stem))
+        {
             return Ok(contradiction("unknown or non-regular file in segment"));
         }
     }
@@ -658,6 +672,48 @@ fn validate_files(
             });
         }
         all_ids.append(&mut ids);
+    }
+    let activity_path = directory.join(format!("{stem}_desktop_activity.jsonl"));
+    match fs::read(&activity_path) {
+        Ok(bytes) => {
+            let recorded = match usize::try_from(metadata.activity_durable_offset) {
+                Ok(recorded) => recorded,
+                Err(_) => return Ok(contradiction("activity file offset is too large")),
+            };
+            if bytes.len() < recorded {
+                return Ok(contradiction(
+                    "activity JSONL is shorter than its durable offset",
+                ));
+            }
+            let prefix = &bytes[..recorded];
+            let repaired_offset = if prefix.is_empty() || prefix.ends_with(b"\n") {
+                recorded
+            } else {
+                prefix
+                    .iter()
+                    .rposition(|byte| *byte == b'\n')
+                    .map_or(0, |index| index + 1)
+            };
+            if repaired_offset != recorded || bytes.len() > recorded {
+                repairs.push(FileRepair {
+                    path: activity_path,
+                    offset: repaired_offset as u64,
+                });
+                updated.activity_durable_offset = repaired_offset as u64;
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            if metadata.activity_durable_offset != 0 {
+                return Ok(contradiction("activity JSONL is missing"));
+            }
+        }
+        Err(source) => {
+            return Err(RecoveryError::Io {
+                operation: "read activity JSONL during recovery",
+                path: activity_path,
+                source,
+            });
+        }
     }
     all_ids.sort_unstable();
     let expected_count = all_ids.len() as u64;
@@ -798,6 +854,67 @@ fn validated_empty_files(
         });
     }
     Ok(Some(validated))
+}
+
+fn truncate_uncommitted_activity_writer(directory: &Path, stem: &str) -> Result<(), RecoveryError> {
+    let path = directory.join(format!("{stem}_desktop_activity.jsonl"));
+    let metadata = match fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(source) => {
+            return Err(RecoveryError::Io {
+                operation: "inspect uncommitted activity JSONL",
+                path,
+                source,
+            });
+        }
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() == 0 {
+        return Ok(());
+    }
+    let file = OpenOptions::new()
+        .write(true)
+        .open(&path)
+        .map_err(|source| RecoveryError::Io {
+            operation: "open uncommitted activity JSONL",
+            path: path.clone(),
+            source,
+        })?;
+    file.set_len(0)
+        .and_then(|()| file.sync_all())
+        .map_err(|source| RecoveryError::Io {
+            operation: "truncate uncommitted activity JSONL",
+            path: path.clone(),
+            source,
+        })?;
+    sync_directory(directory)?;
+    Ok(())
+}
+
+fn has_nonempty_id_activity_file(directory: &Path, stem: &str) -> Result<bool, RecoveryError> {
+    for entry in fs::read_dir(directory).map_err(|source| RecoveryError::Io {
+        operation: "scan activity members in empty segment",
+        path: directory.to_owned(),
+        source,
+    })? {
+        let entry = entry.map_err(|source| RecoveryError::Io {
+            operation: "read activity member in empty segment",
+            path: directory.to_owned(),
+            source,
+        })?;
+        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        if name != format!("{stem}_desktop_activity.jsonl")
+            && valid_activity_filename(&name, stem)
+            && fs::symlink_metadata(entry.path()).is_ok_and(|metadata| {
+                !metadata.file_type().is_symlink() && metadata.is_file() && metadata.len() > 0
+            })
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn remove_validated_empty_files(

@@ -17,7 +17,7 @@ use crate::command::CommandRunner;
 use crate::health::DiagnosticCode;
 use crate::indicator::{IndicatorIo, IndicatorOwnership, ServerIndicator};
 use crate::instance_lock::InstanceLock;
-use crate::model::CaptureResult;
+use crate::model::{CaptureResult, PollOutcome};
 use crate::name::DerivedName;
 use crate::paths::ensure_private_directory;
 use crate::segment::{SegmentClose, SegmentError, SegmentState};
@@ -41,9 +41,9 @@ pub struct ObserverConfig {
 pub trait CaptureProvider: Send + Sync {
     fn poll<'a>(
         &'a self,
-        wall_unix_seconds: i64,
+        wall_now: OffsetDateTime,
         capture_interval: Duration,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<CaptureResult>, ObserverOperationError>> + Send + 'a>>;
+    ) -> Pin<Box<dyn Future<Output = Result<PollOutcome, ObserverOperationError>> + Send + 'a>>;
 }
 
 impl<R, W> CaptureProvider for TmuxAdapter<R, W>
@@ -53,16 +53,14 @@ where
 {
     fn poll<'a>(
         &'a self,
-        wall_unix_seconds: i64,
+        wall_now: OffsetDateTime,
         capture_interval: Duration,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<CaptureResult>, ObserverOperationError>> + Send + 'a>>
+    ) -> Pin<Box<dyn Future<Output = Result<PollOutcome, ObserverOperationError>> + Send + 'a>>
     {
         Box::pin(async move {
-            let clients = self
-                .list_active_clients(wall_unix_seconds, capture_interval)
+            self.poll_context(wall_now, capture_interval)
                 .await
-                .map_err(|error| ObserverOperationError(error.to_string()))?;
-            Ok(self.capture_sessions(&clients).await)
+                .map_err(|error| ObserverOperationError(error.to_string()))
         })
     }
 }
@@ -71,6 +69,7 @@ pub trait SegmentLifecycle: Send {
     fn process_poll(
         &mut self,
         captures: &[CaptureResult],
+        activity_jsonl: &[u8],
         wall_now: OffsetDateTime,
         monotonic_now: Duration,
         segment_interval: Duration,
@@ -305,6 +304,7 @@ impl SegmentLifecycle for SegmentManager {
     fn process_poll(
         &mut self,
         captures: &[CaptureResult],
+        activity_jsonl: &[u8],
         wall_now: OffsetDateTime,
         monotonic_now: Duration,
         segment_interval: Duration,
@@ -343,6 +343,16 @@ impl SegmentLifecycle for SegmentManager {
                     continue;
                 }
                 return Err(operation_error(error));
+            }
+        }
+        if !activity_jsonl.is_empty() {
+            if let Err(error) = self.segment.append_activity(activity_jsonl, monotonic_now) {
+                if error.is_recoverable_append() {
+                    self.warnings
+                        .warn("activity append rolled back and will retry");
+                } else {
+                    return Err(operation_error(error));
+                }
             }
         }
         Ok(())
@@ -542,11 +552,7 @@ pub async fn run_observer(
         let monotonic_now = clock.monotonic_now();
         let mut captures = JoinSet::new();
         let provider = Arc::clone(&provider);
-        captures.spawn(async move {
-            provider
-                .poll(wall_now.unix_timestamp(), config.capture_interval)
-                .await
-        });
+        captures.spawn(async move { provider.poll(wall_now, config.capture_interval).await });
         let capture_result = tokio::select! {
             biased;
             event = &mut shutdown => {
@@ -556,8 +562,8 @@ pub async fn run_observer(
             }
             result = captures.join_next() => result,
         };
-        let captures = match capture_result {
-            Some(Ok(Ok(captures))) => captures,
+        let outcome = match capture_result {
+            Some(Ok(Ok(outcome))) => outcome,
             Some(Ok(Err(error))) => {
                 failures.push(format!("capture task exited: {error}"));
                 break None;
@@ -576,8 +582,13 @@ pub async fn run_observer(
         };
 
         let blocking = tokio::task::spawn_blocking(move || {
-            let result =
-                segment.process_poll(&captures, wall_now, monotonic_now, config.segment_interval);
+            let result = segment.process_poll(
+                &outcome.captures,
+                &outcome.activity_jsonl,
+                wall_now,
+                monotonic_now,
+                config.segment_interval,
+            );
             (segment, result)
         });
         match blocking.await {

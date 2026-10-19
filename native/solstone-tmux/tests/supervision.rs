@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use solstone_tmux::clock::{Clock, TestClock, Zone, ZoneSource};
 use solstone_tmux::health::DiagnosticCode;
-use solstone_tmux::model::CaptureResult;
+use solstone_tmux::model::PollOutcome;
 use solstone_tmux::name::derive_component;
 use solstone_tmux::observer::{
     CaptureProvider, LifecycleLock, ObserverConfig, ObserverExit, ObserverOperationError,
@@ -449,11 +449,16 @@ struct NoCaptures;
 impl CaptureProvider for NoCaptures {
     fn poll<'a>(
         &'a self,
-        _wall_unix_seconds: i64,
+        _wall_now: time::OffsetDateTime,
         _capture_interval: Duration,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<CaptureResult>, ObserverOperationError>> + Send + 'a>>
+    ) -> Pin<Box<dyn Future<Output = Result<PollOutcome, ObserverOperationError>> + Send + 'a>>
     {
-        Box::pin(async { Ok(Vec::new()) })
+        Box::pin(async {
+            Ok(PollOutcome {
+                captures: Vec::new(),
+                activity_jsonl: Vec::new(),
+            })
+        })
     }
 }
 

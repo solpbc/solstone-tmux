@@ -9,6 +9,78 @@ use serde_json::ser::{CharEscape, Formatter};
 use crate::model::{CaptureResult, PaneInfo, WindowInfo};
 
 #[derive(Serialize)]
+struct TerminalActivity<'a> {
+    v: u8,
+    t: &'static str,
+    kind: &'static str,
+    method: &'static str,
+    ts: i64,
+    end_ts: i64,
+    session: &'a str,
+    window: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pane_title: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cwd: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    exe: Option<&'a str>,
+}
+
+#[derive(Serialize)]
+struct AvailabilityActivity {
+    v: u8,
+    t: &'static str,
+    kind: &'static str,
+    capability: &'static str,
+    status: &'static str,
+    method: &'static str,
+    ts: i64,
+    end_ts: i64,
+}
+
+pub fn serialize_terminal_activity(
+    ts: i64,
+    session: &str,
+    window: &str,
+    pane_title: Option<&str>,
+    cwd: Option<&str>,
+    exe: Option<&str>,
+) -> Vec<u8> {
+    serialize_activity_line(&TerminalActivity {
+        v: 1,
+        t: "desktop_activity",
+        kind: "terminal",
+        method: "tmux",
+        ts,
+        end_ts: ts,
+        session,
+        window,
+        pane_title,
+        cwd,
+        exe,
+    })
+}
+
+pub fn serialize_availability_activity(ts: i64, status: &'static str) -> Vec<u8> {
+    serialize_activity_line(&AvailabilityActivity {
+        v: 1,
+        t: "desktop_activity",
+        kind: "availability",
+        capability: "terminal",
+        status,
+        method: "tmux",
+        ts,
+        end_ts: ts,
+    })
+}
+
+fn serialize_activity_line(value: &impl Serialize) -> Vec<u8> {
+    let mut bytes = serde_json::to_vec(value).expect("activity row is serializable");
+    bytes.push(b'\n');
+    bytes
+}
+
+#[derive(Serialize)]
 struct Envelope<'a> {
     frame_id: u64,
     timestamp: f64,

@@ -617,7 +617,7 @@ fn travel_reads_each_segments_zone() {
     assert_eq!(first_meta.local_offset_seconds, 19800);
 
     manager
-        .process_poll(&[golden_capture("main")], t0, Duration::ZERO, interval)
+        .process_poll(&[golden_capture("main")], &[], t0, Duration::ZERO, interval)
         .expect("poll at t0");
 
     let t1 = PrimitiveDateTime::new(
@@ -629,7 +629,7 @@ fn travel_reads_each_segments_zone() {
     clock.set_monotonic(interval);
 
     manager
-        .process_poll(&[golden_capture("main")], t1, interval, interval)
+        .process_poll(&[golden_capture("main")], &[], t1, interval, interval)
         .expect("poll at t1");
 
     let first_finalized = day_kolkata.join("235000_300");
@@ -740,6 +740,7 @@ fn production_constructor_reads_the_zone_once_per_segment() {
         manager
             .process_poll(
                 &[golden_capture("main")],
+                &[],
                 t,
                 Duration::from_secs(i * 5),
                 interval,
@@ -752,7 +753,7 @@ fn production_constructor_reads_the_zone_once_per_segment() {
     clock.set_wall(t_rot1);
     clock.set_monotonic(interval);
     manager
-        .process_poll(&[golden_capture("main")], t_rot1, interval, interval)
+        .process_poll(&[golden_capture("main")], &[], t_rot1, interval, interval)
         .expect("poll rotate 1");
 
     assert_eq!(reads.load(std::sync::atomic::Ordering::Relaxed), 2);
@@ -761,7 +762,13 @@ fn production_constructor_reads_the_zone_once_per_segment() {
     clock.set_wall(t_rot2);
     clock.set_monotonic(interval * 2);
     manager
-        .process_poll(&[golden_capture("main")], t_rot2, interval * 2, interval)
+        .process_poll(
+            &[golden_capture("main")],
+            &[],
+            t_rot2,
+            interval * 2,
+            interval,
+        )
         .expect("poll rotate 2");
 
     assert_eq!(reads.load(std::sync::atomic::Ordering::Relaxed), 3);
@@ -830,7 +837,7 @@ fn failed_read_reuses_the_previous_zone_at_the_new_start() {
     .expect("start manager");
 
     manager
-        .process_poll(&[golden_capture("main")], t0, Duration::ZERO, interval)
+        .process_poll(&[golden_capture("main")], &[], t0, Duration::ZERO, interval)
         .expect("poll t0");
     assert_eq!(warnings.messages().len(), 0);
 
@@ -843,7 +850,7 @@ fn failed_read_reuses_the_previous_zone_at_the_new_start() {
     clock.set_monotonic(interval);
 
     manager
-        .process_poll(&[golden_capture("main")], t1, interval, interval)
+        .process_poll(&[golden_capture("main")], &[], t1, interval, interval)
         .expect("poll t1");
 
     let day_stream_dir = data_root
@@ -868,7 +875,7 @@ fn failed_read_reuses_the_previous_zone_at_the_new_start() {
     clock.set_monotonic(interval * 2);
 
     manager
-        .process_poll(&[golden_capture("main")], t2, interval * 2, interval)
+        .process_poll(&[golden_capture("main")], &[], t2, interval * 2, interval)
         .expect("poll t2");
 
     assert_eq!(warnings.messages().len(), 1);
@@ -931,14 +938,14 @@ fn zone_failure_warns_on_each_transition_into_failure() {
     assert!(warnings.messages()[0].contains("fail 1"));
 
     manager
-        .process_poll(&[golden_capture("main")], t0, Duration::ZERO, interval)
+        .process_poll(&[golden_capture("main")], &[], t0, Duration::ZERO, interval)
         .expect("poll t0");
 
     let t1 = t0 + interval;
     clock.set_wall(t1);
     clock.set_monotonic(interval);
     manager
-        .process_poll(&[golden_capture("main")], t1, interval, interval)
+        .process_poll(&[golden_capture("main")], &[], t1, interval, interval)
         .expect("poll t1");
 
     assert_eq!(warnings.messages().len(), 1);
@@ -947,7 +954,7 @@ fn zone_failure_warns_on_each_transition_into_failure() {
     clock.set_wall(t2);
     clock.set_monotonic(interval * 2);
     manager
-        .process_poll(&[golden_capture("main")], t2, interval * 2, interval)
+        .process_poll(&[golden_capture("main")], &[], t2, interval * 2, interval)
         .expect("poll t2");
 
     assert_eq!(warnings.messages().len(), 1);
@@ -956,7 +963,7 @@ fn zone_failure_warns_on_each_transition_into_failure() {
     clock.set_wall(t3);
     clock.set_monotonic(interval * 3);
     manager
-        .process_poll(&[golden_capture("main")], t3, interval * 3, interval)
+        .process_poll(&[golden_capture("main")], &[], t3, interval * 3, interval)
         .expect("poll t3");
 
     assert_eq!(warnings.messages().len(), 2);

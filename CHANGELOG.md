@@ -6,6 +6,10 @@ Format adapted from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- You can record a pane's title, working directory, and executable. Those settings are off unless you set `pane_title`, `working_directory`, or `executable` to true in config.json. Titles and paths can be sensitive. Restart the service after you change them.
+
 ### Fixed
 
 - if tmux isn't running when solstone-tmux starts (say, right after you install the service or after a reboot), solstone-tmux now waits for it and adds its status indicator once you start tmux. before, it stopped and started again every few seconds until tmux was running. closing your last tmux session no longer stops it either.

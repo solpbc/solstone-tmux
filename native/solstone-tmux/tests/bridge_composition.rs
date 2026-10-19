@@ -17,7 +17,7 @@ use solstone_tmux::config::DEFAULT_SOURCE;
 use solstone_tmux::health::DiagnosticCode;
 use solstone_tmux::instance_lock::InstanceLock;
 use solstone_tmux::journal::INGEST_PATH;
-use solstone_tmux::model::CaptureResult;
+use solstone_tmux::model::{CaptureResult, PollOutcome};
 use solstone_tmux::observer::{
     CaptureProvider, ObserverConfig, ObserverOperationError, SegmentLifecycle, ShutdownEvent,
     run_observer, shutdown_barrier,
@@ -526,14 +526,17 @@ struct CountingCapture {
 impl CaptureProvider for CountingCapture {
     fn poll<'a>(
         &'a self,
-        _wall_unix_seconds: i64,
+        _wall_now: time::OffsetDateTime,
         _capture_interval: Duration,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<CaptureResult>, ObserverOperationError>> + Send + 'a>>
+    ) -> Pin<Box<dyn Future<Output = Result<PollOutcome, ObserverOperationError>> + Send + 'a>>
     {
         Box::pin(async move {
             self.polls.fetch_add(1, Ordering::SeqCst);
             self.polled.notify_one();
-            Ok(Vec::new())
+            Ok(PollOutcome {
+                captures: Vec::new(),
+                activity_jsonl: Vec::new(),
+            })
         })
     }
 }
@@ -553,6 +556,7 @@ impl SegmentLifecycle for CountingSegment {
     fn process_poll(
         &mut self,
         _captures: &[CaptureResult],
+        _activity_jsonl: &[u8],
         _wall_now: time::OffsetDateTime,
         _monotonic_now: Duration,
         _segment_interval: Duration,

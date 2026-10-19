@@ -26,6 +26,9 @@ pub struct RuntimeConfig {
     pub segment_interval: Duration,
     pub cache_retention_days: i64,
     pub status_indicator: bool,
+    pub pane_title: bool,
+    pub working_directory: bool,
+    pub executable: bool,
     pub source: String,
 }
 
@@ -37,6 +40,9 @@ pub(crate) struct ConfigFile {
     segment_interval: u64,
     cache_retention_days: i64,
     status_indicator: bool,
+    pane_title: bool,
+    working_directory: bool,
+    executable: bool,
     #[serde(default, skip_serializing_if = "OptionalJson::is_absent")]
     source: OptionalJson,
 }
@@ -83,6 +89,9 @@ impl Default for ConfigFile {
             segment_interval: DEFAULT_SEGMENT_INTERVAL_SECONDS,
             cache_retention_days: DEFAULT_CACHE_RETENTION_DAYS,
             status_indicator: true,
+            pane_title: false,
+            working_directory: false,
+            executable: false,
             source: OptionalJson::Absent,
         }
     }
@@ -157,6 +166,9 @@ impl RuntimeConfig {
             segment_interval: Duration::from_secs(file.segment_interval),
             cache_retention_days: file.cache_retention_days,
             status_indicator: file.status_indicator,
+            pane_title: file.pane_title,
+            working_directory: file.working_directory,
+            executable: file.executable,
             source,
         })
     }
@@ -318,7 +330,7 @@ mod tests {
         let bytes = serde_json::to_vec(&ConfigFile::default()).expect("serialize default config");
         assert_eq!(
             bytes,
-            br#"{"stream":null,"capture_interval":5,"segment_interval":300,"cache_retention_days":7,"status_indicator":true}"#
+            br#"{"stream":null,"capture_interval":5,"segment_interval":300,"cache_retention_days":7,"status_indicator":true,"pane_title":false,"working_directory":false,"executable":false}"#
         );
     }
 }

@@ -163,6 +163,13 @@ By default, solstone-tmux owns a small tmux status indicator while it runs:
 Set `"status_indicator": false` in the native `config.json` to leave tmux
 options untouched.
 
+## Pane context
+
+Pane titles, working directories, and executable names are off by default. Set
+`"pane_title": true`, `"working_directory": true`, or `"executable": true` in
+`config.json` to record only that field. Titles and paths can be sensitive.
+Restart the service after changing these settings.
+
 ## Uninstall
 
 On Linux, remove the owned user service first:

@@ -10,6 +10,7 @@ use std::sync::Arc;
 use solstone_tmux::clock::{Clock, SystemClock};
 use solstone_tmux::command::TokioCommandRunner;
 use solstone_tmux::config::{RuntimeConfig, system_hostname};
+use solstone_tmux::foreground::SystemLookup;
 use solstone_tmux::health::{HealthWriter, StatusHealth, emit_diagnostic, read_status_health};
 use solstone_tmux::indicator::{CommandIndicatorIo, ServerIndicator};
 use solstone_tmux::instance_lock::InstanceLock;
@@ -28,7 +29,7 @@ use solstone_tmux::service::{
     ServiceController, ServiceStatus, current_platform, load_local_observer, status_exit_code,
 };
 use solstone_tmux::sync::{RetentionFence, SyncActivity, SyncTask, SyncWake};
-use solstone_tmux::tmux::TmuxAdapter;
+use solstone_tmux::tmux::{StderrWarnings, TmuxAdapter};
 
 fn main() {
     let exit_code = run().unwrap_or_else(|error| {
@@ -238,8 +239,16 @@ fn run_native(
     let local_observer = load_local_observer(&config_root).map_err(|error| error.to_string())?;
     let tmux_path = local_observer.tmux_path;
     let provider = Arc::new(
-        TmuxAdapter::new(tmux_path.clone(), TokioCommandRunner)
-            .map_err(|error| error.to_string())?,
+        TmuxAdapter::with_context(
+            tmux_path.clone(),
+            TokioCommandRunner,
+            StderrWarnings,
+            config.pane_title,
+            config.working_directory,
+            config.executable,
+            Arc::new(SystemLookup),
+        )
+        .map_err(|error| error.to_string())?,
     );
 
     for record in recover_capture_streams(&instance_lock, &data_root, config.segment_interval)

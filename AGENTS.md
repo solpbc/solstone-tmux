@@ -13,7 +13,8 @@ after a restart.
 
 The product is one Rust crate and one executable. Linux and macOS share capture,
 serialization, storage, recovery, sync, health, and supervision
-logic. Platform-specific code is limited to path and service lifecycle policy.
+logic. Platform-specific code is limited to path, foreground executable lookup,
+and service lifecycle policy.
 
 ## Source layout
 
@@ -45,6 +46,7 @@ native/solstone-tmux/
         config.rs                  Native config and hostname-derived defaults
         health.rs                  Closed diagnostics and health snapshots
         indicator.rs               Owned tmux status indicator
+        foreground.rs             Checked foreground executable lookup
         instance_lock.rs           Exclusive data-root lock
         journal.rs                 Journal observer-client protocol
         journal_version.rs         Journal version probing and post-connect trigger
@@ -165,8 +167,9 @@ clients, and the indicator waits for a server. Supervision refreshes the
 indicator every capture interval, installing it once on each new tmux server.
 
 Each poll builds complete per-session tmux transactions, serializes compatible
-JSONL envelopes, and appends only changed observations. Rotation uses monotonic
-time; paths and envelope timestamps use wall time.
+JSONL envelopes, keeps screen envelopes deduplicated, and appends enabled
+activity point samples on every admitted poll. Rotation uses monotonic time;
+paths and envelope timestamps use wall time.
 
 ### Paths and state
 
@@ -266,9 +269,15 @@ Native `config.json` accepts:
   "capture_interval": 5,
   "segment_interval": 300,
   "status_indicator": true,
+  "pane_title": false,
+  "working_directory": false,
+  "executable": false,
   "source": "tmux"
 }
 ```
+
+Each pane-context setting defaults to false; setting one to true queries only
+that field.
 
 Unknown fields are rejected. Missing fields use defaults. Capture and segment
 intervals must be greater than zero. A missing stream derives from the system

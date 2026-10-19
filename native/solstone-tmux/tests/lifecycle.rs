@@ -13,7 +13,7 @@ use std::time::Duration;
 use solstone_tmux::clock::{Clock, TestClock, Zone, ZoneSource};
 use solstone_tmux::health::DiagnosticCode;
 use solstone_tmux::instance_lock::InstanceLock;
-use solstone_tmux::model::CaptureResult;
+use solstone_tmux::model::{CaptureResult, PollOutcome};
 use solstone_tmux::name::{DerivedName, derive_component};
 use solstone_tmux::observer::{
     CaptureProvider, LifecycleLock, ObserverConfig, ObserverExit, ObserverOperationError,
@@ -396,11 +396,16 @@ struct NoCaptures;
 impl CaptureProvider for NoCaptures {
     fn poll<'a>(
         &'a self,
-        _wall_unix_seconds: i64,
+        _wall_now: time::OffsetDateTime,
         _capture_interval: Duration,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<CaptureResult>, ObserverOperationError>> + Send + 'a>>
+    ) -> Pin<Box<dyn Future<Output = Result<PollOutcome, ObserverOperationError>> + Send + 'a>>
     {
-        Box::pin(async { Ok(Vec::new()) })
+        Box::pin(async {
+            Ok(PollOutcome {
+                captures: Vec::new(),
+                activity_jsonl: Vec::new(),
+            })
+        })
     }
 }
 
@@ -409,9 +414,9 @@ struct FailingCapture;
 impl CaptureProvider for FailingCapture {
     fn poll<'a>(
         &'a self,
-        _wall_unix_seconds: i64,
+        _wall_now: time::OffsetDateTime,
         _capture_interval: Duration,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<CaptureResult>, ObserverOperationError>> + Send + 'a>>
+    ) -> Pin<Box<dyn Future<Output = Result<PollOutcome, ObserverOperationError>> + Send + 'a>>
     {
         Box::pin(async { Err(ObserverOperationError("fixture capture exited".to_owned())) })
     }
@@ -438,6 +443,7 @@ impl SegmentLifecycle for RecordingSegment {
     fn process_poll(
         &mut self,
         _captures: &[CaptureResult],
+        _activity_jsonl: &[u8],
         _wall_now: OffsetDateTime,
         _monotonic_now: Duration,
         _segment_interval: Duration,
@@ -545,6 +551,7 @@ fn rotation_uses_the_offset_at_each_segment_start() {
     manager
         .process_poll(
             &[golden_capture("main")],
+            &[],
             wall_t_minus_1,
             Duration::from_secs(2),
             segment_interval,
@@ -557,6 +564,7 @@ fn rotation_uses_the_offset_at_each_segment_start() {
     manager
         .process_poll(
             &[golden_capture("main")],
+            &[],
             wall_t_plus_1,
             Duration::from_secs(4),
             segment_interval,
@@ -631,7 +639,7 @@ fn forward_offset_step_opens_the_new_local_date() {
     clock.set_wall(poll_wall);
     clock.set_monotonic(interval);
     manager
-        .process_poll(&[], poll_wall, interval, interval)
+        .process_poll(&[], &[], poll_wall, interval, interval)
         .expect("process poll");
 
     let new_incomplete = data_root
@@ -687,7 +695,7 @@ fn backward_offset_step_across_midnight_opens_the_earlier_date() {
     clock.set_wall(t);
     clock.set_monotonic(interval);
     manager
-        .process_poll(&[], t, interval, interval)
+        .process_poll(&[], &[], t, interval, interval)
         .expect("process poll");
 
     let new_incomplete = data_root
@@ -737,6 +745,7 @@ fn fallback_hour_reuses_a_stem_and_records_each_start_offset() {
     manager
         .process_poll(
             &[golden_capture("main")],
+            &[],
             start_wall,
             Duration::ZERO,
             interval,
@@ -781,6 +790,7 @@ fn fallback_hour_reuses_a_stem_and_records_each_start_offset() {
         manager
             .process_poll(
                 &[golden_capture("main")],
+                &[],
                 current_wall,
                 current_monotonic,
                 interval,
@@ -895,7 +905,7 @@ fn repeated_berlin_hour_stores_the_next_free_second() {
     .expect("start manager");
 
     manager
-        .process_poll(&[golden_capture("main")], t0, Duration::ZERO, interval)
+        .process_poll(&[golden_capture("main")], &[], t0, Duration::ZERO, interval)
         .expect("poll at t0");
 
     let t1 = PrimitiveDateTime::new(
@@ -907,7 +917,7 @@ fn repeated_berlin_hour_stores_the_next_free_second() {
     clock.set_monotonic(interval);
 
     manager
-        .process_poll(&[golden_capture("main")], t1, interval, interval)
+        .process_poll(&[golden_capture("main")], &[], t1, interval, interval)
         .expect("poll at t1");
 
     let day_stream_dir = data_root
@@ -1107,6 +1117,7 @@ fn taken_names_advance_by_civil_seconds_across_midnight() {
     manager2
         .process_poll(
             &[golden_capture("main")],
+            &[],
             t_kolkata,
             Duration::ZERO,
             Duration::from_secs(5),
@@ -1194,7 +1205,7 @@ fn existing_entries_stay_byte_identical_across_recovery_and_rotation() {
     .expect("start manager");
 
     manager
-        .process_poll(&[golden_capture("main")], t0, Duration::ZERO, interval)
+        .process_poll(&[golden_capture("main")], &[], t0, Duration::ZERO, interval)
         .expect("poll t0");
 
     let day_stream_dir = data_root
@@ -1280,7 +1291,7 @@ fn existing_entries_stay_byte_identical_across_recovery_and_rotation() {
     )
     .expect("start manager 2");
     manager2
-        .process_poll(&[golden_capture("main")], t1, interval * 2, interval)
+        .process_poll(&[golden_capture("main")], &[], t1, interval * 2, interval)
         .expect("poll t1");
 
     assert_eq!(std::fs::read(&jsonl_path).expect("read jsonl"), snap_jsonl);

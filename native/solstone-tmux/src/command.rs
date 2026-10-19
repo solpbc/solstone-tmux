@@ -21,10 +21,30 @@ pub enum TmuxOperation {
     ListWindows(String),
     ListPanes(String),
     CapturePane(String),
+    DisplayMessage { target: String, field: DisplayField },
     ServerIdentity,
     ShowOption(String),
     SetOption(String),
     UnsetOption(String),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DisplayField {
+    PaneTitle,
+    PaneCurrentPath,
+    PanePid,
+    PaneTty,
+}
+
+impl DisplayField {
+    pub const fn format(self) -> &'static str {
+        match self {
+            Self::PaneTitle => "#{pane_title}",
+            Self::PaneCurrentPath => "#{pane_current_path}",
+            Self::PanePid => "#{pane_pid}",
+            Self::PaneTty => "#{pane_tty}",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
