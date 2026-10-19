@@ -15,7 +15,7 @@ use tokio::task::{JoinError, JoinSet};
 use crate::clock::{Clock, Zone, ZoneSource, local_date_and_time};
 use crate::command::CommandRunner;
 use crate::health::DiagnosticCode;
-use crate::indicator::{IndicatorIo, IndicatorOwnership};
+use crate::indicator::{IndicatorIo, IndicatorOwnership, ServerIndicator};
 use crate::instance_lock::InstanceLock;
 use crate::model::CaptureResult;
 use crate::name::DerivedName;
@@ -384,6 +384,17 @@ pub trait ShutdownIndicator: Send {
         Box::pin(async { Ok(()) })
     }
 
+    /// How often the supervisor calls `refresh`; `None` means never.
+    fn refresh_interval(&self) -> Option<Duration> {
+        None
+    }
+
+    fn refresh<'a>(
+        &'a mut self,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ObserverOperationError>> + Send + 'a>> {
+        Box::pin(async { Ok(()) })
+    }
+
     fn restore<'a>(
         &'a mut self,
     ) -> Pin<Box<dyn Future<Output = Result<(), ObserverOperationError>> + Send + 'a>>;
@@ -425,6 +436,47 @@ impl<I: IndicatorIo> ShutdownIndicator for IndicatorOwnership<I> {
     ) -> Pin<Box<dyn Future<Output = Result<(), ObserverOperationError>> + Send + 'a>> {
         Box::pin(async move {
             IndicatorOwnership::restore(self)
+                .await
+                .map_err(|error| ObserverOperationError(error.to_string()))
+        })
+    }
+}
+
+impl<I: IndicatorIo + Clone> ShutdownIndicator for ServerIndicator<I> {
+    fn set_activity<'a>(
+        &'a mut self,
+        activity: SyncActivity,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ObserverOperationError>> + Send + 'a>> {
+        Box::pin(async move {
+            self.set_working(activity == SyncActivity::Working)
+                .await
+                .map_err(|_| {
+                    ObserverOperationError(
+                        DiagnosticCode::IndicatorUpdateFailed.message().to_owned(),
+                    )
+                })
+        })
+    }
+
+    fn refresh_interval(&self) -> Option<Duration> {
+        Some(ServerIndicator::refresh_interval(self))
+    }
+
+    fn refresh<'a>(
+        &'a mut self,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ObserverOperationError>> + Send + 'a>> {
+        Box::pin(async move {
+            ServerIndicator::refresh(self).await.map_err(|_| {
+                ObserverOperationError(DiagnosticCode::IndicatorUpdateFailed.message().to_owned())
+            })
+        })
+    }
+
+    fn restore<'a>(
+        &'a mut self,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ObserverOperationError>> + Send + 'a>> {
+        Box::pin(async move {
+            ServerIndicator::restore(self)
                 .await
                 .map_err(|error| ObserverOperationError(error.to_string()))
         })
@@ -596,6 +648,11 @@ where
     let mut sync_task = tokio::spawn(sync);
     let mut activity_open = true;
     let mut shutdown_request_open = true;
+    let mut indicator_refresh = indicator.refresh_interval().map(|period| {
+        let mut refresh = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
+        refresh.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        refresh
+    });
     let trigger = loop {
         tokio::select! {
             result = &mut observer_task => {
@@ -619,6 +676,11 @@ where
                     if indicator.set_activity(current_activity).await.is_err() {
                         break SupervisionTrigger::IndicatorFailed;
                     }
+                }
+            }
+            _ = next_refresh(&mut indicator_refresh) => {
+                if indicator.refresh().await.is_err() {
+                    break SupervisionTrigger::IndicatorFailed;
                 }
             }
         }
@@ -668,6 +730,15 @@ where
         exit.exit_code = 1;
     }
     finish_supervision(exit, indicator, instance_lock, retention_fence).await
+}
+
+async fn next_refresh(refresh: &mut Option<tokio::time::Interval>) {
+    match refresh {
+        Some(refresh) => {
+            refresh.tick().await;
+        }
+        None => std::future::pending().await,
+    }
 }
 
 enum SupervisionTrigger {

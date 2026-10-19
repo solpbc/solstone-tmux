@@ -82,6 +82,27 @@ fn status_codes_are_0_3_4() {
     );
     assert_eq!(ServiceStatus::Inactive.exit_code(), 3);
     inactive_runner.assert_finished().expect("inactive query");
+
+    // During RestartSec after an unexpected exit, systemd reports the unit as
+    // activating. That is a restart in progress, not an inactive service.
+    let restarting_runner =
+        FixtureRunner::new([systemd_status(command_output(b"activating\n", &[], 3))]);
+    let restarting = ServiceController::new(
+        PlatformKind::Linux,
+        &environment,
+        &restarting_runner,
+        PathBuf::from("/unused"),
+    );
+    assert_eq!(
+        runtime()
+            .block_on(restarting.status())
+            .expect("restarting status"),
+        ServiceStatus::Restarting
+    );
+    assert_eq!(ServiceStatus::Restarting.exit_code(), 3);
+    restarting_runner
+        .assert_finished()
+        .expect("restarting query");
 }
 
 #[test]

@@ -11,7 +11,7 @@ use solstone_tmux::clock::{Clock, SystemClock};
 use solstone_tmux::command::TokioCommandRunner;
 use solstone_tmux::config::{RuntimeConfig, system_hostname};
 use solstone_tmux::health::{HealthWriter, StatusHealth, emit_diagnostic, read_status_health};
-use solstone_tmux::indicator::{CommandIndicatorIo, IndicatorOwnership};
+use solstone_tmux::indicator::{CommandIndicatorIo, ServerIndicator};
 use solstone_tmux::instance_lock::InstanceLock;
 use solstone_tmux::journal_version::{JournalVersionStatus, read_journal_version};
 use solstone_tmux::observer::{
@@ -125,6 +125,7 @@ fn run() -> Result<i32, String> {
                         let status = service.status().await;
                         let service_line = match &status {
                             Ok(ServiceStatus::Active) => "active",
+                            Ok(ServiceStatus::Restarting) => "restarting",
                             Ok(ServiceStatus::Inactive) => "inactive",
                             Ok(ServiceStatus::Absent) => "absent",
                             Err(_) => "error",
@@ -276,7 +277,10 @@ fn run_native(
     let indicator: Box<dyn ShutdownIndicator> = if config.status_indicator {
         let indicator_io = CommandIndicatorIo::new(TokioCommandRunner, tmux_path)
             .map_err(|error| error.to_string())?;
-        match runtime.block_on(IndicatorOwnership::install_default(indicator_io)) {
+        match runtime.block_on(ServerIndicator::start(
+            indicator_io,
+            config.capture_interval,
+        )) {
             Ok(indicator) => Box::new(indicator),
             Err(error) => {
                 return startup_error(manager.segment_mut(), error.to_string());

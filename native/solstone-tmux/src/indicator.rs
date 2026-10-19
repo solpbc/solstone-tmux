@@ -6,9 +6,10 @@ use std::fmt;
 use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
+use std::time::Duration;
 
 use crate::command::{CommandInvocation, CommandOperation, CommandRunner, TmuxOperation};
-use crate::tmux::TMUX_TIMEOUT;
+use crate::tmux::{TMUX_TIMEOUT, reports_no_server};
 
 pub const STATUS_LEFT: &str = "status-left";
 pub const SOLSTONE_OPTION: &str = "@solstone";
@@ -23,6 +24,11 @@ pub enum OptionValue {
 }
 
 pub trait IndicatorIo: Send + Sync {
+    /// Identifies the running tmux server, so a replaced server is noticed.
+    fn server_identity<'a>(
+        &'a self,
+    ) -> Pin<Box<dyn Future<Output = Result<String, IndicatorError>> + Send + 'a>>;
+
     fn read<'a>(
         &'a self,
         name: &'a str,
@@ -40,6 +46,7 @@ pub trait IndicatorIo: Send + Sync {
     ) -> Pin<Box<dyn Future<Output = Result<(), IndicatorError>> + Send + 'a>>;
 }
 
+#[derive(Clone)]
 pub struct CommandIndicatorIo<R> {
     runner: R,
     tmux: PathBuf,
@@ -57,6 +64,38 @@ impl<R: CommandRunner> CommandIndicatorIo<R> {
 }
 
 impl<R: CommandRunner> IndicatorIo for CommandIndicatorIo<R> {
+    fn server_identity<'a>(
+        &'a self,
+    ) -> Pin<Box<dyn Future<Output = Result<String, IndicatorError>> + Send + 'a>> {
+        Box::pin(async move {
+            let output = self
+                .runner
+                .run(CommandInvocation {
+                    operation: CommandOperation::Tmux(TmuxOperation::ServerIdentity),
+                    executable: self.tmux.clone(),
+                    args: ["display-message", "-p", "#{pid} #{start_time}"]
+                        .into_iter()
+                        .map(OsString::from)
+                        .collect(),
+                    timeout: TMUX_TIMEOUT,
+                })
+                .await
+                .map_err(IndicatorError::Command)?;
+            if reports_no_server(&output) {
+                return Err(IndicatorError::NoServer);
+            }
+            if output.status != 0 {
+                return Err(IndicatorError::Nonzero {
+                    name: "server identity".to_owned(),
+                    status: output.status,
+                });
+            }
+            let stdout = String::from_utf8(output.stdout)
+                .map_err(|error| IndicatorError::Protocol(error.to_string()))?;
+            Ok(stdout.trim_end().to_owned())
+        })
+    }
+
     fn read<'a>(
         &'a self,
         name: &'a str,
@@ -75,6 +114,9 @@ impl<R: CommandRunner> IndicatorIo for CommandIndicatorIo<R> {
                 })
                 .await
                 .map_err(IndicatorError::Command)?;
+            if reports_no_server(&output) {
+                return Err(IndicatorError::NoServer);
+            }
             if output.status != 0 {
                 return if name == SOLSTONE_OPTION {
                     Ok(OptionValue::Absent)
@@ -113,6 +155,8 @@ impl<R: CommandRunner> IndicatorIo for CommandIndicatorIo<R> {
                 .map_err(IndicatorError::Command)?;
             if output.status == 0 {
                 Ok(())
+            } else if reports_no_server(&output) {
+                Err(IndicatorError::NoServer)
             } else {
                 Err(IndicatorError::Nonzero {
                     name: name.to_owned(),
@@ -142,6 +186,8 @@ impl<R: CommandRunner> IndicatorIo for CommandIndicatorIo<R> {
                 .map_err(IndicatorError::Command)?;
             if output.status == 0 {
                 Ok(())
+            } else if reports_no_server(&output) {
+                Err(IndicatorError::NoServer)
             } else {
                 Err(IndicatorError::Nonzero {
                     name: name.to_owned(),
@@ -205,6 +251,9 @@ impl<I: IndicatorIo> IndicatorOwnership<I> {
     ) -> Result<Self, IndicatorError> {
         io.write(STATUS_LEFT, &written_status_left).await?;
         if let Err(error) = io.write(SOLSTONE_OPTION, &written_solstone).await {
+            if matches!(error, IndicatorError::NoServer) {
+                return Err(error);
+            }
             if let Err(rollback) = restore_value(&io, STATUS_LEFT, &original_status_left).await {
                 return Err(IndicatorError::Protocol(format!(
                     "{error}; status-left rollback also failed: {rollback}"
@@ -243,6 +292,8 @@ impl<I: IndicatorIo> IndicatorOwnership<I> {
     pub async fn restore(&mut self) -> Result<(), IndicatorRestoreError> {
         let mut failures = Vec::new();
         match self.io.read(STATUS_LEFT).await {
+            // The server exited, and its options went with it.
+            Err(IndicatorError::NoServer) => return Ok(()),
             Ok(current) if current == OptionValue::Present(self.written_status_left.clone()) => {
                 if let Err(error) =
                     restore_value(&self.io, STATUS_LEFT, &self.original_status_left).await
@@ -262,7 +313,7 @@ impl<I: IndicatorIo> IndicatorOwnership<I> {
                         failures.push(format!("{SOLSTONE_OPTION}: {error}"));
                     }
                 }
-                Ok(_) => {}
+                Ok(_) | Err(IndicatorError::NoServer) => {}
                 Err(error) => failures.push(format!("{SOLSTONE_OPTION} read: {error}")),
             }
         }
@@ -270,6 +321,101 @@ impl<I: IndicatorIo> IndicatorOwnership<I> {
             Ok(())
         } else {
             Err(IndicatorRestoreError(failures))
+        }
+    }
+}
+
+/// The indicator across the tmux server's lifecycle. With no server running
+/// there is nothing to mark, so installation waits for one; a server that
+/// exits takes its options with it, and the next server gets the indicator.
+pub struct ServerIndicator<I> {
+    io: I,
+    installed: Option<(String, IndicatorOwnership<I>)>,
+    working: bool,
+    refresh_interval: Duration,
+}
+
+impl<I: IndicatorIo + Clone> ServerIndicator<I> {
+    /// Installs now if a tmux server is running, and otherwise waits for one.
+    /// Errors other than a missing server are returned.
+    pub async fn start(io: I, refresh_interval: Duration) -> Result<Self, IndicatorError> {
+        let mut indicator = Self {
+            io,
+            installed: None,
+            working: false,
+            refresh_interval,
+        };
+        indicator.refresh().await?;
+        Ok(indicator)
+    }
+
+    pub fn is_installed(&self) -> bool {
+        self.installed.is_some()
+    }
+
+    pub fn refresh_interval(&self) -> Duration {
+        self.refresh_interval
+    }
+
+    /// Installs on a server that does not have the indicator yet, and forgets
+    /// a server that has exited or been replaced.
+    pub async fn refresh(&mut self) -> Result<(), IndicatorError> {
+        let server = match self.io.server_identity().await {
+            Ok(server) => server,
+            Err(IndicatorError::NoServer) => {
+                self.installed = None;
+                return Ok(());
+            }
+            Err(error) => return Err(error),
+        };
+        if self
+            .installed
+            .as_ref()
+            .is_some_and(|(owned, _)| *owned == server)
+        {
+            return Ok(());
+        }
+        self.installed = None;
+        let mut ownership = match IndicatorOwnership::install_default(self.io.clone()).await {
+            Ok(ownership) => ownership,
+            Err(IndicatorError::NoServer) => return Ok(()),
+            Err(error) => return Err(error),
+        };
+        if self.working {
+            match ownership.update_solstone(SYNCING_VALUE.to_owned()).await {
+                Ok(_) => {}
+                Err(IndicatorError::NoServer) => return Ok(()),
+                Err(error) => return Err(error),
+            }
+        }
+        self.installed = Some((server, ownership));
+        Ok(())
+    }
+
+    pub async fn set_working(&mut self, working: bool) -> Result<(), IndicatorError> {
+        self.working = working;
+        let Some((_, ownership)) = self.installed.as_mut() else {
+            return Ok(());
+        };
+        let value = if working {
+            SYNCING_VALUE
+        } else {
+            OBSERVING_VALUE
+        };
+        match ownership.update_solstone(value.to_owned()).await {
+            Ok(_) => Ok(()),
+            Err(IndicatorError::NoServer) => {
+                self.installed = None;
+                Ok(())
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    pub async fn restore(&mut self) -> Result<(), IndicatorRestoreError> {
+        match self.installed.take() {
+            Some((_, mut ownership)) => ownership.restore().await,
+            None => Ok(()),
         }
     }
 }
@@ -312,6 +458,7 @@ async fn restore_value(
 #[derive(Debug)]
 pub enum IndicatorError {
     Command(crate::command::CommandError),
+    NoServer,
     Nonzero { name: String, status: i32 },
     Protocol(String),
 }
@@ -320,6 +467,7 @@ impl fmt::Display for IndicatorError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Command(error) => error.fmt(formatter),
+            Self::NoServer => formatter.write_str("no tmux server is running"),
             Self::Nonzero { name, status } => {
                 write!(formatter, "tmux option command for {name} exited {status}")
             }

@@ -113,6 +113,49 @@ fn crash_restart_does_not_duplicate_the_status_indicator() {
 }
 
 #[test]
+fn run_waits_for_a_tmux_server_and_then_installs_the_indicator_once() {
+    let fixture = RunFixture::new("binary-run-no-server");
+    fixture.install_recording_tmux();
+    fixture.write_config("main", 1, 300);
+    fixture.write_local_observer();
+    fs::write(fixture.no_server_path(), b"").expect("mark no tmux server");
+
+    let mut child = fixture.spawn_run();
+    fixture.wait_for_startup_segment_metadata(&mut child);
+    fixture.wait_until(&mut child, "polls without a server", || {
+        fixture.invocation_count("list-clients") >= 2
+            && fixture.invocation_count("display-message") >= 2
+    });
+    assert!(!fixture.status_left_path().exists());
+    assert!(!fixture.solstone_path().exists());
+
+    fs::write(fixture.status_left_path(), b"owner status").expect("server status-left");
+    fs::remove_file(fixture.no_server_path()).expect("start tmux server");
+    fixture.wait_until(&mut child, "indicator installation", || {
+        fixture.solstone_path().exists()
+    });
+    let refreshes = fixture.invocation_count("display-message");
+    fixture.wait_until(&mut child, "two more refreshes", || {
+        fixture.invocation_count("display-message") >= refreshes + 2
+    });
+
+    let status_left =
+        fs::read_to_string(fixture.status_left_path()).expect("read installed status-left");
+    assert_eq!(status_left.matches("#{?@solstone").count(), 1);
+    assert!(status_left.ends_with("owner status"));
+
+    let pid = rustix::process::Pid::from_raw(child.id() as i32).expect("positive child pid");
+    rustix::process::kill_process(pid, rustix::process::Signal::TERM).expect("terminate observer");
+    let status = child.wait().expect("reap observer");
+    assert!(status.success(), "observer exit status: {status}");
+    assert_eq!(
+        fs::read(fixture.status_left_path()).expect("read restored status-left"),
+        b"owner status"
+    );
+    assert!(!fixture.solstone_path().exists());
+}
+
+#[test]
 fn overlong_stream_name_fails_before_capture_directory_creation() {
     let fixture = RunFixture::new("binary-run-overlong-stream");
     fixture.write_config(&"a".repeat(201), 1, 300);
@@ -255,7 +298,12 @@ impl RunFixture {
             &self.tmux,
             br#"#!/bin/sh
 printf '%s\n' "$1" >> "$SOLSTONE_TMUX_TMUX_LOG"
+if [ -e "$SOLSTONE_TMUX_NO_SERVER" ]; then
+  printf 'error connecting to /tmp/tmux-test/default (No such file or directory)\n' >&2
+  exit 1
+fi
 case "$1:$2:$3" in
+  display-message:-p:*) printf '4242 1\n' ;;
   show-options:-gv:status-left) cat "$SOLSTONE_TMUX_STATUS_LEFT" ;;
   show-options:-gv:@solstone) cat "$SOLSTONE_TMUX_SOLSTONE" ;;
   set-option:-g:status-left) printf '%s' "$4" > "$SOLSTONE_TMUX_STATUS_LEFT" ;;
@@ -275,6 +323,13 @@ esac
             .parent()
             .expect("tmux stub parent")
             .join("status-left.bytes")
+    }
+
+    fn no_server_path(&self) -> PathBuf {
+        self.tmux
+            .parent()
+            .expect("tmux stub parent")
+            .join("no-server")
     }
 
     fn solstone_path(&self) -> PathBuf {
@@ -307,7 +362,8 @@ esac
             .envs(self.roots.entries().iter().cloned())
             .env("SOLSTONE_TMUX_TMUX_LOG", &self.tmux_log)
             .env("SOLSTONE_TMUX_STATUS_LEFT", self.status_left_path())
-            .env("SOLSTONE_TMUX_SOLSTONE", self.solstone_path());
+            .env("SOLSTONE_TMUX_SOLSTONE", self.solstone_path())
+            .env("SOLSTONE_TMUX_NO_SERVER", self.no_server_path());
         command
     }
 
@@ -365,6 +421,32 @@ esac
             "tmux was not invoked within five seconds; stderr: {:?}",
             self.read_first_child_stderr()
         );
+    }
+
+    fn wait_until(&self, child: &mut Child, what: &str, done: impl Fn() -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline {
+            assert!(
+                child.try_wait().expect("observer status").is_none(),
+                "observer exited while waiting for {what}; stderr: {:?}",
+                self.read_first_child_stderr()
+            );
+            if done() {
+                return;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        panic!(
+            "{what} was not observed within ten seconds; stderr: {:?}",
+            self.read_first_child_stderr()
+        );
+    }
+
+    fn invocation_count(&self, name: &str) -> usize {
+        self.tmux_invocations()
+            .iter()
+            .filter(|invocation| *invocation == name)
+            .count()
     }
 
     fn tmux_invocations(&self) -> Vec<String> {

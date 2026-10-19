@@ -6,9 +6,11 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
+use std::time::Duration;
+
 use solstone_tmux::indicator::{
     IndicatorError, IndicatorIo, IndicatorOwnership, OBSERVING_VALUE, OptionValue, SOLSTONE_OPTION,
-    STATUS_LEFT, SYNCING_VALUE,
+    STATUS_LEFT, SYNCING_VALUE, ServerIndicator,
 };
 use solstone_tmux::observer::{NoopShutdownIndicator, ShutdownIndicator};
 use solstone_tmux::sync::SyncActivity;
@@ -427,6 +429,142 @@ async fn matching_owned_status_left_restores_original_absence() {
     assert_eq!(io.value(STATUS_LEFT), OptionValue::Absent);
 }
 
+const REFRESH: Duration = Duration::from_secs(5);
+
+fn installed_prefix_count(io: &MemoryIndicator) -> usize {
+    match io.value(STATUS_LEFT) {
+        OptionValue::Present(status) => status.matches("#{?@solstone").count(),
+        OptionValue::Absent => 0,
+    }
+}
+
+#[tokio::test]
+async fn no_tmux_server_defers_installation_until_one_starts() {
+    let io = MemoryIndicator::default();
+    io.stop_server();
+
+    let mut indicator = ServerIndicator::start(io.clone(), REFRESH)
+        .await
+        .expect("a missing server is not a startup error");
+    assert!(!indicator.is_installed());
+    indicator.refresh().await.expect("refresh without a server");
+    assert!(!indicator.is_installed());
+    assert!(
+        io.log().iter().all(|entry| !entry.starts_with("write:")),
+        "nothing may be written without a server: {:?}",
+        io.log()
+    );
+
+    io.start_server("first", "owner status");
+    indicator
+        .refresh()
+        .await
+        .expect("refresh once a server runs");
+    assert!(indicator.is_installed());
+    assert_eq!(installed_prefix_count(&io), 1);
+    assert_eq!(
+        io.value(SOLSTONE_OPTION),
+        OptionValue::Present(OBSERVING_VALUE.to_owned())
+    );
+
+    io.clear_log();
+    indicator
+        .refresh()
+        .await
+        .expect("refresh on the same server");
+    indicator
+        .refresh()
+        .await
+        .expect("refresh on the same server again");
+    assert_eq!(io.log(), vec!["identity", "identity"]);
+    assert_eq!(installed_prefix_count(&io), 1);
+
+    indicator.restore().await.expect("restore");
+    assert_eq!(
+        io.value(STATUS_LEFT),
+        OptionValue::Present("owner status".to_owned())
+    );
+    assert_eq!(io.value(SOLSTONE_OPTION), OptionValue::Absent);
+}
+
+#[tokio::test]
+async fn server_exit_and_replacement_reinstalls_once_on_the_new_server() {
+    let io = MemoryIndicator::with([
+        (STATUS_LEFT, OptionValue::Present("owner status".to_owned())),
+        (SOLSTONE_OPTION, OptionValue::Absent),
+    ]);
+    let mut indicator = ServerIndicator::start(io.clone(), REFRESH)
+        .await
+        .expect("start with a server");
+    assert!(indicator.is_installed());
+
+    io.stop_server();
+    indicator
+        .set_working(true)
+        .await
+        .expect("activity while the server is gone");
+    assert!(!indicator.is_installed());
+    indicator.refresh().await.expect("refresh without a server");
+    assert!(!indicator.is_installed());
+
+    // A replacement server started between two refreshes has none of our options.
+    io.start_server("second", "second status");
+    indicator
+        .refresh()
+        .await
+        .expect("refresh on the new server");
+    assert!(indicator.is_installed());
+    assert_eq!(installed_prefix_count(&io), 1);
+    assert_eq!(
+        io.value(SOLSTONE_OPTION),
+        OptionValue::Present(SYNCING_VALUE.to_owned()),
+        "the install must carry the activity seen while waiting"
+    );
+
+    io.stop_server();
+    io.start_server("third", "third status");
+    indicator
+        .refresh()
+        .await
+        .expect("refresh on a replaced server");
+    assert_eq!(installed_prefix_count(&io), 1);
+
+    indicator.restore().await.expect("restore");
+    assert_eq!(
+        io.value(STATUS_LEFT),
+        OptionValue::Present("third status".to_owned())
+    );
+}
+
+#[tokio::test]
+async fn restore_after_the_server_exits_is_clean() {
+    let io = MemoryIndicator::with([
+        (STATUS_LEFT, OptionValue::Present("owner status".to_owned())),
+        (SOLSTONE_OPTION, OptionValue::Absent),
+    ]);
+    let mut ownership = IndicatorOwnership::install_default(io.clone())
+        .await
+        .expect("install");
+    io.stop_server();
+
+    ownership
+        .restore()
+        .await
+        .expect("a server that exited took its options with it");
+}
+
+#[tokio::test]
+async fn real_tmux_errors_still_surface() {
+    let io = MemoryIndicator::default();
+    io.break_server();
+
+    let error = ServerIndicator::start(io.clone(), REFRESH)
+        .await
+        .err()
+        .expect("a failing tmux is a startup error");
+    assert!(matches!(error, IndicatorError::Nonzero { .. }));
+}
+
 async fn install(io: MemoryIndicator) -> IndicatorOwnership<MemoryIndicator> {
     IndicatorOwnership::install(io, WRITTEN_STATUS_LEFT.to_owned(), "observer".to_owned())
         .await
@@ -437,6 +575,20 @@ async fn install(io: MemoryIndicator) -> IndicatorOwnership<MemoryIndicator> {
 struct MemoryIndicator {
     values: Arc<Mutex<HashMap<String, OptionValue>>>,
     log: Arc<Mutex<Vec<String>>>,
+    server: Arc<Mutex<MemoryServer>>,
+}
+
+#[derive(Clone)]
+enum MemoryServer {
+    Running(String),
+    Absent,
+    Broken,
+}
+
+impl Default for MemoryServer {
+    fn default() -> Self {
+        Self::Running("default".to_owned())
+    }
 }
 
 impl MemoryIndicator {
@@ -449,6 +601,37 @@ impl MemoryIndicator {
                     .collect(),
             )),
             log: Arc::new(Mutex::new(Vec::new())),
+            server: Arc::default(),
+        }
+    }
+
+    /// A server's options exist only while it runs.
+    fn stop_server(&self) {
+        *self.server.lock().expect("server state poisoned") = MemoryServer::Absent;
+        self.values
+            .lock()
+            .expect("indicator state poisoned")
+            .clear();
+    }
+
+    fn start_server(&self, identity: &str, status_left: &str) {
+        *self.server.lock().expect("server state poisoned") =
+            MemoryServer::Running(identity.to_owned());
+        self.set_external(STATUS_LEFT, OptionValue::Present(status_left.to_owned()));
+    }
+
+    fn break_server(&self) {
+        *self.server.lock().expect("server state poisoned") = MemoryServer::Broken;
+    }
+
+    fn reachable(&self, name: &str) -> Result<String, IndicatorError> {
+        match &*self.server.lock().expect("server state poisoned") {
+            MemoryServer::Running(identity) => Ok(identity.clone()),
+            MemoryServer::Absent => Err(IndicatorError::NoServer),
+            MemoryServer::Broken => Err(IndicatorError::Nonzero {
+                name: name.to_owned(),
+                status: 1,
+            }),
         }
     }
 
@@ -478,6 +661,18 @@ impl MemoryIndicator {
 }
 
 impl IndicatorIo for MemoryIndicator {
+    fn server_identity<'a>(
+        &'a self,
+    ) -> Pin<Box<dyn Future<Output = Result<String, IndicatorError>> + Send + 'a>> {
+        Box::pin(async move {
+            self.log
+                .lock()
+                .expect("indicator log poisoned")
+                .push("identity".to_owned());
+            self.reachable("server identity")
+        })
+    }
+
     fn read<'a>(
         &'a self,
         name: &'a str,
@@ -487,6 +682,7 @@ impl IndicatorIo for MemoryIndicator {
                 .lock()
                 .expect("indicator log poisoned")
                 .push(format!("read:{name}"));
+            self.reachable(name)?;
             Ok(self.value(name))
         })
     }
@@ -501,6 +697,7 @@ impl IndicatorIo for MemoryIndicator {
                 .lock()
                 .expect("indicator log poisoned")
                 .push(format!("write:{name}"));
+            self.reachable(name)?;
             self.values
                 .lock()
                 .expect("indicator state poisoned")
@@ -514,6 +711,7 @@ impl IndicatorIo for MemoryIndicator {
         name: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<(), IndicatorError>> + Send + 'a>> {
         Box::pin(async move {
+            self.reachable(name)?;
             self.values
                 .lock()
                 .expect("indicator state poisoned")

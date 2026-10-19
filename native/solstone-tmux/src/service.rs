@@ -32,6 +32,8 @@ pub struct LocalObserver {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ServiceStatus {
     Active,
+    /// Waiting to start again after an unexpected exit.
+    Restarting,
     Inactive,
     Absent,
 }
@@ -40,7 +42,7 @@ impl ServiceStatus {
     pub const fn exit_code(self) -> i32 {
         match self {
             Self::Active => 0,
-            Self::Inactive => 3,
+            Self::Restarting | Self::Inactive => 3,
             Self::Absent => 4,
         }
     }

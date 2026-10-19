@@ -32,6 +32,9 @@ impl WarningSink for StderrWarnings {
 pub enum TmuxError {
     ExecutableMustBeAbsolute(PathBuf),
     Command(CommandError),
+    NoServer {
+        operation: TmuxOperation,
+    },
     Nonzero {
         operation: TmuxOperation,
         status: i32,
@@ -58,6 +61,9 @@ impl fmt::Display for TmuxError {
                 )
             }
             Self::Command(error) => error.fmt(formatter),
+            Self::NoServer { operation } => {
+                write!(formatter, "{operation:?} found no tmux server running")
+            }
             Self::Nonzero {
                 operation,
                 status,
@@ -123,7 +129,7 @@ where
 
     pub async fn list_clients(&self) -> Result<Vec<ClientInfo>, TmuxError> {
         let operation = TmuxOperation::ListClients;
-        let output = self
+        let output = match self
             .run(
                 operation.clone(),
                 [
@@ -132,7 +138,13 @@ where
                     OsString::from("#{client_session} #{client_activity}"),
                 ],
             )
-            .await?;
+            .await
+        {
+            Ok(output) => output,
+            // No server means no clients: nothing to observe until one starts.
+            Err(TmuxError::NoServer { .. }) => return Ok(Vec::new()),
+            Err(error) => return Err(error),
+        };
         let stdout = String::from_utf8(output.stdout).map_err(|source| TmuxError::InvalidUtf8 {
             operation: operation.clone(),
             source,
@@ -303,6 +315,9 @@ where
             })
             .await
             .map_err(TmuxError::Command)?;
+        if reports_no_server(&output) {
+            return Err(TmuxError::NoServer { operation });
+        }
         if output.status != 0 {
             return Err(TmuxError::Nonzero {
                 operation,
@@ -318,6 +333,22 @@ where
             "dropping malformed list-clients row {row:?}: {reason}"
         ));
     }
+}
+
+/// Whether a failed tmux command reports that no server is listening on its
+/// socket. tmux prints one of two lines, depending on whether the socket file
+/// is missing (no server has started since boot) or stale (the server exited
+/// after its last session closed). tmux leaves `LC_MESSAGES` at the C locale,
+/// so the `strerror` text is stable.
+pub fn reports_no_server(output: &CommandOutput) -> bool {
+    if output.status == 0 {
+        return false;
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let message = stderr.trim_end();
+    message.starts_with("no server running on ")
+        || (message.starts_with("error connecting to ")
+            && message.ends_with(" (No such file or directory)"))
 }
 
 fn parse_windows(stdout: &str, operation: TmuxOperation) -> Result<Vec<WindowInfo>, TmuxError> {

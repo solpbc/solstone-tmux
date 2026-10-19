@@ -8,8 +8,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use solstone_tmux::command::{CommandInvocation, CommandOperation, CommandRunner, TmuxOperation};
-use solstone_tmux::tmux::{TMUX_TIMEOUT, TmuxAdapter};
-use support::{ExpectedInvocation, FixtureRunner, RecordingWarnings, output};
+use solstone_tmux::tmux::{TMUX_TIMEOUT, TmuxAdapter, TmuxError, reports_no_server};
+use support::{ExpectedInvocation, FixtureRunner, RecordingWarnings, command_output, output};
 
 const TMUX: &str = "/usr/bin/tmux";
 
@@ -36,6 +36,69 @@ async fn list_clients_argv_timeout_and_no_socket_override() {
             .any(|argument| argument == "-L" || argument == "-S")
     );
     runner.assert_finished().expect("all fixture calls used");
+}
+
+#[tokio::test]
+async fn no_tmux_server_means_no_clients_to_observe() {
+    // Before any server starts the socket file is missing; after the last
+    // session closes it is stale. tmux reports the two differently.
+    for stderr in [
+        b"error connecting to /tmp/tmux-1000/default (No such file or directory)\n".as_slice(),
+        b"no server running on /tmp/tmux-1000/default\n".as_slice(),
+    ] {
+        let expected = invocation(
+            TmuxOperation::ListClients,
+            &["list-clients", "-F", "#{client_session} #{client_activity}"],
+        );
+        let runner = FixtureRunner::new([ExpectedInvocation {
+            invocation: expected,
+            outcome: command_output(b"", stderr, 1),
+        }]);
+        let adapter = TmuxAdapter::new(PathBuf::from(TMUX), runner.clone()).expect("adapter");
+
+        let clients = adapter
+            .list_active_clients(100, Duration::from_secs(5))
+            .await
+            .expect("no server is not a capture failure");
+
+        assert!(clients.is_empty());
+        runner.assert_finished().expect("all fixture calls used");
+    }
+}
+
+#[tokio::test]
+async fn other_list_clients_failures_still_surface() {
+    let expected = invocation(
+        TmuxOperation::ListClients,
+        &["list-clients", "-F", "#{client_session} #{client_activity}"],
+    );
+    let runner = FixtureRunner::new([ExpectedInvocation {
+        invocation: expected,
+        outcome: command_output(
+            b"",
+            b"error connecting to /tmp/tmux-1000/default (Permission denied)\n",
+            1,
+        ),
+    }]);
+    let adapter = TmuxAdapter::new(PathBuf::from(TMUX), runner.clone()).expect("adapter");
+
+    let error = adapter
+        .list_clients()
+        .await
+        .expect_err("permission failure");
+
+    assert!(matches!(error, TmuxError::Nonzero { .. }));
+    runner.assert_finished().expect("all fixture calls used");
+}
+
+#[test]
+fn no_server_detection_requires_a_failed_command() {
+    let missing = solstone_tmux::command::CommandOutput {
+        stdout: Vec::new(),
+        stderr: b"no server running on /tmp/tmux-1000/default\n".to_vec(),
+        status: 0,
+    };
+    assert!(!reports_no_server(&missing));
 }
 
 #[tokio::test]

@@ -141,14 +141,15 @@ pub async fn status(
         &["--user", "is-active", UNIT_NAME],
     )
     .await?;
-    if output.status == 0 && String::from_utf8_lossy(&output.stdout).trim() == "active" {
+    let state = String::from_utf8_lossy(&output.stdout);
+    let state = state.trim();
+    if output.status == 0 && state == "active" {
         Ok(ServiceStatus::Active)
-    } else if reports_absent(&output)
-        || matches!(
-            String::from_utf8_lossy(&output.stdout).trim(),
-            "inactive" | "failed" | "activating" | "deactivating"
-        )
-    {
+    } else if state == "activating" {
+        // A simple unit is activating only while it waits out RestartSec
+        // after an unexpected exit.
+        Ok(ServiceStatus::Restarting)
+    } else if reports_absent(&output) || matches!(state, "inactive" | "failed" | "deactivating") {
         Ok(ServiceStatus::Inactive)
     } else {
         Err(manager_error("systemd status", &output))

@@ -21,6 +21,7 @@ pub enum TmuxOperation {
     ListWindows(String),
     ListPanes(String),
     CapturePane(String),
+    ServerIdentity,
     ShowOption(String),
     SetOption(String),
     UnsetOption(String),

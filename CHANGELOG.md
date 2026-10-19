@@ -6,6 +6,11 @@ Format adapted from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- if tmux isn't running when solstone-tmux starts (say, right after you install the service or after a reboot), solstone-tmux now waits for it and adds its status indicator once you start tmux. before, it stopped and started again every few seconds until tmux was running. closing your last tmux session no longer stops it either.
+- on linux, `solstone-tmux status` now shows `restarting` while the service is about to start again after stopping unexpectedly. before, it showed `inactive`.
+
 ## [2.0.16] - 2026-10-18
 
 ### Changed

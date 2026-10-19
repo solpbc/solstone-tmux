@@ -160,6 +160,10 @@ not use the bare `unsafe` token.
 loads native config, recovers configured streams, opens a segment, optionally
 installs the owned tmux indicator, and starts capture and sync supervision.
 
+No running tmux server is a normal state, not a failure: a poll then sees no
+clients, and the indicator waits for a server. Supervision refreshes the
+indicator every capture interval, installing it once on each new tmux server.
+
 Each poll builds complete per-session tmux transactions, serializes compatible
 JSONL envelopes, and appends only changed observations. Rotation uses monotonic
 time; paths and envelope timestamps use wall time.
