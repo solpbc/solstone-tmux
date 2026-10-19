@@ -511,9 +511,12 @@ async fn executable_switch_queries_pid_and_uses_lookup_basename() {
     assert_eq!(lookup_calls.lock().expect("lookup calls").as_slice(), [321]);
     assert_eq!(runner.calls()[4].args[4], "#{pane_pid}");
     assert_eq!(runner.calls().len(), 5);
-    assert!(!runner.calls().iter().any(|call| {
-        call.args.iter().any(|argument| argument == "#{pane_tty}")
-    }));
+    assert!(
+        !runner
+            .calls()
+            .iter()
+            .any(|call| { call.args.iter().any(|argument| argument == "#{pane_tty}") })
+    );
     runner.assert_finished().expect("all fixture calls used");
 }
 
@@ -878,10 +881,7 @@ impl ForegroundLookup for FakeLookup {
         pane_pid: u32,
     ) -> Pin<Box<dyn Future<Output = Result<String, ExeFailure>> + Send + 'a>> {
         Box::pin(async move {
-            self.pids
-                .lock()
-                .expect("lookup calls")
-                .push(pane_pid);
+            self.pids.lock().expect("lookup calls").push(pane_pid);
             self.result.clone()
         })
     }

@@ -229,9 +229,7 @@ where
                         }
                     }
                     if self.executable_enabled {
-                        let pid = match self
-                            .display_message(&pane.id, DisplayField::PanePid)
-                            .await
+                        let pid = match self.display_message(&pane.id, DisplayField::PanePid).await
                         {
                             Ok(value) => value.parse::<u32>().ok().filter(|pid| *pid != 0),
                             Err(()) => None,

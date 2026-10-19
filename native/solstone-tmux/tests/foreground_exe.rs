@@ -36,14 +36,8 @@ fn foreground_exe_linux_errors() {
         b"100 bash S 1 100 100 34816 200 0\n".as_slice(),
         b"100 (bash) S 1 100 100 34816\n".as_slice(),
     ] {
-        assert_eq!(
-            linux_foreground_pgrp(stat),
-            Err(ExeFailure::Unavailable)
-        );
-        assert_eq!(
-            linux_exe_path_for_stat(stat),
-            Err(ExeFailure::Unavailable)
-        );
+        assert_eq!(linux_foreground_pgrp(stat), Err(ExeFailure::Unavailable));
+        assert_eq!(linux_exe_path_for_stat(stat), Err(ExeFailure::Unavailable));
     }
     for kind in [io::ErrorKind::PermissionDenied, io::ErrorKind::NotFound] {
         assert_eq!(
@@ -91,8 +85,5 @@ fn foreground_exe_macos_tpgid_selects_foreground() {
 #[test]
 fn foreground_exe_macos_errors() {
     assert_eq!(macos_foreground_pid(0), Err(ExeFailure::Unavailable));
-    assert_eq!(
-        macos_foreground_pid(u32::MAX),
-        Err(ExeFailure::Unavailable)
-    );
+    assert_eq!(macos_foreground_pid(u32::MAX), Err(ExeFailure::Unavailable));
 }

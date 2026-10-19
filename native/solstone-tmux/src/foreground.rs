@@ -113,8 +113,8 @@ pub async fn lookup_basename(pane_pid: u32) -> Result<String, ExeFailure> {
 fn blocking_basename(pane_pid: u32) -> Result<String, ExeFailure> {
     use std::os::unix::ffi::OsStringExt;
 
-    let stat = std::fs::read(format!("/proc/{pane_pid}/stat"))
-        .map_err(|error| map_io_error(&error))?;
+    let stat =
+        std::fs::read(format!("/proc/{pane_pid}/stat")).map_err(|error| map_io_error(&error))?;
     let path = linux_exe_path_for_stat(&stat)?;
     let target = rustix::fs::readlink(&path, Vec::new())
         .map_err(|error| map_io_error(&io::Error::from(error)))?;
