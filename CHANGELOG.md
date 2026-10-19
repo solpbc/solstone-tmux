@@ -8,7 +8,7 @@ Format adapted from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- You can record a pane's title, working directory, and executable. Those settings are off unless you set `pane_title`, `working_directory`, or `executable` to true in config.json. Titles and paths can be sensitive. Restart the service after you change them.
+- you can record a pane's title, working directory, and executable. those settings are off unless you set `pane_title`, `working_directory`, or `executable` to true in config.json. titles and paths can be sensitive. restart the service after you change them.
 
 ### Fixed
 
