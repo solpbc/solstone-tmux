@@ -25,6 +25,39 @@ pub fn linux_exe_link(pgrp: u32) -> PathBuf {
     PathBuf::from(format!("/proc/{pgrp}/exe"))
 }
 
+pub fn linux_foreground_pgrp(stat: &[u8]) -> Result<u32, ExeFailure> {
+    let comm_end = stat
+        .iter()
+        .rposition(|byte| *byte == b')')
+        .ok_or(ExeFailure::Unavailable)?;
+    let mut fields = stat
+        .get(comm_end + 1..)
+        .ok_or(ExeFailure::Unavailable)?
+        .split(u8::is_ascii_whitespace)
+        .filter(|field| !field.is_empty());
+    let tpgid = fields.nth(5).ok_or(ExeFailure::Unavailable)?;
+    let tpgid = std::str::from_utf8(tpgid)
+        .map_err(|_| ExeFailure::Unavailable)?
+        .parse::<i64>()
+        .map_err(|_| ExeFailure::Unavailable)?;
+    if tpgid <= 0 {
+        return Err(ExeFailure::Unavailable);
+    }
+    u32::try_from(tpgid).map_err(|_| ExeFailure::Unavailable)
+}
+
+pub fn linux_exe_path_for_stat(stat: &[u8]) -> Result<PathBuf, ExeFailure> {
+    Ok(linux_exe_link(linux_foreground_pgrp(stat)?))
+}
+
+pub fn macos_foreground_pid(e_tpgid: u32) -> Result<i32, ExeFailure> {
+    let pid = i32::try_from(e_tpgid).map_err(|_| ExeFailure::Unavailable)?;
+    if pid <= 0 {
+        return Err(ExeFailure::Unavailable);
+    }
+    Ok(pid)
+}
+
 pub fn map_io_error(error: &io::Error) -> ExeFailure {
     if matches!(
         error.kind(),
@@ -51,19 +84,10 @@ pub fn map_io_error(error: &io::Error) -> ExeFailure {
     }
 }
 
-pub fn macos_group_leader(pgrp: i32, members: &[i32]) -> Result<i32, ExeFailure> {
-    members
-        .iter()
-        .copied()
-        .find(|member| *member == pgrp)
-        .ok_or(ExeFailure::Unavailable)
-}
-
 pub trait ForegroundLookup: Send + Sync {
     fn lookup<'a>(
         &'a self,
-        tty: &'a str,
-        shell_pid: u32,
+        pane_pid: u32,
     ) -> Pin<Box<dyn Future<Output = Result<String, ExeFailure>> + Send + 'a>>;
 }
 
@@ -73,31 +97,25 @@ pub struct SystemLookup;
 impl ForegroundLookup for SystemLookup {
     fn lookup<'a>(
         &'a self,
-        tty: &'a str,
-        shell_pid: u32,
+        pane_pid: u32,
     ) -> Pin<Box<dyn Future<Output = Result<String, ExeFailure>> + Send + 'a>> {
-        Box::pin(lookup_basename(tty, shell_pid))
+        Box::pin(lookup_basename(pane_pid))
     }
 }
 
-pub async fn lookup_basename(tty: &str, shell_pid: u32) -> Result<String, ExeFailure> {
-    let tty = tty.to_owned();
-    tokio::task::spawn_blocking(move || blocking_basename(&tty, shell_pid))
+pub async fn lookup_basename(pane_pid: u32) -> Result<String, ExeFailure> {
+    tokio::task::spawn_blocking(move || blocking_basename(pane_pid))
         .await
         .unwrap_or(Err(ExeFailure::Unavailable))
 }
 
 #[cfg(target_os = "linux")]
-fn blocking_basename(tty: &str, _shell_pid: u32) -> Result<String, ExeFailure> {
-    use std::fs::File;
+fn blocking_basename(pane_pid: u32) -> Result<String, ExeFailure> {
     use std::os::unix::ffi::OsStringExt;
 
-    let terminal = File::open(tty).map_err(|error| map_io_error(&error))?;
-    let foreground_pgrp = rustix::termios::tcgetpgrp(&terminal)
-        .map_err(|error| map_io_error(&io::Error::from(error)))?
-        .as_raw_pid();
-    let pgrp = u32::try_from(foreground_pgrp).map_err(|_| ExeFailure::Unavailable)?;
-    let path = linux_exe_link(pgrp);
+    let stat = std::fs::read(format!("/proc/{pane_pid}/stat"))
+        .map_err(|error| map_io_error(&error))?;
+    let path = linux_exe_path_for_stat(&stat)?;
     let target = rustix::fs::readlink(&path, Vec::new())
         .map_err(|error| map_io_error(&io::Error::from(error)))?;
     let path = PathBuf::from(std::ffi::OsString::from_vec(target.into_bytes()));
@@ -105,29 +123,16 @@ fn blocking_basename(tty: &str, _shell_pid: u32) -> Result<String, ExeFailure> {
 }
 
 #[cfg(target_os = "macos")]
-fn blocking_basename(tty: &str, _shell_pid: u32) -> Result<String, ExeFailure> {
-    use std::fs::File;
-
-    let terminal = File::open(tty).map_err(|error| map_io_error(&error))?;
-    let foreground_pgrp = rustix::termios::tcgetpgrp(&terminal)
-        .map_err(|error| map_io_error(&io::Error::from(error)))?
-        .as_raw_pid();
-    let pgrp = u32::try_from(foreground_pgrp).map_err(|_| ExeFailure::Unavailable)?;
-    let members =
-        libproc::processes::pids_by_type(libproc::processes::ProcFilter::ByProgramGroup {
-            pgrpid: pgrp,
-        })
+fn blocking_basename(pane_pid: u32) -> Result<String, ExeFailure> {
+    let pane_pid = i32::try_from(pane_pid).map_err(|_| ExeFailure::Unavailable)?;
+    let info = libproc::proc_pid::pidinfo::<libproc::bsd_info::BSDInfo>(pane_pid, 0)
         .map_err(|_| ExeFailure::Unavailable)?;
-    let members = members
-        .into_iter()
-        .filter_map(|pid| i32::try_from(pid).ok())
-        .collect::<Vec<_>>();
-    let leader = macos_group_leader(foreground_pgrp, &members)?;
-    let path = libproc::libproc::proc_pid::pidpath(leader).map_err(|_| ExeFailure::Unavailable)?;
+    let foreground_pid = macos_foreground_pid(info.e_tpgid)?;
+    let path = libproc::proc_pid::pidpath(foreground_pid).map_err(|_| ExeFailure::Unavailable)?;
     exe_basename(Path::new(&path))
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn blocking_basename(_tty: &str, _shell_pid: u32) -> Result<String, ExeFailure> {
+fn blocking_basename(_pane_pid: u32) -> Result<String, ExeFailure> {
     Err(ExeFailure::Unsupported)
 }

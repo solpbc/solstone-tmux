@@ -9,7 +9,7 @@ use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
 use std::time::Duration;
 
 use serde_json::Value;
@@ -417,7 +417,7 @@ async fn all_false_context_keeps_argv_unchanged() {
         .into_iter()
         .chain(successful_session("main", b"screen\n".to_vec())),
     );
-    let lookup_calls = Arc::new(AtomicUsize::new(0));
+    let lookup_calls = Arc::new(Mutex::new(Vec::new()));
     let adapter = context_adapter(runner.clone(), false, false, false, lookup_calls.clone());
 
     let poll = adapter
@@ -426,7 +426,7 @@ async fn all_false_context_keeps_argv_unchanged() {
         .expect("poll");
 
     assert!(poll.activity_jsonl.is_empty());
-    assert_eq!(lookup_calls.load(Ordering::SeqCst), 0);
+    assert!(lookup_calls.lock().expect("lookup calls").is_empty());
     assert_eq!(runner.calls().len(), 4);
     runner.assert_finished().expect("all fixture calls used");
 }
@@ -434,7 +434,7 @@ async fn all_false_context_keeps_argv_unchanged() {
 #[tokio::test]
 async fn pane_title_switch_uses_only_title_argv_and_json_key() {
     let runner = context_runner_with("main", DisplayField::PaneTitle, output(b"title\n".to_vec()));
-    let lookup_calls = Arc::new(AtomicUsize::new(0));
+    let lookup_calls = Arc::new(Mutex::new(Vec::new()));
     let adapter = context_adapter(runner.clone(), true, false, false, lookup_calls.clone());
     let poll = adapter
         .poll_context(wall_now(100), Duration::from_secs(5))
@@ -446,7 +446,7 @@ async fn pane_title_switch_uses_only_title_argv_and_json_key() {
     assert_eq!(row["pane_title"], "title");
     assert!(row.get("cwd").is_none());
     assert!(row.get("exe").is_none());
-    assert_eq!(lookup_calls.load(Ordering::SeqCst), 0);
+    assert!(lookup_calls.lock().expect("lookup calls").is_empty());
     assert_eq!(
         runner.calls().last().expect("display invocation").args,
         ["display-message", "-p", "-t", "%0", "#{pane_title}"]
@@ -464,7 +464,7 @@ async fn working_directory_switch_uses_only_cwd_argv_and_json_key() {
         DisplayField::PaneCurrentPath,
         output(b"/work\n".to_vec()),
     );
-    let lookup_calls = Arc::new(AtomicUsize::new(0));
+    let lookup_calls = Arc::new(Mutex::new(Vec::new()));
     let adapter = context_adapter(runner.clone(), false, true, false, lookup_calls.clone());
     let poll = adapter
         .poll_context(wall_now(100), Duration::from_secs(5))
@@ -476,7 +476,7 @@ async fn working_directory_switch_uses_only_cwd_argv_and_json_key() {
     assert_eq!(row["cwd"], "/work");
     assert!(row.get("pane_title").is_none());
     assert!(row.get("exe").is_none());
-    assert_eq!(lookup_calls.load(Ordering::SeqCst), 0);
+    assert!(lookup_calls.lock().expect("lookup calls").is_empty());
     assert_eq!(
         runner.calls().last().expect("display invocation").args[4],
         "#{pane_current_path}"
@@ -485,7 +485,7 @@ async fn working_directory_switch_uses_only_cwd_argv_and_json_key() {
 }
 
 #[tokio::test]
-async fn executable_switch_queries_pid_and_tty_and_uses_lookup_basename() {
+async fn executable_switch_queries_pid_and_uses_lookup_basename() {
     let runner = FixtureRunner::new(
         [ExpectedInvocation {
             invocation: clients_invocation(),
@@ -493,18 +493,12 @@ async fn executable_switch_queries_pid_and_tty_and_uses_lookup_basename() {
         }]
         .into_iter()
         .chain(successful_session("main", b"screen\n".to_vec()))
-        .chain([
-            ExpectedInvocation {
-                invocation: display_invocation("%0", DisplayField::PanePid),
-                outcome: output(b"321\n".to_vec()),
-            },
-            ExpectedInvocation {
-                invocation: display_invocation("%0", DisplayField::PaneTty),
-                outcome: output(b"/dev/pts/5\n".to_vec()),
-            },
-        ]),
+        .chain([ExpectedInvocation {
+            invocation: display_invocation("%0", DisplayField::PanePid),
+            outcome: output(b"321\n".to_vec()),
+        }]),
     );
-    let lookup_calls = Arc::new(AtomicUsize::new(0));
+    let lookup_calls = Arc::new(Mutex::new(Vec::new()));
     let adapter = context_adapter(runner.clone(), false, false, true, lookup_calls.clone());
     let poll = adapter
         .poll_context(wall_now(100), Duration::from_secs(5))
@@ -514,14 +508,17 @@ async fn executable_switch_queries_pid_and_tty_and_uses_lookup_basename() {
     assert_eq!(row["window"], "active");
     assert_ne!(row["window"], "@0");
     assert_eq!(row["exe"], "sleep");
-    assert_eq!(lookup_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(lookup_calls.lock().expect("lookup calls").as_slice(), [321]);
     assert_eq!(runner.calls()[4].args[4], "#{pane_pid}");
-    assert_eq!(runner.calls()[5].args[4], "#{pane_tty}");
+    assert_eq!(runner.calls().len(), 5);
+    assert!(!runner.calls().iter().any(|call| {
+        call.args.iter().any(|argument| argument == "#{pane_tty}")
+    }));
     runner.assert_finished().expect("all fixture calls used");
 }
 
 #[tokio::test]
-async fn executable_invalid_pid_still_reads_tty_without_lookup() {
+async fn executable_invalid_pid_warns_without_lookup() {
     let runner = FixtureRunner::new(
         [ExpectedInvocation {
             invocation: clients_invocation(),
@@ -529,18 +526,12 @@ async fn executable_invalid_pid_still_reads_tty_without_lookup() {
         }]
         .into_iter()
         .chain(successful_session("main", b"screen\n".to_vec()))
-        .chain([
-            ExpectedInvocation {
-                invocation: display_invocation("%0", DisplayField::PanePid),
-                outcome: output(b"0\n".to_vec()),
-            },
-            ExpectedInvocation {
-                invocation: display_invocation("%0", DisplayField::PaneTty),
-                outcome: output(b"/dev/pts/5\n".to_vec()),
-            },
-        ]),
+        .chain([ExpectedInvocation {
+            invocation: display_invocation("%0", DisplayField::PanePid),
+            outcome: output(b"0\n".to_vec()),
+        }]),
     );
-    let lookup_calls = Arc::new(AtomicUsize::new(0));
+    let lookup_calls = Arc::new(Mutex::new(Vec::new()));
     let warnings = RecordingWarnings::default();
     let adapter = TmuxAdapter::with_context(
         PathBuf::from(TMUX),
@@ -560,8 +551,8 @@ async fn executable_invalid_pid_still_reads_tty_without_lookup() {
         .await
         .expect("poll");
     assert_eq!(runner.calls()[4].args[4], "#{pane_pid}");
-    assert_eq!(runner.calls()[5].args[4], "#{pane_tty}");
-    assert_eq!(lookup_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(runner.calls().len(), 5);
+    assert!(lookup_calls.lock().expect("lookup calls").is_empty());
     let row = only_row(&poll.activity_jsonl);
     assert_eq!(row["kind"], "availability");
     assert_eq!(row["status"], "unavailable");
@@ -581,16 +572,10 @@ async fn executable_unsupported_is_only_reported_as_unsupported() {
         }]
         .into_iter()
         .chain(successful_session("main", b"screen\n".to_vec()))
-        .chain([
-            ExpectedInvocation {
-                invocation: display_invocation("%0", DisplayField::PanePid),
-                outcome: output(b"321\n".to_vec()),
-            },
-            ExpectedInvocation {
-                invocation: display_invocation("%0", DisplayField::PaneTty),
-                outcome: output(b"/dev/pts/5\n".to_vec()),
-            },
-        ]),
+        .chain([ExpectedInvocation {
+            invocation: display_invocation("%0", DisplayField::PanePid),
+            outcome: output(b"321\n".to_vec()),
+        }]),
     );
     let warnings = RecordingWarnings::default();
     let adapter = TmuxAdapter::with_context(
@@ -601,7 +586,7 @@ async fn executable_unsupported_is_only_reported_as_unsupported() {
         false,
         true,
         Arc::new(FakeLookup::new(
-            Arc::new(AtomicUsize::new(0)),
+            Arc::new(Mutex::new(Vec::new())),
             Err(ExeFailure::Unsupported),
         )),
     )
@@ -624,7 +609,7 @@ async fn stale_client_does_not_query_pane_context() {
         invocation: clients_invocation(),
         outcome: output(b"main 90\n".to_vec()),
     }]);
-    let lookup_calls = Arc::new(AtomicUsize::new(0));
+    let lookup_calls = Arc::new(Mutex::new(Vec::new()));
     let adapter = context_adapter(runner.clone(), true, true, true, lookup_calls.clone());
     let poll = adapter
         .poll_context(wall_now(100), Duration::from_secs(5))
@@ -632,7 +617,7 @@ async fn stale_client_does_not_query_pane_context() {
         .expect("poll");
     assert!(poll.captures.is_empty());
     assert!(poll.activity_jsonl.is_empty());
-    assert_eq!(lookup_calls.load(Ordering::SeqCst), 0);
+    assert!(lookup_calls.lock().expect("lookup calls").is_empty());
     assert_eq!(runner.calls().len(), 1);
     runner.assert_finished().expect("all fixture calls used");
 }
@@ -684,7 +669,7 @@ async fn metadata_fixtures_37b_and_38_preserve_observed_title_and_cwd() {
         true,
         false,
         Arc::new(FakeLookup::new(
-            Arc::new(AtomicUsize::new(0)),
+            Arc::new(Mutex::new(Vec::new())),
             Ok("unused".to_owned()),
         )),
     )
@@ -731,7 +716,7 @@ async fn metadata_failures_warn_without_payload() {
             false,
             false,
             Arc::new(FakeLookup::new(
-                Arc::new(AtomicUsize::new(0)),
+                Arc::new(Mutex::new(Vec::new())),
                 Ok("unused".to_owned()),
             )),
         )
@@ -783,7 +768,7 @@ async fn successful_sibling_field_is_kept_with_one_availability_row() {
         true,
         false,
         Arc::new(FakeLookup::new(
-            Arc::new(AtomicUsize::new(0)),
+            Arc::new(Mutex::new(Vec::new())),
             Ok("unused".to_owned()),
         )),
     )
@@ -854,7 +839,7 @@ fn context_adapter(
     pane_title: bool,
     working_directory: bool,
     executable_enabled: bool,
-    lookup_calls: Arc<AtomicUsize>,
+    lookup_calls: Arc<Mutex<Vec<u32>>>,
 ) -> TmuxAdapter<FixtureRunner, RecordingWarnings> {
     TmuxAdapter::with_context(
         PathBuf::from(TMUX),
@@ -877,24 +862,26 @@ fn wall_now(seconds: i64) -> time::OffsetDateTime {
 }
 
 struct FakeLookup {
-    calls: Arc<AtomicUsize>,
+    pids: Arc<Mutex<Vec<u32>>>,
     result: Result<String, ExeFailure>,
 }
 
 impl FakeLookup {
-    fn new(calls: Arc<AtomicUsize>, result: Result<String, ExeFailure>) -> Self {
-        Self { calls, result }
+    fn new(pids: Arc<Mutex<Vec<u32>>>, result: Result<String, ExeFailure>) -> Self {
+        Self { pids, result }
     }
 }
 
 impl ForegroundLookup for FakeLookup {
     fn lookup<'a>(
         &'a self,
-        _tty: &'a str,
-        _shell_pid: u32,
+        pane_pid: u32,
     ) -> Pin<Box<dyn Future<Output = Result<String, ExeFailure>> + Send + 'a>> {
         Box::pin(async move {
-            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.pids
+                .lock()
+                .expect("lookup calls")
+                .push(pane_pid);
             self.result.clone()
         })
     }

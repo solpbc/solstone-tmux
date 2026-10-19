@@ -33,7 +33,6 @@ pub enum DisplayField {
     PaneTitle,
     PaneCurrentPath,
     PanePid,
-    PaneTty,
 }
 
 impl DisplayField {
@@ -42,7 +41,6 @@ impl DisplayField {
             Self::PaneTitle => "#{pane_title}",
             Self::PaneCurrentPath => "#{pane_current_path}",
             Self::PanePid => "#{pane_pid}",
-            Self::PaneTty => "#{pane_tty}",
         }
     }
 }

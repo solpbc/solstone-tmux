@@ -229,30 +229,15 @@ where
                         }
                     }
                     if self.executable_enabled {
-                        let pid = self.display_message(&pane.id, DisplayField::PanePid).await;
-                        let tty = self.display_message(&pane.id, DisplayField::PaneTty).await;
-                        let pid = match pid {
+                        let pid = match self
+                            .display_message(&pane.id, DisplayField::PanePid)
+                            .await
+                        {
                             Ok(value) => value.parse::<u32>().ok().filter(|pid| *pid != 0),
                             Err(()) => None,
                         };
-                        let tty = match tty {
-                            Ok(value) if !value.is_empty() => Some(value),
-                            _ => None,
-                        };
-                        if pid.is_none() {
-                            any_failure = true;
-                            any_unavailable = true;
-                            self.warnings
-                                .warn("executable was not recorded (unavailable)");
-                        }
-                        if tty.is_none() {
-                            any_failure = true;
-                            any_unavailable = true;
-                            self.warnings
-                                .warn("executable was not recorded (unavailable)");
-                        }
-                        if let (Some(pid), Some(tty)) = (pid, tty) {
-                            match self.lookup.lookup(&tty, pid).await {
+                        if let Some(pid) = pid {
+                            match self.lookup.lookup(pid).await {
                                 Ok(value) if !value.is_empty() => exe = Some(value),
                                 Ok(_) | Err(ExeFailure::Unavailable) => {
                                     any_failure = true;
@@ -266,6 +251,11 @@ where
                                         .warn("executable was not recorded (unsupported)");
                                 }
                             }
+                        } else {
+                            any_failure = true;
+                            any_unavailable = true;
+                            self.warnings
+                                .warn("executable was not recorded (unavailable)");
                         }
                     }
                     if pane_title.is_some() || cwd.is_some() || exe.is_some() {

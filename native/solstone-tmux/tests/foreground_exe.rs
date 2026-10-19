@@ -5,13 +5,18 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use solstone_tmux::foreground::{
-    ExeFailure, exe_basename, linux_exe_link, macos_group_leader, map_io_error,
+    ExeFailure, exe_basename, linux_exe_link, linux_exe_path_for_stat, linux_foreground_pgrp,
+    macos_foreground_pid, map_io_error,
 };
 
 #[test]
 fn foreground_exe_linux_link_is_proc_exe_basename() {
-    let link = linux_exe_link(200);
+    let stat = b"100 (sleep 999 (not-exe)) S 1 100 50 34816 200 0 0\n";
+    assert_eq!(linux_foreground_pgrp(stat), Ok(200));
+    let link = linux_exe_path_for_stat(stat).expect("foreground executable path");
     assert_eq!(link, Path::new("/proc/200/exe"));
+    assert_ne!(link, Path::new("/proc/100/exe"));
+    assert_ne!(link, Path::new("/proc/999/exe"));
     assert!(!link.ends_with("cmdline"));
     assert!(!link.ends_with("comm"));
     assert_eq!(
@@ -25,6 +30,21 @@ fn foreground_exe_linux_link_is_proc_exe_basename() {
 
 #[test]
 fn foreground_exe_linux_errors() {
+    for stat in [
+        b"100 (bash) S 1 100 100 34816 -1 0\n".as_slice(),
+        b"100 (bash) S 1 100 100 34816 0 0\n".as_slice(),
+        b"100 bash S 1 100 100 34816 200 0\n".as_slice(),
+        b"100 (bash) S 1 100 100 34816\n".as_slice(),
+    ] {
+        assert_eq!(
+            linux_foreground_pgrp(stat),
+            Err(ExeFailure::Unavailable)
+        );
+        assert_eq!(
+            linux_exe_path_for_stat(stat),
+            Err(ExeFailure::Unavailable)
+        );
+    }
     for kind in [io::ErrorKind::PermissionDenied, io::ErrorKind::NotFound] {
         assert_eq!(
             map_io_error(&io::Error::from(kind)),
@@ -61,26 +81,18 @@ fn foreground_exe_linux_errors() {
 }
 
 #[test]
-fn foreground_exe_macos_leader_beats_pane_shell() {
+fn foreground_exe_macos_tpgid_selects_foreground() {
     let shell_pid = 100;
-    let foreground_pgrp = 200;
-    let members = [shell_pid, foreground_pgrp];
-    assert_eq!(
-        macos_group_leader(foreground_pgrp, &members),
-        Ok(foreground_pgrp)
-    );
-}
-
-#[test]
-fn foreground_exe_macos_missing_leader_does_not_use_shell() {
-    let shell_pid = 100;
-    assert_eq!(
-        macos_group_leader(200, &[shell_pid]),
-        Err(ExeFailure::Unavailable)
-    );
+    let foreground_pid = macos_foreground_pid(200).expect("foreground process group");
+    assert_eq!(foreground_pid, 200);
+    assert_ne!(foreground_pid, shell_pid);
 }
 
 #[test]
 fn foreground_exe_macos_errors() {
-    assert_eq!(macos_group_leader(200, &[]), Err(ExeFailure::Unavailable));
+    assert_eq!(macos_foreground_pid(0), Err(ExeFailure::Unavailable));
+    assert_eq!(
+        macos_foreground_pid(u32::MAX),
+        Err(ExeFailure::Unavailable)
+    );
 }
