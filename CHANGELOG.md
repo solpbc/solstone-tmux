@@ -6,6 +6,10 @@ Format adapted from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- security fix: if you use the relay, solstone-tmux no longer accepts relay certificates issued through emSign certificate authorities whose private keys are now public. before, someone between your computer and the relay could have posed as the relay and seen your computer's relay token. what goes to your journal travels inside a second encrypted connection that ends at your journal, so they could not read it.
+
 ## [2.0.17] - 2026-10-20
 
 ### Added
