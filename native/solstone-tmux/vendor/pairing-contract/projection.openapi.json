@@ -32,7 +32,7 @@
         "additionalProperties": true,
         "properties": {
           "client_label": {
-            "description": "Pairer-supplied label. Valid on the wire iff the UTF-8 byte length is 1-253 (no charset restriction). Empty, wrong JSON type, or more than 253 UTF-8 bytes is refused before nonce consume. JSON Schema minLength counts characters; the byte bound is x-max-utf8-bytes.",
+            "description": "Pairer-supplied label. Valid on the wire iff the UTF-8 byte length is 1-253 (no charset restriction). An empty value, a wrong JSON type, or more than 253 UTF-8 bytes is ignored: the ceremony proceeds without the label. JSON Schema minLength counts characters; the byte bound is x-max-utf8-bytes.",
             "minLength": 1,
             "type": "string",
             "x-max-utf8-bytes": 253
@@ -45,7 +45,7 @@
             "type": "string"
           },
           "platform": {
-            "description": "Closed pairer-supplied platform vocabulary. Empty string, wrong JSON type, or any other value is refused before nonce consume. There is no present-empty read-back state.",
+            "description": "Closed pairer-supplied platform vocabulary. An empty string, a wrong JSON type, or any other value is ignored: the ceremony proceeds without the platform. There is no present-empty read-back state.",
             "enum": [
               "linux",
               "macos",
@@ -101,7 +101,7 @@
   "info": {
     "description": "Generated from pairing_contract_authority.json. Covers only the pairing ceremony POST. Pairer-supplied identity fields are non-attestation and non-authorization.",
     "title": "Linked-device pairing identity contract",
-    "version": "2.0.0",
+    "version": "2.0.2",
     "x-disclaimer": "pairer-supplied / non-attestation / non-authorization",
     "x-generated": true,
     "x-generated-by": "solstone-core-repository-contracts"
@@ -141,7 +141,7 @@
                 }
               }
             },
-            "description": "Pairing request invalid, including invalid pairing identity fields"
+            "description": "Pairing request invalid"
           }
         },
         "x-aliases": [
@@ -178,7 +178,7 @@
       "classification": "closed",
       "id": "PairRequest.platform",
       "source_pointer": "/components/schemas/PairRequest/properties/platform",
-      "unknown_value_behavior": "reject",
+      "unknown_value_behavior": "ignore",
       "values": [
         "linux",
         "macos",

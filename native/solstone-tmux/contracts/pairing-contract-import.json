@@ -1,10 +1,10 @@
 {
   "authority_repository": "https://github.com/solpbc/solstone-journal",
-  "authority_commit": "f3622ddcae6ba4eee398c16baaf8c2e3fe240205",
+  "authority_commit": "d532c368ba3c036c2088165c10450665f4e4d16d",
   "authority_creation_commit": "c1e9589e60213b39042b92cae94a5d2f0448535e",
-  "bundle_version": "2.0.0",
+  "bundle_version": "2.0.2",
   "manifest_path": "manifest.json",
-  "manifest_sha256": "eb8280d83eaceb44990a159a50c9316c95205c57fe88df0f6c2ec2a45685ab3f",
-  "authority_input_sha256": "e0b07805a0e2f309e3d5f6e1443db076624274169088265866f90d91265a8cd4",
+  "manifest_sha256": "db19c34f8655fa1e438c29166f5152dc701c78319b523a04cc878004d6ac6d74",
+  "authority_input_sha256": "db35b5be244abbaea138751b109a07c3055ac72e578acfe0d872da02c9c7d6d3",
   "vendored_root": "native/solstone-tmux/vendor/pairing-contract"
 }

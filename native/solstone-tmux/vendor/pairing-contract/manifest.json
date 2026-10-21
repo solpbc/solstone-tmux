@@ -1,7 +1,7 @@
 {
   "audited_consumer_revisions": [],
   "bundle_schema_identity": "solstone.pairing-contract-bundle.schema.v1",
-  "bundle_semver": "2.0.0",
+  "bundle_semver": "2.0.2",
   "component_closure": [
     "Error",
     "PairRequest",
@@ -19,7 +19,7 @@
     },
     {
       "path": "projection.openapi.json",
-      "sha256": "2da034975310653cd3671fa5b5e652993479c58c5cc4e9e215bc41546687d220"
+      "sha256": "c47eb0967bca80f418298da5eeac325beef8b62dfc6903ea8440b5df7f642f9a"
     },
     {
       "path": "vectors.json",
@@ -32,7 +32,7 @@
       "id": "openapi.pairing_contract_authority",
       "path": "core/crates/solstone-core-repository-contracts/src/contracts/pairing_contract_authority.json",
       "role": "openapi_source",
-      "sha256": "e0b07805a0e2f309e3d5f6e1443db076624274169088265866f90d91265a8cd4"
+      "sha256": "db35b5be244abbaea138751b109a07c3055ac72e578acfe0d872da02c9c7d6d3"
     }
   ],
   "openapi_document_version": "1.0.0",
@@ -42,13 +42,13 @@
   ],
   "projection_path": "projection.openapi.json",
   "schema_dialect_uri": "https://json-schema.org/draft/2020-12/schema",
-  "scope_rationale": "This pairing-identity bundle projects only POST /app/network/pair. Consumer-audit arrays are empty because the native joiner still sends empty additional_fields and no shipped consumer has adopted client_label/platform yet.",
+  "scope_rationale": "This pairing-identity bundle projects only POST /app/network/pair. Consumer-audit arrays are empty: this bundle audits no consumer commit, and each pairing client checks the hints it sends in its own tests.",
   "vocabularies": [
     {
       "classification": "closed",
       "id": "PairRequest.platform",
       "source_pointer": "/components/schemas/PairRequest/properties/platform",
-      "unknown_value_behavior": "reject",
+      "unknown_value_behavior": "ignore",
       "values": [
         "linux",
         "macos",
