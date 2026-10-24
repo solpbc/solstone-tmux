@@ -21,8 +21,8 @@ fn missing_config_uses_hostname_defaults() {
     assert_eq!(config.segment_interval, Duration::from_secs(300));
     assert_eq!(config.cache_retention_days, 7);
     assert!(config.status_indicator);
-    assert!(!config.pane_title);
-    assert!(!config.working_directory);
+    assert!(config.pane_title);
+    assert!(config.working_directory);
     assert!(config.executable);
     assert_eq!(config.source, DEFAULT_SOURCE);
 }
@@ -48,8 +48,8 @@ fn present_config_defaults_status_indicator_to_true() {
         RuntimeConfig::load(temporary.path(), "ignored").expect("load defaulted indicator");
 
     assert!(config.status_indicator);
-    assert!(!config.pane_title);
-    assert!(!config.working_directory);
+    assert!(config.pane_title);
+    assert!(config.working_directory);
     assert!(config.executable);
     assert_eq!(config.source, DEFAULT_SOURCE);
 }
@@ -72,8 +72,8 @@ fn present_config_overrides_defaults_and_is_private() {
     assert_eq!(config.segment_interval, Duration::from_secs(30));
     assert_eq!(config.cache_retention_days, -1);
     assert!(!config.status_indicator);
-    assert!(!config.pane_title);
-    assert!(!config.working_directory);
+    assert!(config.pane_title);
+    assert!(config.working_directory);
     assert!(config.executable);
     assert_eq!(config.source, DEFAULT_SOURCE);
     assert_eq!(

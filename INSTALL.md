@@ -165,13 +165,12 @@ options untouched.
 
 ## Pane context
 
-Executable names are on by default. Set `"executable": false` in `config.json`
-to turn them off. An existing explicit `false` stays off after an update; an
-omitted setting uses the new default. Executable names do not include command arguments.
-
-Pane titles and working directories remain off by default. Enable
-`"pane_title": true` or `"working_directory": true` independently. Titles and
-paths can be sensitive. Restart the service after changing these settings.
+Pane titles, working directories and executable names are on by default. Set
+`"pane_title": false`, `"working_directory": false` or `"executable": false` in
+`config.json` to turn each off. An existing explicit `false` stays off after an
+update; an omitted setting uses the new default. Executable names do not include
+command arguments. Titles and paths can be sensitive. Restart the service after
+changing these settings.
 
 ## Uninstall
 

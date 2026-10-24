@@ -6,9 +6,13 @@ Format adapted from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- pane titles, working directories and executable names now go into your journal by default. before this release they were off unless you turned them on. if you set any of them to `false` in config.json, it stays off. executable names do not include command arguments.
+
 ### Added
 
-- saved terminal screens now include cursor position and pane modes. executable names are on by default; an explicit `executable: false` keeps them off. executable names do not include command arguments.
+- saved terminal screens now include cursor position and pane modes.
 
 ### Fixed
 

@@ -270,15 +270,15 @@ Native `config.json` accepts:
   "capture_interval": 5,
   "segment_interval": 300,
   "status_indicator": true,
-  "pane_title": false,
-  "working_directory": false,
+  "pane_title": true,
+  "working_directory": true,
   "executable": true,
   "source": "tmux"
 }
 ```
 
-`executable` defaults to true; an explicit false remains false. `pane_title`
-and `working_directory` default to false. Each setting queries only its own
+`executable`, `pane_title` and `working_directory` default to true; an explicit
+false remains false. Each setting queries only its own
 field. Executable lookup returns the kernel executable basename, never arguments.
 
 ### Screen metadata
