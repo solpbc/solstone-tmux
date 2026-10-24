@@ -272,13 +272,23 @@ Native `config.json` accepts:
   "status_indicator": true,
   "pane_title": false,
   "working_directory": false,
-  "executable": false,
+  "executable": true,
   "source": "tmux"
 }
 ```
 
-Each pane-context setting defaults to false; setting one to true queries only
-that field.
+`executable` defaults to true; an explicit false remains false. `pane_title`
+and `working_directory` default to false. Each setting queries only its own
+field. Executable lookup returns the kernel executable basename, never arguments.
+
+### Screen metadata
+
+The [frame format](docs/FORMAT.md) defines the five optional pane snapshot fields.
+The tmux parser requires their numeric/flag columns; unavailable or malformed
+columns fail that session transaction rather than inventing values. Screen dedupe
+uses window identity and pane text only. Metadata-only changes emit no frame;
+a text change saves the new snapshot's metadata. Activity points retain their
+independent per-poll cadence.
 
 Unknown fields are rejected. Missing fields use defaults. Capture and segment
 intervals must be greater than zero. A missing stream derives from the system

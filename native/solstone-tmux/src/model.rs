@@ -24,6 +24,11 @@ pub struct PaneInfo {
     pub width: u32,
     pub height: u32,
     pub active: bool,
+    pub cursor_x: u32,
+    pub cursor_y: u32,
+    pub cursor_visible: bool,
+    pub alternate_on: bool,
+    pub pane_in_mode: bool,
     pub content: String,
 }
 

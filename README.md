@@ -63,10 +63,14 @@ with `--mark "word word"`. If needed, `confirm` can verify the mark later.
   has proven custody.
 - Keeps taking in what you share when pairing or sync is unavailable.
 - Emits diagnostics that exclude pane content and tmux session names.
-- Pane titles, working directories, and executable names are off by default; set
-  `pane_title`, `working_directory`, or `executable` in `config.json` to record
-  each independently. Titles and paths can be sensitive; restart the service
-  after changing them.
+- Executable names are on by default. Set `"executable": false` in `config.json`
+  to turn them off. Executable names do not include command arguments. Pane titles and working
+  directories remain off by default; enable `pane_title` or `working_directory`
+  independently. Titles and paths can be sensitive. Restart the service after
+  changing these settings.
+- Saved pane screens include cursor position, cursor visibility, alternate-screen
+  state, and whether tmux is in copy or another pane mode. Moving the cursor alone
+  does not save another screen. See [the frame format](docs/FORMAT.md).
 
 ## License
 

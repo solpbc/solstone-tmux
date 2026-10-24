@@ -108,7 +108,7 @@ where
 
 pub fn usage() -> String {
     format!(
-        "usage: solstone-tmux [run|setup|confirm|status|about|install-service|uninstall-service|--help|--version]\n       solstone-tmux setup [--mark <words>]\n       solstone-tmux confirm [--mark <words>]\n--mark  {}\nexit 0 paired or already confirmed; exit 1 not paired, nothing changed, or no terminal; exit 2 usage; exit 5 held. status still uses exit 3 and 4. Pane titles, working directories, and executable names are off by default; set pane_title, working_directory, or executable in config.json to record each independently. Titles and paths can be sensitive; restart the service after changing them.",
+        "usage: solstone-tmux [run|setup|confirm|status|about|install-service|uninstall-service|--help|--version]\n       solstone-tmux setup [--mark <words>]\n       solstone-tmux confirm [--mark <words>]\n--mark  {}\nexit 0 paired or already confirmed; exit 1 not paired, nothing changed, or no terminal; exit 2 usage; exit 5 held. status still uses exit 3 and 4. executable names are on by default; set executable to false in config.json to turn them off. executable names do not include command arguments. pane titles and working directories are off by default; enable pane_title or working_directory independently. titles and paths can be sensitive; restart the service after changing these settings.",
         crate::pairing_answer::MARK_HELP
     )
 }

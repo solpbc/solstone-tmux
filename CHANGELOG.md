@@ -6,6 +6,10 @@ Format adapted from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- saved terminal screens now include cursor position and pane modes. executable names are on by default; an explicit `executable: false` keeps them off. executable names do not include command arguments.
+
 ### Fixed
 
 - security fix: updated a cryptography dependency used by private connections.

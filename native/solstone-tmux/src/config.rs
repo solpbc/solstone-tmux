@@ -91,7 +91,7 @@ impl Default for ConfigFile {
             status_indicator: true,
             pane_title: false,
             working_directory: false,
-            executable: false,
+            executable: true,
             source: OptionalJson::Absent,
         }
     }
@@ -330,7 +330,7 @@ mod tests {
         let bytes = serde_json::to_vec(&ConfigFile::default()).expect("serialize default config");
         assert_eq!(
             bytes,
-            br#"{"stream":null,"capture_interval":5,"segment_interval":300,"cache_retention_days":7,"status_indicator":true,"pane_title":false,"working_directory":false,"executable":false}"#
+            br#"{"stream":null,"capture_interval":5,"segment_interval":300,"cache_retention_days":7,"status_indicator":true,"pane_title":false,"working_directory":false,"executable":true}"#
         );
     }
 }

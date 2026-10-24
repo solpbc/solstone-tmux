@@ -155,7 +155,7 @@ async fn list_panes_argv_is_exact() {
                 "-t",
                 "@0",
                 "-F",
-                "#{pane_id} #{pane_index} #{pane_left} #{pane_top} #{pane_width} #{pane_height} #{pane_active}",
+                "#{pane_id} #{pane_index} #{pane_left} #{pane_top} #{pane_width} #{pane_height} #{pane_active} #{cursor_x} #{cursor_y} #{cursor_flag} #{alternate_on} #{pane_in_mode}",
             ],
         )
     );
@@ -279,7 +279,7 @@ async fn active_window_uses_all_split_panes() {
                     "-t",
                     "@0",
                     "-F",
-                    "#{pane_id} #{pane_index} #{pane_left} #{pane_top} #{pane_width} #{pane_height} #{pane_active}",
+                    "#{pane_id} #{pane_index} #{pane_left} #{pane_top} #{pane_width} #{pane_height} #{pane_active} #{cursor_x} #{cursor_y} #{cursor_flag} #{alternate_on} #{pane_in_mode}",
                 ],
             ),
             outcome: output(include_bytes!("../data/tmux/list-panes-split.txt").to_vec()),
@@ -353,10 +353,10 @@ fn complete_session_runner(session: &str, pane: Vec<u8>) -> FixtureRunner {
                     "-t",
                     "@0",
                     "-F",
-                    "#{pane_id} #{pane_index} #{pane_left} #{pane_top} #{pane_width} #{pane_height} #{pane_active}",
+                    "#{pane_id} #{pane_index} #{pane_left} #{pane_top} #{pane_width} #{pane_height} #{pane_active} #{cursor_x} #{cursor_y} #{cursor_flag} #{alternate_on} #{pane_in_mode}",
                 ],
             ),
-            outcome: output(b"%0 0 0 0 80 24 1\n".to_vec()),
+            outcome: output(b"%0 0 0 0 80 24 1 0 0 1 0 0\n".to_vec()),
         },
         ExpectedInvocation {
             invocation: invocation(
@@ -391,10 +391,10 @@ fn successful_session(session: &str, pane: Vec<u8>) -> impl Iterator<Item = Expe
                 "-t",
                 "@0",
                 "-F",
-                "#{pane_id} #{pane_index} #{pane_left} #{pane_top} #{pane_width} #{pane_height} #{pane_active}",
+                "#{pane_id} #{pane_index} #{pane_left} #{pane_top} #{pane_width} #{pane_height} #{pane_active} #{cursor_x} #{cursor_y} #{cursor_flag} #{alternate_on} #{pane_in_mode}",
             ],
         ),
-        outcome: output(b"%0 0 0 0 80 24 1\n".to_vec()),
+        outcome: output(b"%0 0 0 0 80 24 1 0 0 1 0 0\n".to_vec()),
     },
     ExpectedInvocation {
         invocation: invocation(
@@ -893,5 +893,127 @@ fn invocation(operation: TmuxOperation, args: &[&str]) -> CommandInvocation {
         executable: PathBuf::from(TMUX),
         args: args.iter().map(OsString::from).collect(),
         timeout: TMUX_TIMEOUT,
+    }
+}
+
+#[tokio::test]
+async fn captured_cursor_shell_editor_and_copy_rows_preserve_sample_values() {
+    for (fixture, x, y, alternate, in_mode) in [
+        (
+            include_bytes!("../data/tmux/cursor-shell.txt").as_slice(),
+            10,
+            1,
+            false,
+            false,
+        ),
+        (
+            include_bytes!("../data/tmux/cursor-editor.txt").as_slice(),
+            0,
+            0,
+            true,
+            false,
+        ),
+        (
+            include_bytes!("../data/tmux/cursor-copy.txt").as_slice(),
+            0,
+            0,
+            true,
+            true,
+        ),
+    ] {
+        let runner = FixtureRunner::new([
+            ExpectedInvocation {
+                invocation: invocation(
+                    TmuxOperation::ListWindows("main".into()),
+                    &[
+                        "list-windows",
+                        "-t",
+                        "main",
+                        "-F",
+                        "#{window_active} #{window_id} #{window_index} #{window_name}",
+                    ],
+                ),
+                outcome: output(b"1 @0 0 active\n".to_vec()),
+            },
+            ExpectedInvocation {
+                invocation: invocation(
+                    TmuxOperation::ListPanes("@0".into()),
+                    &[
+                        "list-panes",
+                        "-t",
+                        "@0",
+                        "-F",
+                        "#{pane_id} #{pane_index} #{pane_left} #{pane_top} #{pane_width} #{pane_height} #{pane_active} #{cursor_x} #{cursor_y} #{cursor_flag} #{alternate_on} #{pane_in_mode}",
+                    ],
+                ),
+                outcome: output(fixture.to_vec()),
+            },
+            ExpectedInvocation {
+                invocation: invocation(
+                    TmuxOperation::CapturePane("%0".into()),
+                    &["capture-pane", "-p", "-e", "-t", "%0"],
+                ),
+                outcome: output(b"sample\n".to_vec()),
+            },
+        ]);
+        let adapter = TmuxAdapter::new(PathBuf::from(TMUX), runner.clone()).unwrap();
+        let capture = adapter.capture_session("main").await.unwrap();
+        let pane = &capture.panes[0];
+        assert_eq!((pane.cursor_x, pane.cursor_y), (x, y));
+        assert!(pane.cursor_visible);
+        assert_eq!(pane.alternate_on, alternate);
+        assert_eq!(pane.pane_in_mode, in_mode);
+        runner.assert_finished().unwrap();
+    }
+}
+
+#[tokio::test]
+async fn malformed_capture_columns_fail_the_session_instead_of_inventing_values() {
+    let captured = include_str!("../data/tmux/cursor-shell.txt");
+    for (column, bad) in [
+        (7, ""),
+        (7, "bad"),
+        (8, "-1"),
+        (9, "2"),
+        (10, "yes"),
+        (11, "bad"),
+    ] {
+        let mut fields = captured.trim_end().split(' ').collect::<Vec<_>>();
+        fields[column] = bad;
+        let row = format!("{}\n", fields.join(" "));
+        let runner = FixtureRunner::new([
+            ExpectedInvocation {
+                invocation: invocation(
+                    TmuxOperation::ListWindows("main".into()),
+                    &[
+                        "list-windows",
+                        "-t",
+                        "main",
+                        "-F",
+                        "#{window_active} #{window_id} #{window_index} #{window_name}",
+                    ],
+                ),
+                outcome: output(b"1 @0 0 active\n".to_vec()),
+            },
+            ExpectedInvocation {
+                invocation: invocation(
+                    TmuxOperation::ListPanes("@0".into()),
+                    &[
+                        "list-panes",
+                        "-t",
+                        "@0",
+                        "-F",
+                        "#{pane_id} #{pane_index} #{pane_left} #{pane_top} #{pane_width} #{pane_height} #{pane_active} #{cursor_x} #{cursor_y} #{cursor_flag} #{alternate_on} #{pane_in_mode}",
+                    ],
+                ),
+                outcome: output(row.into_bytes()),
+            },
+        ]);
+        let adapter = TmuxAdapter::new(PathBuf::from(TMUX), runner.clone()).unwrap();
+        assert!(matches!(
+            adapter.capture_session("main").await,
+            Err(TmuxError::Malformed { .. })
+        ));
+        runner.assert_finished().unwrap();
     }
 }

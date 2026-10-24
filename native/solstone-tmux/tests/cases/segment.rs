@@ -41,6 +41,46 @@ fn unchanged_session_is_deduplicated() {
 }
 
 #[test]
+fn cursor_and_mode_changes_deduplicate_but_changed_text_keeps_its_sample() {
+    let (_temporary, mut segment) = segment("cursor-dedup");
+    let mut capture = golden_capture("main");
+    segment
+        .append_capture(&capture, 0.0, Duration::ZERO)
+        .unwrap();
+    capture.panes[0].cursor_x = 17;
+    capture.panes[0].cursor_y = 2;
+    capture.panes[0].cursor_visible = false;
+    capture.panes[0].alternate_on = true;
+    capture.panes[0].pane_in_mode = true;
+    assert_eq!(
+        segment
+            .append_capture(&capture, 5.0, Duration::from_secs(5))
+            .unwrap(),
+        AppendOutcome::Unchanged
+    );
+    capture.panes[0].content.push_str("changed");
+    assert_eq!(
+        segment
+            .append_capture(&capture, 10.0, Duration::from_secs(10))
+            .unwrap(),
+        AppendOutcome::Appended { frame_id: 2 }
+    );
+    let filename = derive_component("main").unwrap().session_filename();
+    let bytes = fs::read(segment.incomplete_dir().join(filename)).unwrap();
+    let frames: Vec<serde_json::Value> = std::str::from_utf8(&bytes)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let pane = &frames[1]["content"]["tmux"]["panes"][0];
+    assert_eq!(pane["cursor_x"], 17);
+    assert_eq!(pane["cursor_y"], 2);
+    assert_eq!(pane["cursor_visible"], false);
+    assert_eq!(pane["alternate_on"], true);
+    assert_eq!(pane["pane_in_mode"], true);
+}
+
+#[test]
 fn activity_append_does_not_change_screen_counters_or_digest() {
     let (_temporary, mut segment) = segment("activity-screen-state");
     let capture = golden_capture("main");

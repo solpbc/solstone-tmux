@@ -450,7 +450,7 @@ where
                     OsString::from(window_id),
                     OsString::from("-F"),
                     OsString::from(
-                        "#{pane_id} #{pane_index} #{pane_left} #{pane_top} #{pane_width} #{pane_height} #{pane_active}",
+                        "#{pane_id} #{pane_index} #{pane_left} #{pane_top} #{pane_width} #{pane_height} #{pane_active} #{cursor_x} #{cursor_y} #{cursor_flag} #{alternate_on} #{pane_in_mode}",
                     ),
                 ],
             )
@@ -576,7 +576,7 @@ fn parse_panes(stdout: &str, operation: TmuxOperation) -> Result<Vec<PaneInfo>, 
     let mut indexes = HashSet::new();
     for row in stdout.lines() {
         let fields = row.split(' ').collect::<Vec<_>>();
-        if fields.len() != 7 || fields[0].is_empty() {
+        if fields.len() != 12 || fields[0].is_empty() {
             return malformed(operation, format!("invalid row {row:?}"));
         }
         let index = parse_u32(fields[1], &operation, row)?;
@@ -600,6 +600,11 @@ fn parse_panes(stdout: &str, operation: TmuxOperation) -> Result<Vec<PaneInfo>, 
             width,
             height,
             active,
+            cursor_x: parse_u32(fields[7], &operation, row)?,
+            cursor_y: parse_u32(fields[8], &operation, row)?,
+            cursor_visible: parse_flag(fields[9], &operation, row)?,
+            alternate_on: parse_flag(fields[10], &operation, row)?,
+            pane_in_mode: parse_u32(fields[11], &operation, row)? != 0,
             content: String::new(),
         });
     }
@@ -635,4 +640,9 @@ fn malformed_error(operation: TmuxOperation, detail: impl Into<String>) -> TmuxE
         operation,
         detail: detail.into(),
     }
+}
+
+fn parse_flag(value: &str, operation: &TmuxOperation, row: &str) -> Result<bool, TmuxError> {
+    parse_active(value)
+        .ok_or_else(|| malformed_error(operation.clone(), format!("invalid row {row:?}")))
 }

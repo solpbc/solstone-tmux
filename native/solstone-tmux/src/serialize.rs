@@ -145,6 +145,11 @@ struct Pane<'a> {
     width: u32,
     height: u32,
     active: bool,
+    cursor_x: u32,
+    cursor_y: u32,
+    cursor_visible: bool,
+    alternate_on: bool,
+    pane_in_mode: bool,
     content: &'a str,
 }
 
@@ -158,6 +163,11 @@ impl<'a> From<&'a PaneInfo> for Pane<'a> {
             width: pane.width,
             height: pane.height,
             active: pane.active,
+            cursor_x: pane.cursor_x,
+            cursor_y: pane.cursor_y,
+            cursor_visible: pane.cursor_visible,
+            alternate_on: pane.alternate_on,
+            pane_in_mode: pane.pane_in_mode,
             content: &pane.content,
         }
     }

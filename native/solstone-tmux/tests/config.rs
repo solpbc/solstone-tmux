@@ -23,7 +23,7 @@ fn missing_config_uses_hostname_defaults() {
     assert!(config.status_indicator);
     assert!(!config.pane_title);
     assert!(!config.working_directory);
-    assert!(!config.executable);
+    assert!(config.executable);
     assert_eq!(config.source, DEFAULT_SOURCE);
 }
 
@@ -50,7 +50,7 @@ fn present_config_defaults_status_indicator_to_true() {
     assert!(config.status_indicator);
     assert!(!config.pane_title);
     assert!(!config.working_directory);
-    assert!(!config.executable);
+    assert!(config.executable);
     assert_eq!(config.source, DEFAULT_SOURCE);
 }
 
@@ -74,7 +74,7 @@ fn present_config_overrides_defaults_and_is_private() {
     assert!(!config.status_indicator);
     assert!(!config.pane_title);
     assert!(!config.working_directory);
-    assert!(!config.executable);
+    assert!(config.executable);
     assert_eq!(config.source, DEFAULT_SOURCE);
     assert_eq!(
         fs::metadata(path)
@@ -218,7 +218,7 @@ fn unknown_config_fields_are_still_rejected() {
 }
 
 #[test]
-fn config_pane_context_switches_default_false_and_enable_independently() {
+fn config_pane_context_switches_preserve_explicit_false_and_enable_independently() {
     let temporary = TestDirectory::new("config-pane-context");
     let path = temporary.path().join(CONFIG_FILENAME);
     fs::write(

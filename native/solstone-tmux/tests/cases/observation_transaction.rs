@@ -159,7 +159,9 @@ async fn one_capture_failure_discards_whole_session() {
             },
             ExpectedInvocation {
                 invocation: panes_invocation("@bad"),
-                outcome: output(b"%0 0 0 0 40 24 1\n%1 1 40 0 40 24 0\n".to_vec()),
+                outcome: output(
+                    b"%0 0 0 0 40 24 1 0 0 1 0 0\n%1 1 40 0 40 24 0 0 0 1 0 0\n".to_vec(),
+                ),
             },
             ExpectedInvocation {
                 invocation: capture_invocation("%0"),
@@ -536,7 +538,7 @@ fn successful_session(session: &str, content: Vec<u8>) -> impl Iterator<Item = E
         },
         ExpectedInvocation {
             invocation: panes_invocation("@0"),
-            outcome: output(b"%0 0 0 0 80 24 1\n".to_vec()),
+            outcome: output(b"%0 0 0 0 80 24 1 0 0 1 0 0\n".to_vec()),
         },
         ExpectedInvocation {
             invocation: capture_invocation("%0"),
@@ -574,7 +576,7 @@ fn panes_invocation(window: &str) -> CommandInvocation {
             "-t",
             window,
             "-F",
-            "#{pane_id} #{pane_index} #{pane_left} #{pane_top} #{pane_width} #{pane_height} #{pane_active}",
+            "#{pane_id} #{pane_index} #{pane_left} #{pane_top} #{pane_width} #{pane_height} #{pane_active} #{cursor_x} #{cursor_y} #{cursor_flag} #{alternate_on} #{pane_in_mode}",
         ],
     )
 }
