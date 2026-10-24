@@ -6,6 +6,10 @@ Format adapted from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- security fix: updated a cryptography dependency used by private connections.
+
 ## [2.0.18] - 2026-10-21
 
 ### Fixed
