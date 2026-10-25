@@ -991,6 +991,60 @@ fn setup_signal_at_the_prompt() {
     assert!(!roots.config_root().join(CREDENTIALS_FILENAME).exists());
 }
 
+// An answer the prompt doesn't understand, typed at a real terminal, asks again;
+// the next answer still decides.
+#[test]
+fn setup_asks_again_after_an_unrecognised_answer_at_the_terminal() {
+    let rt = runtime();
+    let peer = rt.block_on(async { DirectPairingPeer::start().await });
+    let (master, slave_path) = open_pty();
+    let temp = TestDirectory::new("setup-terminal-reask");
+    let roots = IsolatedRoots::new(temp.path());
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_solstone-tmux"))
+        .arg("setup")
+        .env_clear()
+        .envs(roots.entries().iter().cloned())
+        .env("SOLSTONE_TMUX_TERMINAL", &slave_path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn setup");
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(peer.pair_link().as_bytes())
+        .expect("write link");
+
+    read_pty_until_pattern(&master, &mut child, ASK_UNAVAILABLE, Duration::from_secs(5));
+    (&master)
+        .write_all(b"maybe\n")
+        .expect("type an unrecognised answer");
+    read_pty_until_pattern(&master, &mut child, ASK_UNAVAILABLE, Duration::from_secs(5));
+    (&master).write_all(b"continue\n").expect("type continue");
+
+    let start = Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("try wait") {
+            break status;
+        }
+        if start.elapsed() > Duration::from_secs(10) {
+            let _ = child.kill();
+            panic!("setup did not finish within 10s");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert_eq!(status.code(), Some(0), "continue after a re-ask pairs");
+    let cred = load_credential(&roots.config_root())
+        .expect("load cred")
+        .expect("cred exists");
+    assert!(is_pairing_confirmed(&roots.config_root(), &cred));
+    drop(master);
+    rt.block_on(async { peer.shutdown().await });
+}
+
 // ===========================================================================
 // 5. mark_argument_words
 // ===========================================================================

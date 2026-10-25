@@ -169,10 +169,10 @@ pub async fn ask_terminal_question_production(file: File, instance_id: &str) -> 
                 } => {
                     return TerminalDecision::WalkedAway;
                 }
-                ready = reader.readable() => {
-                    if ready.is_err() {
+                ready = reader.ready(tokio::io::Interest::READABLE) => {
+                    let Ok(ready) = ready else {
                         return TerminalDecision::WalkedAway;
-                    }
+                    };
                     let mut buf = [0u8; 128];
                     match reader.try_read(&mut buf) {
                         Ok(0) => {
@@ -193,6 +193,11 @@ pub async fn ask_terminal_question_production(file: File, instance_id: &str) -> 
                             }
                         }
                         Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                            // Nothing to read yet: wait again, unless the terminal
+                            // has hung up, which would only report ready forever.
+                            if ready.is_read_closed() {
+                                return TerminalDecision::WalkedAway;
+                            }
                             continue;
                         }
                         Err(_) => {
