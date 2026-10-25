@@ -6,17 +6,15 @@ Format adapted from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-### Changed
-
-- pane titles, working directories and executable names now go into your journal by default. before this release they were off unless you turned them on. if you set any of them to `false` in config.json, it stays off. executable names do not include command arguments.
+## [2.0.19] - 2026-10-25
 
 ### Added
 
-- saved terminal screens now include cursor position and pane modes.
+- terminal screens that go into your journal now include cursor position and pane modes.
 
-### Fixed
+### Changed
 
-- security fix: updated a cryptography dependency used by private connections.
+- pane titles, working directories and executable names now go into your journal by default. before this release they were off unless you turned them on. if you set any of them to `false` in config.json, it stays off. executable names do not include command arguments.
 
 ## [2.0.18] - 2026-10-21
 
