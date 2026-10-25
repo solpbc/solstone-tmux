@@ -15,7 +15,19 @@ version:
 curl -fsS https://updates.solstone.app/solstone-tmux/release/latest
 ```
 
-It prints one line, `version=<VERSION>`. There is no directory listing, so fetch
+It prints one line, `version=<VERSION>`. Read it into a variable that the
+commands below use, so you don't type the version by hand:
+
+```sh
+SOLSTONE_VERSION=$(curl -fsS https://updates.solstone.app/solstone-tmux/release/latest | sed -n 's/^version=//p')
+echo "installing solstone-tmux $SOLSTONE_VERSION"
+```
+
+Run the rest of these steps in the same shell. In a new one, set
+`SOLSTONE_VERSION` again first.
+
+Download paths use the bare version, `release/<VERSION>/` with no `v`, even
+though the GitHub tag is `v<VERSION>`. There is no directory listing, so fetch
 each file by name.
 
 **Verify first.** Download the package you will install, `SHA256SUMS`, and
@@ -23,12 +35,12 @@ each file by name.
 is below.
 
 ```sh
-base="https://updates.solstone.app/solstone-tmux/release/<VERSION>"
-curl -fLO "$base/solstone-tmux_<VERSION>_<deb-name>.deb"            # Debian / Ubuntu
-curl -fLO "$base/solstone-tmux-<VERSION>-1.<rpm-name>.rpm"          # Fedora / RHEL
-curl -fLO "$base/solstone-tmux-<VERSION>-<tar-name>-linux.tar.gz"   # Linux tarball
-curl -fLO "$base/solstone-tmux-<VERSION>-aarch64-macos.pkg"         # Apple silicon
-curl -fLO "$base/solstone-tmux-<VERSION>-aarch64-macos.tar.gz"      # Apple silicon, archive
+base="https://updates.solstone.app/solstone-tmux/release/$SOLSTONE_VERSION"
+curl -fLO "$base/solstone-tmux_${SOLSTONE_VERSION}_<deb-name>.deb"         # Debian / Ubuntu
+curl -fLO "$base/solstone-tmux-$SOLSTONE_VERSION-1.<rpm-name>.rpm"         # Fedora / RHEL
+curl -fLO "$base/solstone-tmux-$SOLSTONE_VERSION-<tar-name>-linux.tar.gz"  # Linux tarball
+curl -fLO "$base/solstone-tmux-$SOLSTONE_VERSION-aarch64-macos.pkg"        # Apple silicon
+curl -fLO "$base/solstone-tmux-$SOLSTONE_VERSION-aarch64-macos.tar.gz"     # Apple silicon, archive
 curl -fLO "$base/SHA256SUMS"
 curl -fLO "$base/SHA256SUMS.minisig"
 ```
@@ -43,15 +55,16 @@ Install minisign if you do not have it: `apt install minisign`,
 curl -fLo solstone-tmux-release.pub https://updates.solstone.app/solstone-tmux/minisign.pub
 minisign -Vm SHA256SUMS -p solstone-tmux-release.pub
 # Linux
-awk -v package='<downloaded-package>' '$2 == package' SHA256SUMS | sha256sum -c -
+awk -v package="<downloaded-package>" '$2 == package' SHA256SUMS | sha256sum -c -
 # macOS
-awk -v package='<downloaded-package>' '$2 == package' SHA256SUMS | shasum -a 256 -c -
+awk -v package="<downloaded-package>" '$2 == package' SHA256SUMS | shasum -a 256 -c -
 ```
 
 The complete release has 13 files: 11 packages and target records,
 `SHA256SUMS`, and its detached signature. Minisign authenticates `SHA256SUMS`;
 the next command verifies the downloaded package against one of its 11 entries.
-Replace `<downloaded-package>` with its exact filename. You run these checks;
+Replace `<downloaded-package>` with its exact filename, such as
+`solstone-tmux-$SOLSTONE_VERSION-aarch64-macos.pkg`. You run these checks;
 `apt` and `dnf` do not. If either command refuses the files, stop. Then install
 one of the packages below.
 
@@ -61,8 +74,9 @@ Choose one format. The deb and RPM packages install
 `/usr/bin/solstone-tmux`; the tarball installs
 `/usr/local/bin/solstone-tmux`.
 
-`<VERSION>` below is the version you downloaded. The three formats do not share
-one architecture name, so each command below uses the matching column:
+The commands below use `$SOLSTONE_VERSION` from the first step. The three
+formats do not share one architecture name, so each command below uses the
+matching column:
 
 | System | `<tar-name>` | `<deb-name>` | `<rpm-name>` |
 | --- | --- | --- | --- |
@@ -74,7 +88,7 @@ one architecture name, so each command below uses the matching column:
 Install tmux with your system package manager, then:
 
 ```sh
-tar -xzf solstone-tmux-<VERSION>-<tar-name>-linux.tar.gz
+tar -xzf "solstone-tmux-$SOLSTONE_VERSION-<tar-name>-linux.tar.gz"
 sudo install -m 0755 solstone-tmux /usr/local/bin/solstone-tmux
 /usr/local/bin/solstone-tmux --version
 ```
@@ -85,7 +99,7 @@ sudo install -m 0755 solstone-tmux /usr/local/bin/solstone-tmux
 above before running:
 
 ```sh
-sudo apt install ./solstone-tmux_<VERSION>_<deb-name>.deb
+sudo apt install "./solstone-tmux_${SOLSTONE_VERSION}_<deb-name>.deb"
 /usr/bin/solstone-tmux --version
 ```
 
@@ -97,7 +111,7 @@ The package declares its tmux dependency.
 above before running:
 
 ```sh
-sudo dnf install ./solstone-tmux-<VERSION>-1.<rpm-name>.rpm
+sudo dnf install "./solstone-tmux-$SOLSTONE_VERSION-1.<rpm-name>.rpm"
 /usr/bin/solstone-tmux --version
 ```
 
@@ -114,7 +128,7 @@ The macOS installer does not run minisign for you. Complete the verify-first
 step above before running:
 
 ```sh
-sudo installer -pkg solstone-tmux-<VERSION>-aarch64-macos.pkg -target /
+sudo installer -pkg "solstone-tmux-$SOLSTONE_VERSION-aarch64-macos.pkg" -target /
 /usr/local/bin/solstone-tmux --version
 ```
 
