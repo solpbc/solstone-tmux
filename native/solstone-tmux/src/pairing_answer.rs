@@ -116,7 +116,14 @@ pub async fn ask_terminal_question_production(file: File, instance_id: &str) -> 
     if rustix::fs::fcntl_setfl(&file, flags | rustix::fs::OFlags::NONBLOCK).is_err() {
         return TerminalDecision::WalkedAway;
     }
-    let Ok(async_fd) = tokio::io::unix::AsyncFd::new(file) else {
+    // Prompts go out through a second handle on the same terminal. Answers come
+    // in through a receiver that owns the original descriptor, so it stays open
+    // and unchanged for as long as it is registered with the runtime. A terminal
+    // reads like a pipe here: wait until readable, then read without blocking.
+    let Ok(writer) = file.try_clone() else {
+        return TerminalDecision::WalkedAway;
+    };
+    let Ok(reader) = tokio::net::unix::pipe::Receiver::from_owned_fd_unchecked(file.into()) else {
         return TerminalDecision::WalkedAway;
     };
 
@@ -128,15 +135,15 @@ pub async fn ask_terminal_question_production(file: File, instance_id: &str) -> 
     if let Some(ref spoken) = spoken_mark {
         let prompt = format!("{STEP}\n\n{MARK_PREFIX}{spoken}\n\n{SUBTEXT}\n{ASK_IDENTIFIED}\n");
         use std::io::Write;
-        let _ = (&mut async_fd.get_ref()).write_all(prompt.as_bytes());
-        let _ = (&mut async_fd.get_ref()).flush();
+        let _ = (&writer).write_all(prompt.as_bytes());
+        let _ = (&writer).flush();
     } else {
         let prompt = format!(
             "{STEP}\n\n{MARK_UNAVAILABLE}\n\n{COULDNT_VERIFY}\n{BODY_UNAVAILABLE}\n{ASK_UNAVAILABLE}\n"
         );
         use std::io::Write;
-        let _ = (&mut async_fd.get_ref()).write_all(prompt.as_bytes());
-        let _ = (&mut async_fd.get_ref()).flush();
+        let _ = (&writer).write_all(prompt.as_bytes());
+        let _ = (&writer).flush();
     }
 
     let mut line_buf = Vec::new();
@@ -162,19 +169,16 @@ pub async fn ask_terminal_question_production(file: File, instance_id: &str) -> 
                 } => {
                     return TerminalDecision::WalkedAway;
                 }
-                guard_res = async_fd.readable() => {
-                    let Ok(mut guard) = guard_res else {
+                ready = reader.readable() => {
+                    if ready.is_err() {
                         return TerminalDecision::WalkedAway;
-                    };
+                    }
                     let mut buf = [0u8; 128];
-                    match guard.try_io(|inner| {
-                        use std::io::Read;
-                        (&mut inner.get_ref()).read(&mut buf)
-                    }) {
-                        Ok(Ok(0)) => {
+                    match reader.try_read(&mut buf) {
+                        Ok(0) => {
                             return TerminalDecision::WalkedAway;
                         }
-                        Ok(Ok(n)) => {
+                        Ok(n) => {
                             for &b in &buf[..n] {
                                 if b == b'\n' {
                                     got_newline = true;
@@ -188,10 +192,10 @@ pub async fn ask_terminal_question_production(file: File, instance_id: &str) -> 
                                 break;
                             }
                         }
-                        Ok(Err(err)) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                        Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
                             continue;
                         }
-                        Ok(Err(_)) | Err(_) => {
+                        Err(_) => {
                             return TerminalDecision::WalkedAway;
                         }
                     }
@@ -211,8 +215,8 @@ pub async fn ask_terminal_question_production(file: File, instance_id: &str) -> 
                 return TerminalDecision::No;
             }
             use std::io::Write;
-            let _ = (&mut async_fd.get_ref()).write_all(format!("{ASK_IDENTIFIED}\n").as_bytes());
-            let _ = (&mut async_fd.get_ref()).flush();
+            let _ = (&writer).write_all(format!("{ASK_IDENTIFIED}\n").as_bytes());
+            let _ = (&writer).flush();
         } else {
             if trimmed == "continue" {
                 return TerminalDecision::Yes;
@@ -221,8 +225,8 @@ pub async fn ask_terminal_question_production(file: File, instance_id: &str) -> 
                 return TerminalDecision::No;
             }
             use std::io::Write;
-            let _ = (&mut async_fd.get_ref()).write_all(format!("{ASK_UNAVAILABLE}\n").as_bytes());
-            let _ = (&mut async_fd.get_ref()).flush();
+            let _ = (&writer).write_all(format!("{ASK_UNAVAILABLE}\n").as_bytes());
+            let _ = (&writer).flush();
         }
     }
 }
