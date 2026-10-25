@@ -1045,6 +1045,104 @@ fn setup_asks_again_after_an_unrecognised_answer_at_the_terminal() {
     rt.block_on(async { peer.shutdown().await });
 }
 
+/// Starts `shell_command` under `/bin/sh` with a new pseudo-terminal as its
+/// controlling terminal, the way an owner's shell runs it, using the system
+/// `script` tool. Its stdin is typed into that terminal and its stdout is what
+/// the terminal shows.
+fn under_controlling_terminal(shell_command: &str) -> Command {
+    let mut command = Command::new("/usr/bin/script");
+    if cfg!(target_os = "macos") {
+        command.args(["-q", "/dev/null", "/bin/sh", "-c", shell_command]);
+    } else {
+        command.args(["-q", "-e", "-c", shell_command, "/dev/null"]);
+    }
+    command
+}
+
+// With no terminal named for it, setup asks on the controlling terminal
+// (/dev/tty), and an answer typed there decides, on every platform.
+#[test]
+fn setup_asks_on_the_controlling_terminal() {
+    let rt = runtime();
+    let peer = rt.block_on(async { DirectPairingPeer::start().await });
+    let temp = TestDirectory::new("setup-controlling-terminal");
+    let roots = IsolatedRoots::new(temp.path());
+
+    let mut child = under_controlling_terminal(r#"printf '%s' "$PAIR_LINK" | "$TMUX_BIN" setup"#)
+        .env_clear()
+        .envs(roots.entries().iter().cloned())
+        .env("PAIR_LINK", peer.pair_link())
+        .env("TMUX_BIN", env!("CARGO_BIN_EXE_solstone-tmux"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn setup under a controlling terminal");
+    let mut keys = child.stdin.take().expect("stdin");
+    let mut screen_out = child.stdout.take().expect("stdout");
+    let screen = Arc::new(std::sync::Mutex::new(String::new()));
+    let reader = {
+        let screen = Arc::clone(&screen);
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 1024];
+            while let Ok(n) = screen_out.read(&mut buf) {
+                if n == 0 {
+                    break;
+                }
+                screen
+                    .lock()
+                    .expect("screen")
+                    .push_str(&String::from_utf8_lossy(&buf[..n]));
+            }
+        })
+    };
+    let wait_for_asks = |child: &mut std::process::Child, count: usize| {
+        let start = Instant::now();
+        loop {
+            let shown = screen.lock().expect("screen").clone();
+            if shown.matches(ASK_UNAVAILABLE).count() >= count {
+                return;
+            }
+            if start.elapsed() > Duration::from_secs(10) {
+                // Ending script hangs up the terminal, which ends setup too.
+                let _ = child.kill();
+                panic!("setup did not ask on the controlling terminal; it showed: {shown:?}");
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    };
+
+    wait_for_asks(&mut child, 1);
+    keys.write_all(b"maybe\n")
+        .expect("type an unrecognised answer");
+    wait_for_asks(&mut child, 2);
+    keys.write_all(b"continue\n").expect("type continue");
+
+    let start = Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("try wait") {
+            break status;
+        }
+        if start.elapsed() > Duration::from_secs(10) {
+            let _ = child.kill();
+            panic!("setup did not finish within 10s");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    drop(keys);
+    let _ = reader.join();
+    let shown = screen.lock().expect("screen").clone();
+    assert!(
+        status.success(),
+        "setup exited {status:?}; it showed: {shown:?}"
+    );
+    let cred = load_credential(&roots.config_root())
+        .expect("load cred")
+        .expect("cred exists");
+    assert!(is_pairing_confirmed(&roots.config_root(), &cred));
+    rt.block_on(async { peer.shutdown().await });
+}
+
 // ===========================================================================
 // 5. mark_argument_words
 // ===========================================================================

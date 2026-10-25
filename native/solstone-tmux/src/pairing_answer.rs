@@ -109,26 +109,48 @@ pub fn open_owner_terminal() -> Option<File> {
     Some(File::from(descriptor))
 }
 
-pub async fn ask_terminal_question_production(file: File, instance_id: &str) -> TerminalDecision {
-    let Ok(flags) = rustix::fs::fcntl_getfl(&file) else {
-        return TerminalDecision::WalkedAway;
-    };
-    if rustix::fs::fcntl_setfl(&file, flags | rustix::fs::OFlags::NONBLOCK).is_err() {
-        return TerminalDecision::WalkedAway;
-    }
-    // Prompts go out through a second handle on the same terminal. Answers come
-    // in through a receiver that owns the original descriptor, so it stays open
-    // and unchanged for as long as it is registered with the runtime. A terminal
-    // reads like a pipe here: wait until readable, then read without blocking.
-    let Ok(writer) = file.try_clone() else {
-        return TerminalDecision::WalkedAway;
-    };
-    let Ok(reader) = tokio::net::unix::pipe::Receiver::from_owned_fd_unchecked(file.into()) else {
-        return TerminalDecision::WalkedAway;
-    };
+type TerminalRead = std::io::Result<Vec<u8>>;
 
+/// Reads the owner's terminal on a thread of its own, one read each time the
+/// prompt asks for one. macOS can't wait on `/dev/tty` through the runtime's
+/// event queue (kqueue refuses it) or through `poll`, so the prompt reads it
+/// with plain blocking reads, the same way on every platform. Dropping the
+/// returned sender ends the thread after any read in progress.
+fn spawn_terminal_reader(
+    mut terminal: File,
+) -> Option<std::sync::mpsc::Sender<tokio::sync::oneshot::Sender<TerminalRead>>> {
+    let (requests, incoming) =
+        std::sync::mpsc::channel::<tokio::sync::oneshot::Sender<TerminalRead>>();
+    std::thread::Builder::new()
+        .name("terminal-answer".to_owned())
+        .spawn(move || {
+            for reply in incoming {
+                let mut buf = [0u8; 128];
+                let read = loop {
+                    match terminal.read(&mut buf) {
+                        Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
+                        other => break other.map(|n| buf[..n].to_vec()),
+                    }
+                };
+                if reply.send(read).is_err() {
+                    break;
+                }
+            }
+        })
+        .ok()?;
+    Some(requests)
+}
+
+pub async fn ask_terminal_question_production(file: File, instance_id: &str) -> TerminalDecision {
+    let Ok(reader) = file.try_clone() else {
+        return TerminalDecision::WalkedAway;
+    };
     let mut sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt()).ok();
     let mut sighup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup()).ok();
+    let Some(reads) = spawn_terminal_reader(reader) else {
+        return TerminalDecision::WalkedAway;
+    };
+    let writer = file;
 
     let spoken_mark = format_spoken_mark(instance_id);
     let is_identified = spoken_mark.is_some();
@@ -150,7 +172,11 @@ pub async fn ask_terminal_question_production(file: File, instance_id: &str) -> 
     loop {
         let mut got_newline = false;
         loop {
-            tokio::select! {
+            let (reply, answer) = tokio::sync::oneshot::channel();
+            if reads.send(reply).is_err() {
+                return TerminalDecision::WalkedAway;
+            }
+            let read = tokio::select! {
                 _ = async {
                     if let Some(ref mut s) = sigint {
                         s.recv().await
@@ -169,42 +195,27 @@ pub async fn ask_terminal_question_production(file: File, instance_id: &str) -> 
                 } => {
                     return TerminalDecision::WalkedAway;
                 }
-                ready = reader.ready(tokio::io::Interest::READABLE) => {
-                    let Ok(ready) = ready else {
-                        return TerminalDecision::WalkedAway;
-                    };
-                    let mut buf = [0u8; 128];
-                    match reader.try_read(&mut buf) {
-                        Ok(0) => {
-                            return TerminalDecision::WalkedAway;
-                        }
-                        Ok(n) => {
-                            for &b in &buf[..n] {
-                                if b == b'\n' {
-                                    got_newline = true;
-                                    break;
-                                }
-                                if b != b'\r' {
-                                    line_buf.push(b);
-                                }
-                            }
-                            if got_newline {
-                                break;
-                            }
-                        }
-                        Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
-                            // Nothing to read yet: wait again, unless the terminal
-                            // has hung up, which would only report ready forever.
-                            if ready.is_read_closed() {
-                                return TerminalDecision::WalkedAway;
-                            }
-                            continue;
-                        }
-                        Err(_) => {
-                            return TerminalDecision::WalkedAway;
-                        }
-                    }
+                read = answer => read,
+            };
+            // A closed terminal reads as nothing or as an error; either way the
+            // owner is no longer there to answer.
+            let Ok(Ok(bytes)) = read else {
+                return TerminalDecision::WalkedAway;
+            };
+            if bytes.is_empty() {
+                return TerminalDecision::WalkedAway;
+            }
+            for &b in &bytes {
+                if b == b'\n' {
+                    got_newline = true;
+                    break;
                 }
+                if b != b'\r' {
+                    line_buf.push(b);
+                }
+            }
+            if got_newline {
+                break;
             }
         }
 

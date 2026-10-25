@@ -24,7 +24,7 @@ sha2 = { version = "0.10", default-features = false }
 spl-core = { workspace = true }
 spl-transport = { workspace = true }
 time = { version = "0.3", default-features = false, features = ["std"] }
-tokio = { version = "1", features = ["macros", "net", "process", "rt", "signal", "time"] }
+tokio = { version = "1", features = ["macros", "net", "process", "rt", "signal", "sync", "time"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 libproc = "=0.14.11"

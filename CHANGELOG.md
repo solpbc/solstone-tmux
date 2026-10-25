@@ -8,6 +8,7 @@ Format adapted from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- on macos, `solstone-tmux setup` and `solstone-tmux confirm` now ask about your journal's mark in your terminal. before, they stopped without asking, and pairing didn't finish unless you gave the mark's two words with `--mark`.
 - when `solstone-tmux setup` or `solstone-tmux confirm` asks about your journal's mark and you type an answer other than the ones it asks for, it now asks again. before, it stopped there and pairing didn't finish.
 
 ## [2.0.19] - 2026-10-25
