@@ -6,6 +6,8 @@ Format adapted from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [2.0.20] - 2026-10-26
+
 ### Fixed
 
 - on macos, `solstone-tmux setup` and `solstone-tmux confirm` now ask about your journal's mark in your terminal. before, they stopped without asking, and pairing didn't finish unless you gave the mark's two words with `--mark`.
