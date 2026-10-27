@@ -55,8 +55,13 @@ with `--mark "word word"`. If needed, `confirm` can verify the mark later.
 
 ## How it works
 
-- Takes in what you share from active tmux panes every five seconds, and all of
-  it goes into your journal in five-minute segments.
+- Takes in what you share every five seconds from the current window of each
+  tmux session you're using, and all of it goes into your journal in
+  five-minute segments.
+- Using a session means typing in it, or using the mouse in it when tmux mouse
+  mode is on. Output on its own doesn't count, so a command that keeps running
+  while nobody types, or a quiet stretch away from the keyboard, isn't taken in.
+  Five minutes with nothing taken in leaves no segment.
 - Segments wait under `~/.local/share/solstone-tmux/captures/`, and incomplete
   work is recovered after a restart.
 - Syncs one segment at a time, and local data is released only after the journal
