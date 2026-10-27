@@ -5,11 +5,12 @@ solstone.
 
 ## Product overview
 
-solstone-tmux experiences tmux sessions along with the owner. Every five
-seconds it reads changed active panes, accumulates observations into local
-segments, and syncs completed segments to the paired journal. Local observation
-continues while pairing or sync is unavailable, and incomplete segments recover
-after a restart.
+solstone-tmux adds the owner's tmux terminal to their journal. Each poll
+interval (five seconds by default), it reads the current window of each tmux
+session that had keyboard or mouse input within that interval; pane output alone
+does not count. It accumulates what it reads into local segments and syncs
+completed segments to the paired journal. Local observation continues while
+pairing or sync is unavailable, and incomplete segments recover after a restart.
 
 The product is one Rust crate and one executable. Linux and macOS share capture,
 serialization, storage, recovery, sync, health, and supervision
@@ -38,6 +39,7 @@ native/solstone-tmux/
                                    Journal envelope schema and in-root import record
     src/
         main.rs                    Process startup and command dispatch
+        about.rs                   App and journal version report
         lib.rs                     Shared crate surface
         cli.rs                     Command parser, help, and source-bound version
         client_metadata.rs         Device description publication
@@ -53,6 +55,7 @@ native/solstone-tmux/
         model.rs                   Capture domain model
         name.rs                    Injective filename-safe names
         observer.rs                Poll and shutdown lifecycle
+        pairing_answer.rs          Journal-mark confirmation prompt and answers
         paths.rs, paths/           Linux and macOS path policy
         post_connect.rs            Post-connect job coordination
         private_link.rs            Pairing, credentials, and bridge
@@ -62,6 +65,7 @@ native/solstone-tmux/
         serialize.rs               JSONL serialization
         service.rs, service/       systemd-user and launchd lifecycle
         storage.rs                 Durable append and atomic writes
+        support.rs                 Support report link
         sync.rs                    Bounded sync and custody
         tmux.rs                    Tmux grammar and transactions
     tests/
@@ -142,6 +146,9 @@ network access.
   external network services.
 - Use existing environment, clock, command, storage, shutdown, dispatcher, and
   loopback peer seams.
+- Warnings and errors never include credentials or pane content. `status`
+  reports a closed health state, and `sync-health.json` records a closed
+  diagnostic code.
 
 ## File headers
 
@@ -322,8 +329,6 @@ import.
 
 - Internal code terms such as capture loop, `capture_interval`, and `captures/`
   remain correct in engineering contexts.
-- Diagnostics and documentation never expose credentials, observed pane
-  content, or tmux session names.
 
 ## Releasing
 
