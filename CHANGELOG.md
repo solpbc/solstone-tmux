@@ -6,6 +6,10 @@ Format adapted from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- `solstone-tmux status` no longer reads `update_needed` while your journal is working. when your journal answered without naming its version, solstone-tmux took that as a sign something needed an update, even though your terminal text kept going into your journal.
+
 ## [2.0.20] - 2026-10-26
 
 ### Fixed

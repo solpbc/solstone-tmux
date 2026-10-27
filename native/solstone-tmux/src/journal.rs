@@ -556,7 +556,7 @@ impl JournalClient {
         decode_upload_response(&body)
     }
 
-    pub async fn system_status(&self) -> Result<String, JournalError> {
+    pub async fn system_status(&self) -> Result<Option<String>, JournalError> {
         self.system_status_with_limits(SYSTEM_STATUS_TIMEOUT, MAX_RESPONSE_BODY_BYTES)
             .await
     }
@@ -564,7 +564,7 @@ impl JournalClient {
     pub(crate) async fn optional_system_status(
         &self,
         timeout: Duration,
-    ) -> Result<String, JournalError> {
+    ) -> Result<Option<String>, JournalError> {
         self.system_status_with_limits(timeout, OPTIONAL_RESPONSE_BODY_BYTES)
             .await
     }
@@ -573,7 +573,7 @@ impl JournalClient {
         &self,
         timeout: Duration,
         max_bytes: usize,
-    ) -> Result<String, JournalError> {
+    ) -> Result<Option<String>, JournalError> {
         let response = self
             .request(Method::GET, SYSTEM_STATUS_PATH)?
             .timeout(timeout)
@@ -888,7 +888,10 @@ pub fn assess_receipt(result: &UploadResult, local_files: &[LocalFile]) -> Recei
     Receipt::Valid(acknowledged)
 }
 
-pub fn decode_system_status_response(body: &[u8]) -> Result<String, JournalError> {
+/// Decodes the journal's status answer. A journal that cannot tell how it was
+/// installed reports a null `version.current`; it still answered, so that is
+/// `None`, not a contract violation.
+pub fn decode_system_status_response(body: &[u8]) -> Result<Option<String>, JournalError> {
     #[derive(Deserialize)]
     struct Response {
         ok: bool,
@@ -896,14 +899,17 @@ pub fn decode_system_status_response(body: &[u8]) -> Result<String, JournalError
     }
     #[derive(Deserialize)]
     struct VersionField {
-        current: String,
+        current: Option<String>,
     }
     let response = serde_json::from_slice::<Response>(body)
         .map_err(|_| JournalError::local(DiagnosticCode::JournalContractInvalid))?;
-    if !response.ok || response.version.current.is_empty() {
+    if !response.ok {
         return Err(JournalError::local(DiagnosticCode::JournalContractInvalid));
     }
-    Ok(response.version.current)
+    Ok(response
+        .version
+        .current
+        .filter(|current| !current.is_empty()))
 }
 
 pub fn classify_error_response(status: u16, body: &[u8]) -> JournalError {

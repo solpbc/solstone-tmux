@@ -163,7 +163,7 @@ where
         if status == StatusCode::NOT_FOUND {
             // Legacy status probing is a metadata-lane fallback, never a third
             // redial-triggered job.
-            if let Ok(version) = client.optional_system_status(remaining()).await
+            if let Ok(Some(version)) = client.optional_system_status(remaining()).await
                 && !version.trim().is_empty()
             {
                 cache_journal_info(store, version_refresh.clone(), attempt, None, version).await;

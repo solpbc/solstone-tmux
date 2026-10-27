@@ -132,6 +132,38 @@ fn an_auth_refusal_reads_revoked() {
     });
 }
 
+/// A Linux journal that cannot tell how it was installed answers its status
+/// with `ok` and a null `version.current`. That is the journal answering, not a
+/// contract violation, so an idle sweep must not read `update_needed`.
+#[test]
+fn a_status_without_a_known_version_is_contact() {
+    runtime().block_on(async {
+        let peer = PrivateLinkPeer::start().await;
+        let temporary = TestDirectory::new("failure-health-version-unknown");
+        let mut session = start_session(peer.credential(), &temporary).await;
+        peer.enqueue_system_status_response(
+            200,
+            serde_json::to_vec(&serde_json::json!({
+                "version": {
+                    "availability": "unknown",
+                    "current": null,
+                    "latest": null,
+                    "code": "install-not-owned",
+                },
+                "capture": {},
+                "capabilities": ["calendar_notes"],
+                "ok": true,
+            }))
+            .expect("status body"),
+        );
+
+        assert_eq!(session.system_status().await, Ok(()));
+
+        session.shutdown().await.expect("shutdown session");
+        peer.shutdown().await;
+    });
+}
+
 #[test]
 fn only_an_access_denied_handshake_reads_revoked() {
     runtime().block_on(async {
