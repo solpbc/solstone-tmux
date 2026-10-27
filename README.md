@@ -67,7 +67,8 @@ with `--mark "word word"`. If needed, `confirm` can verify the mark later.
 - Syncs one segment at a time, and local data is released only after the journal
   has proven custody.
 - Keeps taking in what you share when pairing or sync is unavailable.
-- Emits diagnostics that exclude pane content and tmux session names.
+- Keeps a log of warnings and errors, without pane content: systemd's journal
+  on Linux, and `~/Library/Logs/solstone-tmux.log` on macOS.
 - Pane titles, working directories and executable names are on by default. Set
   `"pane_title": false`, `"working_directory": false` or `"executable": false` in
   `config.json` to turn each off. Executable names do not include command

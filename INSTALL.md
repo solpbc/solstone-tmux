@@ -156,6 +156,10 @@ In your journal, open **network** and choose **pair a device**. Copy the pairing
    solstone-tmux status
    ```
 
+   The service keeps a log of warnings and errors. On Linux, read it with
+   `journalctl --user -u solstone-tmux`. On macOS, it is
+   `~/Library/Logs/solstone-tmux.log`.
+
 Run these through the format-specific absolute path during a Linux cutover if
 command lookup has not yet been refreshed. Service installation records the
 exact executable invoked; it does not assume an install prefix.
@@ -216,4 +220,4 @@ On macOS:
 sudo rm /usr/local/bin/solstone-tmux
 ```
 
-These commands leave settings and cached segments in place.
+These commands leave settings, cached segments and the macOS log in place.

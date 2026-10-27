@@ -8,6 +8,7 @@ Format adapted from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- on macos, the service now keeps a log at `~/Library/Logs/solstone-tmux.log`, so when solstone-tmux stops on an error, the reason is there to read. before, what it printed went nowhere. to add the log to a setup you already have, run `solstone-tmux install-service` again after updating. thanks @dvanduzer for the report.
 - `solstone-tmux status` no longer reads `update_needed` while your journal is working. when your journal answered without naming its version, solstone-tmux took that as a sign something needed an update, even though your terminal text kept going into your journal.
 - `solstone-tmux status`, `about`, `--help` and `--version` no longer end with an error when what they print goes to a command that stops reading early, like `head`.
 

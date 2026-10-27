@@ -104,7 +104,7 @@ service-status:
 service-logs:
 	@case "$$(uname -s)" in \
 		Linux) journalctl --user -u solstone-tmux.service -n 100 --no-pager -f ;; \
-		Darwin) log stream --style compact --predicate 'process == "solstone-tmux"' ;; \
+		Darwin) tail -n 100 -f "$$HOME/Library/Logs/solstone-tmux.log" ;; \
 		*) echo "service logs are supported only on Linux and macOS" >&2; exit 1 ;; \
 	esac
 

@@ -62,6 +62,9 @@ fn launchd_plist_has_required_structure_and_locale() {
     assert_eq!(plist.keep_alive, [("SuccessfulExit".to_owned(), false)]);
     assert_eq!(plist.throttle_interval, 5);
     assert_eq!(plist.process_type, "Background");
+    let log = format!("{home}/Library/Logs/solstone-tmux.log");
+    assert_eq!(plist.standard_out_path, log);
+    assert_eq!(plist.standard_error_path, log);
 }
 
 #[test]
@@ -1561,6 +1564,8 @@ struct RenderedLaunchdPlist {
     keep_alive: Vec<(String, bool)>,
     throttle_interval: i64,
     process_type: String,
+    standard_out_path: String,
+    standard_error_path: String,
 }
 fn read_rendered_launchd_plist(bytes: &[u8]) -> RenderedLaunchdPlist {
     let text = std::str::from_utf8(bytes).expect("rendered plist must be UTF-8");
@@ -1581,6 +1586,8 @@ fn read_rendered_launchd_plist(bytes: &[u8]) -> RenderedLaunchdPlist {
         keep_alive: parser.keyed("KeepAlive", |parser| parser.dictionary(PlistLines::boolean)),
         throttle_interval: parser.keyed("ThrottleInterval", PlistLines::integer),
         process_type: parser.keyed("ProcessType", |parser| parser.tagged("string")),
+        standard_out_path: parser.keyed("StandardOutPath", |parser| parser.tagged("string")),
+        standard_error_path: parser.keyed("StandardErrorPath", |parser| parser.tagged("string")),
     };
     parser.expect("</dict>");
     parser.expect("</plist>");

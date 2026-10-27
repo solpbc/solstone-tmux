@@ -82,6 +82,10 @@ pub fn render(
   <integer>5</integer>\n\
   <key>ProcessType</key>\n\
   <string>Background</string>\n\
+  <key>StandardOutPath</key>\n\
+  <string>{home}/Library/Logs/solstone-tmux.log</string>\n\
+  <key>StandardErrorPath</key>\n\
+  <string>{home}/Library/Logs/solstone-tmux.log</string>\n\
 </dict>\n\
 </plist>\n"
     )
