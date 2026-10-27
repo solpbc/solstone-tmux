@@ -415,6 +415,10 @@ impl PrivateLinkPeer {
         });
     }
 
+    pub fn enqueue_raw_system_status_response(&self, response: impl Into<Vec<u8>>) {
+        lock(&self.state.system_status_responses).push_back(PeerResponse::Raw(response.into()));
+    }
+
     pub fn enqueue_delayed_system_status_response(
         &self,
         delay: std::time::Duration,

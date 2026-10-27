@@ -132,6 +132,28 @@ fn an_auth_refusal_reads_revoked() {
     });
 }
 
+/// A connection that ends partway through the journal's answer is the journal
+/// or the link failing to answer, not a contract violation.
+#[test]
+fn a_status_answer_cut_off_mid_body_reads_offline() {
+    runtime().block_on(async {
+        let peer = PrivateLinkPeer::start().await;
+        let temporary = TestDirectory::new("failure-health-cut-off");
+        let mut session = start_session(peer.credential(), &temporary).await;
+        peer.enqueue_raw_system_status_response(
+            b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 200\r\n\r\n{\"ok\":true"
+                .to_vec(),
+        );
+
+        let code = status_failure(&mut session).await;
+        assert_eq!(code, DiagnosticCode::JournalUnavailable);
+        assert_eq!(state_after(code), HealthState::Offline);
+
+        session.shutdown().await.expect("shutdown session");
+        peer.shutdown().await;
+    });
+}
+
 /// A Linux journal that cannot tell how it was installed answers its status
 /// with `ok` and a null `version.current`. That is the journal answering, not a
 /// contract violation, so an idle sweep must not read `update_needed`.

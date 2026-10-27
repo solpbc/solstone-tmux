@@ -721,7 +721,7 @@ pub(crate) async fn collect_response_body_limited(
     while let Some(chunk) = response.chunk().await.map_err(|error| {
         JournalError::local(request_diagnostic(
             &error,
-            DiagnosticCode::JournalContractInvalid,
+            DiagnosticCode::JournalUnavailable,
         ))
     })? {
         let Some(length) = body.len().checked_add(chunk.len()) else {
@@ -1131,4 +1131,49 @@ fn valid_day(day: &str) -> bool {
 
 fn valid_component(value: &str) -> bool {
     derive_component(value).is_ok_and(|derived| derived.as_str() == value)
+}
+
+#[cfg(test)]
+mod tests {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    use super::{DiagnosticCode, MAX_RESPONSE_BODY_BYTES, collect_response_body_limited};
+
+    /// A connection that ends partway through an answer is the journal or the
+    /// link failing to answer, not a contract violation.
+    #[tokio::test]
+    async fn a_body_cut_off_mid_answer_is_unavailable() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind loopback");
+        let address = listener.local_addr().expect("loopback address");
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accept");
+            let mut request = Vec::new();
+            let mut buffer = [0u8; 1024];
+            while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                let count = socket.read(&mut buffer).await.expect("read request");
+                assert_ne!(count, 0, "request ended early");
+                request.extend_from_slice(&buffer[..count]);
+            }
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 200\r\n\r\n{\"ok\":true")
+                .await
+                .expect("write partial answer");
+        });
+        let response = reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("client")
+            .get(format!("http://{address}/api/system/status"))
+            .send()
+            .await
+            .expect("answer head");
+        server.await.expect("server task");
+
+        let error = collect_response_body_limited(response, MAX_RESPONSE_BODY_BYTES)
+            .await
+            .expect_err("cut-off body accepted");
+        assert_eq!(error.diagnostic(), DiagnosticCode::JournalUnavailable);
+    }
 }
