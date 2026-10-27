@@ -52,11 +52,11 @@ fn run() -> Result<i32, String> {
 
     match command {
         cli::CliCommand::Help => {
-            println!("{}", cli::usage());
+            write_stdout(&format!("{}\n", cli::usage()))?;
             return Ok(0);
         }
         cli::CliCommand::Version => {
-            println!("{}", cli::version());
+            write_stdout(&format!("{}\n", cli::version()))?;
             return Ok(0);
         }
         _ => {}
@@ -74,7 +74,7 @@ fn run() -> Result<i32, String> {
                 time::OffsetDateTime::now_utc().unix_timestamp(),
                 &TokioCommandRunner,
             ));
-            println!("{}", block.text);
+            write_stdout(&format!("{}\n", block.text))?;
             Ok(0)
         }
         cli::CliCommand::Setup(mark) => {
@@ -153,13 +153,15 @@ fn run() -> Result<i32, String> {
                             }
                             _ => JournalVersionStatus::Unknown,
                         };
-                        println!("service: {service_line}");
-                        println!("sync-health: {sync_health_str}");
+                        let mut text =
+                            format!("service: {service_line}\nsync-health: {sync_health_str}\n");
                         if print_held_lines {
-                            println!("{}", solstone_tmux::pairing_answer::STATUS_HELD_PAIRING);
-                            println!("{}", solstone_tmux::pairing_answer::STATUS_HELD_CONFIRM);
+                            text.push_str(solstone_tmux::pairing_answer::STATUS_HELD_PAIRING);
+                            text.push('\n');
+                            text.push_str(solstone_tmux::pairing_answer::STATUS_HELD_CONFIRM);
+                            text.push('\n');
                         }
-                        println!("journal-version: {}", journal_version.render());
+                        text.push_str(&format!("journal-version: {}\n", journal_version.render()));
                         let data_root_opt = resolve_data_root(platform, &environment).ok();
                         let block = solstone_tmux::about::AboutBlock::snapshot(
                             config_root_opt.as_deref(),
@@ -168,12 +170,13 @@ fn run() -> Result<i32, String> {
                             &runner,
                         )
                         .await;
-                        println!("{}", block.text);
-                        println!("get help: {}", solstone_tmux::support::HELP_URL);
-                        println!(
-                            "report a problem: {}",
+                        text.push_str(&format!(
+                            "{}\nget help: {}\nreport a problem: {}\n",
+                            block.text,
+                            solstone_tmux::support::HELP_URL,
                             solstone_tmux::support::report_url(sync_health_str, &block)
-                        );
+                        ));
+                        write_stdout(&text)?;
                         if let Err(error) = &status {
                             eprintln!("solstone-tmux: {error}");
                         }
@@ -198,6 +201,21 @@ fn run() -> Result<i32, String> {
                 }
             })
         }
+    }
+}
+
+/// Writes command output. A reader that has gone away (`status | head`) ends
+/// the output quietly instead of panicking, as `println!` would.
+fn write_stdout(text: &str) -> Result<(), String> {
+    let mut stdout = std::io::stdout().lock();
+    match stdout
+        .write_all(text.as_bytes())
+        .and_then(|()| stdout.flush())
+    {
+        Err(error) if error.kind() != std::io::ErrorKind::BrokenPipe => {
+            Err(format!("could not write output: {error}"))
+        }
+        _ => Ok(()),
     }
 }
 

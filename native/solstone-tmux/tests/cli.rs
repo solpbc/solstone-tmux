@@ -67,6 +67,43 @@ fn about_prints_two_copyable_lines_without_starting_the_observer() {
 }
 
 #[test]
+fn printing_commands_exit_quietly_when_the_stdout_reader_has_gone() {
+    let root = std::env::temp_dir().join(format!(
+        "tmux-closed-stdout-cli-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    for (arguments, expected_code) in [
+        (&["--help"][..], 0),
+        (&["--version"][..], 0),
+        (&["about"][..], 0),
+        (&["status"][..], 4),
+    ] {
+        let (reader, writer) = std::io::pipe().expect("create stdout pipe");
+        drop(reader);
+        let output = Command::new(env!("CARGO_BIN_EXE_solstone-tmux"))
+            .args(arguments)
+            .env_clear()
+            .env("HOME", &root)
+            .env("XDG_CONFIG_HOME", root.join("config"))
+            .env("XDG_DATA_HOME", root.join("data"))
+            .stdout(writer)
+            .output()
+            .expect("run solstone-tmux");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(
+            output.status.code(),
+            Some(expected_code),
+            "{arguments:?} with a closed stdout reader: {stderr}"
+        );
+        assert!(!stderr.contains("panicked"), "{arguments:?}: {stderr}");
+    }
+}
+
+#[test]
 fn parser_preserves_five_commands_and_no_argument_default() {
     let cases = [
         ("run", CliCommand::Run),
