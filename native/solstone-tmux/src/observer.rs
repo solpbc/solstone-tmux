@@ -492,15 +492,14 @@ fn indicator_update_error(error: IndicatorError) -> ObserverOperationError {
     ))
 }
 
-/// The status indicator only marks tmux's status line, so a failed update is
-/// a warning and capture goes on. One warning covers a run of failures; the
-/// next failure after an update succeeds warns again.
+/// A failure that does not stop the process is a warning. One warning covers
+/// a run of failures; the next failure after a success warns again.
 #[derive(Default)]
-struct IndicatorWarning {
+struct FailureWarning {
     failing: bool,
 }
 
-impl IndicatorWarning {
+impl FailureWarning {
     fn record(&mut self, result: Result<(), ObserverOperationError>) {
         match result {
             Ok(()) => self.failing = false,
@@ -562,6 +561,7 @@ pub async fn run_observer(
     let mut interval = tokio::time::interval(config.capture_interval);
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut failures = Vec::new();
+    let mut capture_warning = FailureWarning::default();
     let shutdown_event = loop {
         tokio::select! {
             biased;
@@ -584,10 +584,20 @@ pub async fn run_observer(
             result = captures.join_next() => result,
         };
         let outcome = match capture_result {
-            Some(Ok(Ok(outcome))) => outcome,
+            Some(Ok(Ok(outcome))) => {
+                capture_warning.record(Ok(()));
+                outcome
+            }
+            // A slow or failed tmux read loses this poll, not the process:
+            // the segment sees an empty poll and the next tick reads again.
             Some(Ok(Err(error))) => {
-                failures.push(format!("capture task exited: {error}"));
-                break None;
+                capture_warning.record(Err(ObserverOperationError(format!(
+                    "capture poll skipped: {error}"
+                ))));
+                PollOutcome {
+                    captures: Vec::new(),
+                    activity_jsonl: Vec::new(),
+                }
             }
             Some(Err(error)) => {
                 failures.push(format!(
@@ -680,7 +690,7 @@ where
     let mut sync_task = tokio::spawn(sync);
     let mut activity_open = true;
     let mut shutdown_request_open = true;
-    let mut indicator_warning = IndicatorWarning::default();
+    let mut indicator_warning = FailureWarning::default();
     let mut indicator_refresh = indicator.refresh_interval().map(|period| {
         let mut refresh = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
         refresh.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);

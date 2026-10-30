@@ -9,6 +9,7 @@ Format adapted from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 - solstone-tmux no longer stops when it can't update its status indicator in tmux. before, a failed update made it exit with code 1, and the service started it again. now it keeps running and writes one warning that says why the update failed, and each line in the service log starts with the time it was written. thanks @dvanduzer for the report.
+- solstone-tmux no longer stops when tmux is slow to answer. before, if tmux took longer than five seconds to say which sessions were in use, or failed to say, solstone-tmux exited with code 1 and the service started it again. now it skips that one read, writes one warning, and reads again at the next interval. thanks @dvanduzer for the report.
 
 ## [2.0.21] - 2026-10-27
 

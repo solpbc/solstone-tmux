@@ -176,6 +176,8 @@ clients, and the indicator waits for a server. Supervision refreshes the
 indicator every capture interval, installing it once on each new tmux server.
 A run of failed indicator updates writes one warning, with tmux's error when it
 gave one, and solstone-tmux keeps running.
+A failed or timed-out poll is skipped the same way: one warning per run of
+failures, the segment sees an empty poll, and the next tick reads again.
 
 Each poll builds complete per-session tmux transactions, serializes compatible
 JSONL envelopes, keeps screen envelopes deduplicated, and appends enabled

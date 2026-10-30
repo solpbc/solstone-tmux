@@ -3,7 +3,7 @@
 
 mod support;
 
-use std::future::{Future, pending, ready};
+use std::future::{Future, ready};
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -23,7 +23,7 @@ use solstone_tmux::observer::{
 use solstone_tmux::segment::{SegmentClose, SegmentState};
 use solstone_tmux::sync::{SyncActivity, SyncWake};
 use solstone_tmux::tmux::StderrWarnings;
-use support::{TestDirectory, golden_capture};
+use support::{TestDirectory, child_stderr, golden_capture};
 use time::{Date, Month, OffsetDateTime, PrimitiveDateTime, Time, UtcOffset};
 
 struct ClockZoneSource(Arc<TestClock>);
@@ -197,21 +197,50 @@ fn finalize_failure_exits_nonzero_and_keeps_source() {
 }
 
 #[test]
-fn unexpected_task_exit_surfaces_cause() {
-    let exit = run_test_observer(
-        Box::new(RecordingSegment::default()),
-        Box::new(RecordingIndicator::default()),
-        Box::new(RecordingLock::default()),
-        Box::pin(pending()),
-        Arc::new(FailingCapture),
-    );
+fn a_failed_capture_poll_is_a_warning_and_capture_keeps_running() {
+    const TEST: &str = "a_failed_capture_poll_is_a_warning_and_capture_keeps_running";
+    // Fail, recover, fail again, recover: two runs of failures.
+    const SCRIPT: [bool; 6] = [false, false, true, false, true, true];
+    let Some(stderr) = child_stderr(TEST, || {
+        let provider = Arc::new(ScriptedCapture::new(&SCRIPT));
+        let polls = Arc::clone(&provider.polls);
+        let shutdown = Box::pin(async move {
+            while polls.load(Ordering::SeqCst) < SCRIPT.len() {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+            ShutdownEvent::Injected
+        });
+        let observed = Arc::new(AtomicUsize::new(0));
+        let segment = RecordingSegment {
+            polls: Arc::clone(&observed),
+            ..RecordingSegment::default()
+        };
+        let exit = run_test_observer(
+            Box::new(segment),
+            Box::new(RecordingIndicator::default()),
+            Box::new(RecordingLock::default()),
+            shutdown,
+            provider,
+        );
 
-    assert_eq!(exit.exit_code, 1);
-    assert_eq!(exit.shutdown_event, None);
-    assert!(
-        exit.failures
-            .iter()
-            .any(|failure| failure.contains("fixture capture exited"))
+        assert_eq!(exit.exit_code, 0, "{:?}", exit.failures);
+        assert_eq!(exit.shutdown_event, Some(ShutdownEvent::Injected));
+        assert!(exit.failures.is_empty(), "{:?}", exit.failures);
+        // A failed poll still reaches the segment, as an empty one, so
+        // rotation keeps its schedule.
+        assert!(observed.load(Ordering::SeqCst) >= SCRIPT.len());
+    }) else {
+        return;
+    };
+
+    assert_eq!(
+        stderr
+            .matches(
+                "solstone-tmux: warning: capture poll skipped: Tmux(ListClients) exceeded its 5 second timeout"
+            )
+            .count(),
+        2,
+        "{stderr}"
     );
 }
 
@@ -409,16 +438,43 @@ impl CaptureProvider for NoCaptures {
     }
 }
 
-struct FailingCapture;
+/// A provider whose nth poll succeeds when `script[n]` is true and fails like
+/// a timed-out tmux read otherwise; polls past the script succeed.
+struct ScriptedCapture {
+    script: &'static [bool],
+    polls: Arc<AtomicUsize>,
+}
 
-impl CaptureProvider for FailingCapture {
+impl ScriptedCapture {
+    fn new(script: &'static [bool]) -> Self {
+        Self {
+            script,
+            polls: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+}
+
+impl CaptureProvider for ScriptedCapture {
     fn poll<'a>(
         &'a self,
         _wall_now: time::OffsetDateTime,
         _capture_interval: Duration,
     ) -> Pin<Box<dyn Future<Output = Result<PollOutcome, ObserverOperationError>> + Send + 'a>>
     {
-        Box::pin(async { Err(ObserverOperationError("fixture capture exited".to_owned())) })
+        let poll = self.polls.fetch_add(1, Ordering::SeqCst);
+        let succeeds = self.script.get(poll).copied().unwrap_or(true);
+        Box::pin(async move {
+            if succeeds {
+                Ok(PollOutcome {
+                    captures: Vec::new(),
+                    activity_jsonl: Vec::new(),
+                })
+            } else {
+                Err(ObserverOperationError(
+                    "Tmux(ListClients) exceeded its 5 second timeout".to_owned(),
+                ))
+            }
+        })
     }
 }
 
@@ -427,6 +483,7 @@ struct RecordingSegment {
     log: Arc<Mutex<Vec<&'static str>>>,
     fail: bool,
     shutdowns: Arc<AtomicUsize>,
+    polls: Arc<AtomicUsize>,
 }
 
 impl RecordingSegment {
@@ -435,6 +492,7 @@ impl RecordingSegment {
             log,
             fail,
             shutdowns: Arc::new(AtomicUsize::new(0)),
+            polls: Arc::new(AtomicUsize::new(0)),
         }
     }
 }
@@ -448,6 +506,7 @@ impl SegmentLifecycle for RecordingSegment {
         _monotonic_now: Duration,
         _segment_interval: Duration,
     ) -> Result<(), ObserverOperationError> {
+        self.polls.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
 
