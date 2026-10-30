@@ -1,19 +1,26 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 sol pbc
 
+mod support;
+
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
+use std::path::PathBuf;
 use std::time::Duration;
 
+use solstone_tmux::command::{CommandInvocation, CommandOperation, TmuxOperation};
 use solstone_tmux::indicator::{
-    IndicatorError, IndicatorIo, IndicatorOwnership, OBSERVING_VALUE, OptionValue, SOLSTONE_OPTION,
-    STATUS_LEFT, SYNCING_VALUE, ServerIndicator,
+    CommandIndicatorIo, IndicatorError, IndicatorIo, IndicatorOwnership, OBSERVING_VALUE,
+    OptionValue, SOLSTONE_OPTION, STATUS_LEFT, SYNCING_VALUE, ServerIndicator,
 };
 use solstone_tmux::observer::{NoopShutdownIndicator, ShutdownIndicator};
 use solstone_tmux::sync::SyncActivity;
+use solstone_tmux::tmux::TMUX_TIMEOUT;
+use support::{ExpectedInvocation, FixtureRunner, command_output};
 
 const WRITTEN_STATUS_LEFT: &str = "owner status | ☼ #{@solstone} ☼";
 const NORMALIZED_STATUS_LEFT: &str = "owner status | _ #{@solstone} _";
@@ -565,6 +572,51 @@ async fn real_tmux_errors_still_surface() {
     assert!(matches!(error, IndicatorError::Nonzero { .. }));
 }
 
+#[tokio::test]
+async fn a_failed_update_says_what_tmux_said() {
+    let io = MemoryIndicator::with([
+        (STATUS_LEFT, OptionValue::Present("owner status".to_owned())),
+        (SOLSTONE_OPTION, OptionValue::Absent),
+    ]);
+    let mut indicator = ServerIndicator::start(io.clone(), REFRESH)
+        .await
+        .expect("start indicator");
+    io.break_server();
+
+    let error = ShutdownIndicator::set_activity(&mut indicator, SyncActivity::Working)
+        .await
+        .expect_err("a failing tmux fails the update");
+    assert_eq!(
+        error.to_string(),
+        "indicator update failed: tmux option command for @solstone exited 1: lost server"
+    );
+}
+
+#[tokio::test]
+async fn a_failed_tmux_option_command_keeps_tmux_stderr() {
+    let tmux = PathBuf::from("/usr/bin/tmux");
+    let runner = FixtureRunner::new([ExpectedInvocation {
+        invocation: CommandInvocation {
+            operation: CommandOperation::Tmux(TmuxOperation::ServerIdentity),
+            executable: tmux.clone(),
+            args: ["display-message", "-p", "#{pid} #{start_time}"]
+                .into_iter()
+                .map(OsString::from)
+                .collect(),
+            timeout: TMUX_TIMEOUT,
+        },
+        outcome: command_output(&[], b"lost server\n", 1),
+    }]);
+    let io = CommandIndicatorIo::new(runner.clone(), tmux).expect("absolute tmux");
+
+    let error = io.server_identity().await.expect_err("tmux exited nonzero");
+    assert_eq!(
+        error.to_string(),
+        "tmux option command for server identity exited 1: lost server"
+    );
+    runner.assert_finished().expect("one tmux command");
+}
+
 async fn install(io: MemoryIndicator) -> IndicatorOwnership<MemoryIndicator> {
     IndicatorOwnership::install(io, WRITTEN_STATUS_LEFT.to_owned(), "observer".to_owned())
         .await
@@ -631,6 +683,7 @@ impl MemoryIndicator {
             MemoryServer::Broken => Err(IndicatorError::Nonzero {
                 name: name.to_owned(),
                 status: 1,
+                stderr: "lost server".to_owned(),
             }),
         }
     }

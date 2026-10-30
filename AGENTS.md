@@ -64,6 +64,7 @@ native/solstone-tmux/
         segment.rs                 Rotation and finalization
         serialize.rs               JSONL serialization
         service.rs, service/       systemd-user and launchd lifecycle
+        stderr_log.rs              Warning and error lines, timestamped under `run`
         storage.rs                 Durable append and atomic writes
         support.rs                 Support report link
         sync.rs                    Bounded sync and custody
@@ -173,6 +174,8 @@ installs the owned tmux indicator, and starts capture and sync supervision.
 No running tmux server is a normal state, not a failure: a poll then sees no
 clients, and the indicator waits for a server. Supervision refreshes the
 indicator every capture interval, installing it once on each new tmux server.
+A run of failed indicator updates writes one warning, with tmux's error when it
+gave one, and solstone-tmux keeps running.
 
 Each poll builds complete per-session tmux transactions, serializes compatible
 JSONL envelopes, keeps screen envelopes deduplicated, and appends enabled

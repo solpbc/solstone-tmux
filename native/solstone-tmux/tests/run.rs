@@ -169,6 +169,34 @@ fn overlong_stream_name_fails_before_capture_directory_creation() {
 }
 
 #[test]
+fn run_log_lines_start_with_when_they_were_written() {
+    let fixture = RunFixture::new("binary-run-log-time");
+    fixture.write_config(&"a".repeat(201), 1, 300);
+
+    let before = jiff::Timestamp::now();
+    let output = fixture.run_output();
+    let after = jiff::Timestamp::now();
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let line = stderr
+        .lines()
+        .find(|line| line.contains("update stream in config.json"))
+        .unwrap_or_else(|| panic!("no exit reason in {stderr:?}"));
+    let (written, message) = line
+        .split_once(" solstone-tmux: ")
+        .unwrap_or_else(|| panic!("no time before the message: {line:?}"));
+    let written = jiff::fmt::strtime::parse("%Y-%m-%dT%H:%M:%S%:z", written)
+        .and_then(|time| time.to_timestamp())
+        .unwrap_or_else(|error| panic!("{written:?} is not a local time: {error}"));
+    assert!(
+        written >= before - jiff::SignedDuration::from_secs(1) && written <= after,
+        "{written} is not between {before} and {after}"
+    );
+    assert!(message.contains("update stream in config.json"));
+}
+
+#[test]
 fn setup_checks_existing_run_lock_before_pairing_or_private_state_creation_with_default_roots() {
     let fixture = RunFixture::new("binary-setup-lock-default-roots");
     assert_setup_checks_existing_run_lock_before_pairing_or_private_state_creation(fixture);

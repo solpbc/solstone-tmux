@@ -140,7 +140,7 @@ pub async fn run_access_lane(
     AccessLaneResult { relay, addresses }
 }
 
-const FAILURE_LINE: &str = "solstone-tmux: journal dial addresses were not refreshed";
+const FAILURE_LINE: &str = "journal dial addresses were not refreshed";
 
 enum DialAddressJobStep {
     Success,
@@ -198,11 +198,11 @@ pub async fn run_dial_address_job(
         Ok(DialAddressJobStep::Success) => Ok(()),
         Ok(DialAddressJobStep::CommitError) => Err(()),
         Ok(DialAddressJobStep::FetchError) => {
-            eprintln!("{FAILURE_LINE}");
+            crate::stderr_log::line(FAILURE_LINE);
             Err(())
         }
         Err(_elapsed) => {
-            eprintln!("{FAILURE_LINE}");
+            crate::stderr_log::line(FAILURE_LINE);
             Err(())
         }
     }

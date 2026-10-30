@@ -28,12 +28,13 @@ use solstone_tmux::segment::SegmentState;
 use solstone_tmux::service::{
     ServiceController, ServiceStatus, current_platform, load_local_observer, status_exit_code,
 };
+use solstone_tmux::stderr_log;
 use solstone_tmux::sync::{RetentionFence, SyncActivity, SyncTask, SyncWake};
 use solstone_tmux::tmux::{StderrWarnings, TmuxAdapter};
 
 fn main() {
     let exit_code = run().unwrap_or_else(|error| {
-        eprintln!("solstone-tmux: {error}");
+        stderr_log::line(error);
         1
     });
     if exit_code != 0 {
@@ -100,6 +101,7 @@ fn run() -> Result<i32, String> {
             handle_outcome(outcome)
         }
         cli::CliCommand::Run => {
+            stderr_log::enable_timestamps();
             let clock = SystemClock::utc();
             run_native(platform, &environment, clock)
         }
@@ -178,7 +180,7 @@ fn run() -> Result<i32, String> {
                         ));
                         write_stdout(&text)?;
                         if let Err(error) = &status {
-                            eprintln!("solstone-tmux: {error}");
+                            stderr_log::line(error);
                         }
                         Ok(status_exit_code(status))
                     }
@@ -276,12 +278,12 @@ fn run_native(
             record.action,
             RecoveryAction::Retain | RecoveryAction::Quarantine | RecoveryAction::Failed
         ) {
-            eprintln!(
-                "solstone-tmux: warning: recovery {:?} for {}: {}",
+            stderr_log::warn(format_args!(
+                "recovery {:?} for {}: {}",
                 record.action,
                 record.candidate.display(),
                 record.detail
-            );
+            ));
         }
     }
 
@@ -378,7 +380,7 @@ fn run_native(
         },
     ));
     for failure in &exit.failures {
-        eprintln!("solstone-tmux: {failure}");
+        stderr_log::line(failure);
     }
     Ok(exit.exit_code)
 }

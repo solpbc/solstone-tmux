@@ -15,7 +15,7 @@ use tokio::task::{JoinError, JoinSet};
 use crate::clock::{Clock, Zone, ZoneSource, local_date_and_time};
 use crate::command::CommandRunner;
 use crate::health::DiagnosticCode;
-use crate::indicator::{IndicatorIo, IndicatorOwnership, ServerIndicator};
+use crate::indicator::{IndicatorError, IndicatorIo, IndicatorOwnership, ServerIndicator};
 use crate::instance_lock::InstanceLock;
 use crate::model::{CaptureResult, PollOutcome};
 use crate::name::DerivedName;
@@ -336,10 +336,10 @@ impl SegmentLifecycle for SegmentManager {
                 .append_capture(capture, timestamp, monotonic_now)
             {
                 if error.is_recoverable_append() {
-                    eprintln!(
-                        "solstone-tmux: warning: durable append for session {:?} rolled back and will retry: {error}",
+                    crate::stderr_log::warn(format_args!(
+                        "durable append for session {:?} rolled back and will retry: {error}",
                         capture.session
-                    );
+                    ));
                     continue;
                 }
                 return Err(operation_error(error));
@@ -433,11 +433,7 @@ impl<I: IndicatorIo> ShutdownIndicator for IndicatorOwnership<I> {
             self.update_solstone(value.to_owned())
                 .await
                 .map(|_| ())
-                .map_err(|_| {
-                    ObserverOperationError(
-                        DiagnosticCode::IndicatorUpdateFailed.message().to_owned(),
-                    )
-                })
+                .map_err(indicator_update_error)
         })
     }
 
@@ -460,11 +456,7 @@ impl<I: IndicatorIo + Clone> ShutdownIndicator for ServerIndicator<I> {
         Box::pin(async move {
             self.set_working(activity == SyncActivity::Working)
                 .await
-                .map_err(|_| {
-                    ObserverOperationError(
-                        DiagnosticCode::IndicatorUpdateFailed.message().to_owned(),
-                    )
-                })
+                .map_err(indicator_update_error)
         })
     }
 
@@ -476,9 +468,9 @@ impl<I: IndicatorIo + Clone> ShutdownIndicator for ServerIndicator<I> {
         &'a mut self,
     ) -> Pin<Box<dyn Future<Output = Result<(), ObserverOperationError>> + Send + 'a>> {
         Box::pin(async move {
-            ServerIndicator::refresh(self).await.map_err(|_| {
-                ObserverOperationError(DiagnosticCode::IndicatorUpdateFailed.message().to_owned())
-            })
+            ServerIndicator::refresh(self)
+                .await
+                .map_err(indicator_update_error)
         })
     }
 
@@ -490,6 +482,35 @@ impl<I: IndicatorIo + Clone> ShutdownIndicator for ServerIndicator<I> {
                 .await
                 .map_err(|error| ObserverOperationError(error.to_string()))
         })
+    }
+}
+
+fn indicator_update_error(error: IndicatorError) -> ObserverOperationError {
+    ObserverOperationError(format!(
+        "{}: {error}",
+        DiagnosticCode::IndicatorUpdateFailed.message()
+    ))
+}
+
+/// The status indicator only marks tmux's status line, so a failed update is
+/// a warning and capture goes on. One warning covers a run of failures; the
+/// next failure after an update succeeds warns again.
+#[derive(Default)]
+struct IndicatorWarning {
+    failing: bool,
+}
+
+impl IndicatorWarning {
+    fn record(&mut self, result: Result<(), ObserverOperationError>) {
+        match result {
+            Ok(()) => self.failing = false,
+            Err(error) => {
+                if !self.failing {
+                    crate::stderr_log::warn(error);
+                }
+                self.failing = true;
+            }
+        }
     }
 }
 
@@ -659,6 +680,7 @@ where
     let mut sync_task = tokio::spawn(sync);
     let mut activity_open = true;
     let mut shutdown_request_open = true;
+    let mut indicator_warning = IndicatorWarning::default();
     let mut indicator_refresh = indicator.refresh_interval().map(|period| {
         let mut refresh = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
         refresh.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -684,15 +706,11 @@ where
                     activity_open = false;
                 } else {
                     let current_activity = *activity.borrow_and_update();
-                    if indicator.set_activity(current_activity).await.is_err() {
-                        break SupervisionTrigger::IndicatorFailed;
-                    }
+                    indicator_warning.record(indicator.set_activity(current_activity).await);
                 }
             }
             _ = next_refresh(&mut indicator_refresh) => {
-                if indicator.refresh().await.is_err() {
-                    break SupervisionTrigger::IndicatorFailed;
-                }
+                indicator_warning.record(indicator.refresh().await);
             }
         }
     };
@@ -723,19 +741,6 @@ where
             merge_observer_result(&mut exit, observer_task.await);
             exit
         }
-        SupervisionTrigger::IndicatorFailed => {
-            observer_stop.send_replace(Some(ShutdownEvent::Injected));
-            let sync_result = stop_sync_with_deadline(&sync_stop, &mut sync_task).await;
-            release_observer(&mut shutdown_barrier);
-            let mut exit = ObserverExit {
-                exit_code: 1,
-                shutdown_event: None,
-                failures: vec![DiagnosticCode::IndicatorUpdateFailed.message().to_owned()],
-            };
-            append_authorized_sync_outcome(&mut exit, sync_result);
-            merge_observer_result(&mut exit, observer_task.await);
-            exit
-        }
     };
     if !exit.failures.is_empty() {
         exit.exit_code = 1;
@@ -756,7 +761,6 @@ enum SupervisionTrigger {
     Observer(Result<ObserverExit, JoinError>),
     Sync(Result<Result<(), DiagnosticCode>, JoinError>),
     ObserverShutdown,
-    IndicatorFailed,
 }
 
 fn release_observer(barrier: &mut SupervisorShutdownBarrier) {

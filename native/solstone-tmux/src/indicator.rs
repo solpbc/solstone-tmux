@@ -8,7 +8,9 @@ use std::path::PathBuf;
 use std::pin::Pin;
 use std::time::Duration;
 
-use crate::command::{CommandInvocation, CommandOperation, CommandRunner, TmuxOperation};
+use crate::command::{
+    CommandInvocation, CommandOperation, CommandOutput, CommandRunner, TmuxOperation,
+};
 use crate::tmux::{TMUX_TIMEOUT, reports_no_server};
 
 pub const STATUS_LEFT: &str = "status-left";
@@ -85,10 +87,7 @@ impl<R: CommandRunner> IndicatorIo for CommandIndicatorIo<R> {
                 return Err(IndicatorError::NoServer);
             }
             if output.status != 0 {
-                return Err(IndicatorError::Nonzero {
-                    name: "server identity".to_owned(),
-                    status: output.status,
-                });
+                return Err(IndicatorError::nonzero("server identity", &output));
             }
             let stdout = String::from_utf8(output.stdout)
                 .map_err(|error| IndicatorError::Protocol(error.to_string()))?;
@@ -121,10 +120,7 @@ impl<R: CommandRunner> IndicatorIo for CommandIndicatorIo<R> {
                 return if name == SOLSTONE_OPTION {
                     Ok(OptionValue::Absent)
                 } else {
-                    Err(IndicatorError::Nonzero {
-                        name: name.to_owned(),
-                        status: output.status,
-                    })
+                    Err(IndicatorError::nonzero(name, &output))
                 };
             }
             let stdout = String::from_utf8(output.stdout)
@@ -158,10 +154,7 @@ impl<R: CommandRunner> IndicatorIo for CommandIndicatorIo<R> {
             } else if reports_no_server(&output) {
                 Err(IndicatorError::NoServer)
             } else {
-                Err(IndicatorError::Nonzero {
-                    name: name.to_owned(),
-                    status: output.status,
-                })
+                Err(IndicatorError::nonzero(name, &output))
             }
         })
     }
@@ -189,10 +182,7 @@ impl<R: CommandRunner> IndicatorIo for CommandIndicatorIo<R> {
             } else if reports_no_server(&output) {
                 Err(IndicatorError::NoServer)
             } else {
-                Err(IndicatorError::Nonzero {
-                    name: name.to_owned(),
-                    status: output.status,
-                })
+                Err(IndicatorError::nonzero(name, &output))
             }
         })
     }
@@ -459,8 +449,24 @@ async fn restore_value(
 pub enum IndicatorError {
     Command(crate::command::CommandError),
     NoServer,
-    Nonzero { name: String, status: i32 },
+    Nonzero {
+        name: String,
+        status: i32,
+        stderr: String,
+    },
     Protocol(String),
+}
+
+impl IndicatorError {
+    fn nonzero(name: &str, output: &CommandOutput) -> Self {
+        Self::Nonzero {
+            name: name.to_owned(),
+            status: output.status,
+            stderr: String::from_utf8_lossy(&output.stderr)
+                .trim_end()
+                .to_owned(),
+        }
+    }
 }
 
 impl fmt::Display for IndicatorError {
@@ -468,8 +474,17 @@ impl fmt::Display for IndicatorError {
         match self {
             Self::Command(error) => error.fmt(formatter),
             Self::NoServer => formatter.write_str("no tmux server is running"),
-            Self::Nonzero { name, status } => {
-                write!(formatter, "tmux option command for {name} exited {status}")
+            Self::Nonzero {
+                name,
+                status,
+                stderr,
+            } => {
+                write!(formatter, "tmux option command for {name} exited {status}")?;
+                if stderr.is_empty() {
+                    Ok(())
+                } else {
+                    write!(formatter, ": {stderr}")
+                }
             }
             Self::Protocol(error) => formatter.write_str(error),
         }

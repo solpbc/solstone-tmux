@@ -28,7 +28,7 @@ pub struct StderrWarnings;
 
 impl WarningSink for StderrWarnings {
     fn warn(&self, message: &str) {
-        eprintln!("solstone-tmux: warning: {message}");
+        crate::stderr_log::warn(message);
     }
 }
 

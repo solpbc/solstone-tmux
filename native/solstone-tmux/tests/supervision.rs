@@ -5,6 +5,7 @@ mod support;
 
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
@@ -21,7 +22,7 @@ use solstone_tmux::paths::ensure_private_directory;
 use solstone_tmux::segment::SegmentState;
 use solstone_tmux::sync::{RetentionFence, SyncActivity, SyncWake};
 use solstone_tmux::tmux::StderrWarnings;
-use support::{TestDirectory, golden_capture};
+use support::{TestDirectory, child_stderr, golden_capture};
 use time::{Date, Month, PrimitiveDateTime, Time, UtcOffset};
 
 #[test]
@@ -200,6 +201,101 @@ fn activity_borrow_is_released_before_indicator_update_awaits() {
     sender_thread.join().expect("activity sender thread");
 
     assert_eq!(result.expect("supervision must not deadlock").exit_code, 0);
+}
+
+#[test]
+fn a_failed_indicator_update_is_a_warning_and_capture_keeps_running() {
+    const TEST: &str = "a_failed_indicator_update_is_a_warning_and_capture_keeps_running";
+    let Some(stderr) = child_stderr(TEST, || {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .start_paused(true)
+            .build()
+            .expect("test runtime")
+            .block_on(failing_indicator_run());
+    }) else {
+        return;
+    };
+
+    // One warning for the first run of failures, one more after an update
+    // succeeded in between, and each says what tmux said.
+    assert_eq!(
+        stderr.matches("indicator update failed").count(),
+        2,
+        "{stderr}"
+    );
+    assert_eq!(
+        stderr
+            .matches(
+                "solstone-tmux: warning: indicator update failed: tmux option command for @solstone exited 1: lost server"
+            )
+            .count(),
+        2,
+        "{stderr}"
+    );
+}
+
+async fn failing_indicator_run() {
+    let failing = Arc::new(AtomicBool::new(true));
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let indicator = FailingIndicator {
+        failing: Arc::clone(&failing),
+        attempts: Arc::clone(&attempts),
+    };
+    let (activity, activity_receiver) = tokio::sync::watch::channel(SyncActivity::Idle);
+    let (sync_stop, mut sync_shutdown) = tokio::sync::watch::channel(false);
+    let sync = async move {
+        wait_for_stop(&mut sync_shutdown).await;
+        Ok(())
+    };
+    let (observer_finish, observer_finished) = tokio::sync::oneshot::channel::<()>();
+    let observer = async move {
+        let _ = observer_finished.await;
+        ObserverExit {
+            exit_code: 0,
+            shutdown_event: Some(ShutdownEvent::SigTerm),
+            failures: Vec::new(),
+        }
+    };
+    let (observer_stop, observer_shutdown) =
+        tokio::sync::watch::channel::<Option<ShutdownEvent>>(None);
+    let (observer_barrier, supervisor_barrier) = shutdown_barrier();
+    drop(observer_barrier);
+    let sync_stopped = sync_stop.subscribe();
+    let supervision = tokio::spawn(supervise_observer(
+        observer,
+        sync,
+        Box::new(indicator),
+        Box::new(RecordingLock::default()),
+        SupervisionControl {
+            activity: activity_receiver,
+            sync_stop,
+            observer_stop,
+            shutdown_barrier: supervisor_barrier,
+            retention_fence: Arc::new(RetentionFence::new()),
+        },
+    ));
+
+    activity.send_replace(SyncActivity::Working);
+    tokio::time::sleep(INDICATOR_REFRESH * 3 + Duration::from_millis(1)).await;
+    failing.store(false, Ordering::SeqCst);
+    tokio::time::sleep(INDICATOR_REFRESH).await;
+    failing.store(true, Ordering::SeqCst);
+    tokio::time::sleep(INDICATOR_REFRESH * 2).await;
+
+    assert!(attempts.load(Ordering::SeqCst) >= 6);
+    assert!(!supervision.is_finished(), "supervision stopped");
+    assert_eq!(
+        *observer_shutdown.borrow(),
+        None,
+        "capture was told to stop"
+    );
+    assert!(!*sync_stopped.borrow(), "sync was told to stop");
+
+    let _ = observer_finish.send(());
+    let exit = supervision.await.expect("join supervisor");
+    assert_eq!(exit.exit_code, 0, "{:?}", exit.failures);
+    assert!(exit.failures.is_empty(), "{:?}", exit.failures);
 }
 
 #[test]
@@ -508,6 +604,53 @@ impl ShutdownIndicator for BlockingActivityIndicator {
             }
             Ok(())
         })
+    }
+
+    fn restore<'a>(
+        &'a mut self,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ObserverOperationError>> + Send + 'a>> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
+const INDICATOR_REFRESH: Duration = Duration::from_secs(5);
+
+/// An indicator whose tmux commands fail while `failing` is set.
+struct FailingIndicator {
+    failing: Arc<AtomicBool>,
+    attempts: Arc<AtomicUsize>,
+}
+
+impl FailingIndicator {
+    fn attempt(&self) -> Result<(), ObserverOperationError> {
+        self.attempts.fetch_add(1, Ordering::SeqCst);
+        if self.failing.load(Ordering::SeqCst) {
+            Err(ObserverOperationError(
+                "indicator update failed: tmux option command for @solstone exited 1: lost server"
+                    .to_owned(),
+            ))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+impl ShutdownIndicator for FailingIndicator {
+    fn set_activity<'a>(
+        &'a mut self,
+        _activity: SyncActivity,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ObserverOperationError>> + Send + 'a>> {
+        Box::pin(async move { self.attempt() })
+    }
+
+    fn refresh_interval(&self) -> Option<Duration> {
+        Some(INDICATOR_REFRESH)
+    }
+
+    fn refresh<'a>(
+        &'a mut self,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ObserverOperationError>> + Send + 'a>> {
+        Box::pin(async move { self.attempt() })
     }
 
     fn restore<'a>(

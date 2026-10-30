@@ -942,7 +942,7 @@ pub async fn delete_confirmed_segment(
                 .join(candidate.stream())
                 .join(candidate.segment());
             if cap_dir.exists() {
-                eprintln!("solstone-tmux: confirmed segment was not removed");
+                crate::stderr_log::line("confirmed segment was not removed");
             }
             false
         }
@@ -980,7 +980,7 @@ pub async fn delete_empty_segment(
                 .join(candidate.stream())
                 .join(candidate.segment());
             if cap_dir.exists() {
-                eprintln!("solstone-tmux: confirmed segment was not removed");
+                crate::stderr_log::line("confirmed segment was not removed");
             }
             false
         }
@@ -2058,10 +2058,10 @@ impl SyncScheduler {
                             }
                         }
                         Receipt::Invalid(fault) => {
-                            eprintln!(
-                                "solstone-tmux: upload was not acknowledged ({})",
+                            crate::stderr_log::line(format_args!(
+                                "upload was not acknowledged ({})",
                                 fault.as_str()
-                            );
+                            ));
                             let answer = format!("invalid:{}", fault.as_str());
                             if fault == ReceiptFault::ReceivedNotWritten {
                                 state.answer = Some(answer);
@@ -2097,8 +2097,8 @@ impl SyncScheduler {
                             }
                         }
                         Receipt::Absent => {
-                            eprintln!(
-                                "solstone-tmux: upload was not acknowledged (descriptors_absent)"
+                            crate::stderr_log::line(
+                                "upload was not acknowledged (descriptors_absent)",
                             );
                             let answer = "absent:descriptors_absent".to_owned();
                             if state.answer.as_deref() == Some(&answer) {

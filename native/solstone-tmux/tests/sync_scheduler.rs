@@ -35,7 +35,7 @@ use solstone_tmux::sync::{
     JournalIdentity, SegmentCandidate, SegmentRemovalObserver, SegmentRemovalStage, SyncActivity,
     SyncFailureClass, SyncJournal, SyncOperationError, SyncScheduler, SyncWake,
 };
-use support::TestDirectory;
+use support::{TestDirectory, child_stderr};
 use time::{Date, Month, PrimitiveDateTime, Time, UtcOffset};
 use tokio::sync::{mpsc, oneshot, watch};
 
@@ -3358,33 +3358,6 @@ fn confirmed_removal_keeps_day_stream_and_failed_or_incomplete_siblings() {
 // === Test Helpers ===
 
 const REMOVAL_FAILURE_LINE: &str = "solstone-tmux: confirmed segment was not removed";
-const STDERR_CHILD_ENV: &str = "SOLSTONE_TMUX_TEST_STDERR_CHILD";
-
-/// Runs `body` in a fresh process of this test binary, filtered to the test
-/// named `test_name`, and returns what that process wrote to stderr. Inside the
-/// child process the body runs and this returns `None`.
-fn child_stderr(test_name: &str, body: impl FnOnce()) -> Option<String> {
-    if std::env::var(STDERR_CHILD_ENV).is_ok_and(|name| name == test_name) {
-        body();
-        return None;
-    }
-    let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
-        .args([test_name, "--exact", "--nocapture", "--test-threads=1"])
-        .env(STDERR_CHILD_ENV, test_name)
-        .output()
-        .expect("run the test in a child process");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-    assert!(
-        output.status.success(),
-        "child test failed\nstdout:\n{stdout}\nstderr:\n{stderr}"
-    );
-    assert!(
-        stdout.contains("test result: ok. 1 passed"),
-        "child process did not run {test_name}:\n{stdout}"
-    );
-    Some(stderr)
-}
 
 fn test_journal_identity() -> JournalIdentity {
     JournalIdentity {
