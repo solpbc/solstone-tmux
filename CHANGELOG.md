@@ -6,6 +6,8 @@ Format adapted from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [2.0.23] - 2026-11-01
+
 ### Fixed
 
 - `solstone-tmux install-service` now restarts the service when it's already running. before, running it after an update left the old version running until you restarted the service yourself. thanks @dvanduzer for the report.
