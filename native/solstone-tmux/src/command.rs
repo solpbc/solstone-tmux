@@ -49,7 +49,8 @@ impl DisplayField {
 pub enum ServiceOperation {
     SystemdStop,
     SystemdDaemonReload,
-    SystemdEnableNow,
+    SystemdEnable,
+    SystemdRestart,
     SystemdIsActive,
     SystemdDisableNow,
     LaunchdBootout,

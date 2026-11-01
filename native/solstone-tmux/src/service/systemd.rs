@@ -85,8 +85,20 @@ pub async fn activate(runner: &dyn CommandRunner) -> Result<(), ServiceError> {
         "systemd enable",
         run(
             runner,
-            ServiceOperation::SystemdEnableNow,
-            &["--user", "enable", "--now", UNIT_NAME],
+            ServiceOperation::SystemdEnable,
+            &["--user", "enable", UNIT_NAME],
+        )
+        .await?,
+    )?;
+    // Restart rather than start: when the unit is already current and running, it may
+    // still be the executable an update has since replaced in place. A stopped unit
+    // simply starts.
+    require_success(
+        "systemd restart",
+        run(
+            runner,
+            ServiceOperation::SystemdRestart,
+            &["--user", "restart", UNIT_NAME],
         )
         .await?,
     )?;

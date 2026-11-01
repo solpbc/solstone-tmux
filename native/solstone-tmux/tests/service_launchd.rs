@@ -785,7 +785,10 @@ fn launchd_replacement_enable_failure_occurs_after_successful_stop() {
 }
 
 #[test]
-fn unchanged_running_job_is_enabled_and_rechecked_without_restart_or_rewrite() {
+fn unchanged_running_job_is_gracefully_restarted_without_rewrite() {
+    // The plist is already current, but the running job may be an executable an update
+    // replaced in place. install-service stops it the same graceful way a replacement
+    // does and starts it again, so the service runs the binary on disk now.
     let fixture = ServiceFixture::new("unchanged-running", true);
     let first = FixtureRunner::new(launchd_install_expectations(&fixture));
     fixture.controller(&first).install_blocking();
@@ -804,13 +807,17 @@ fn unchanged_running_job_is_enabled_and_rechecked_without_restart_or_rewrite() {
     let inode = fs::metadata(&artifact).expect("plist").ino();
     let state_path = fixture.config_root().join(STATE_FILENAME);
     let expected_tmux = fs::canonicalize(&fixture.tmux).expect("tmux");
-    // Both prints report the same top-level pid, which is the whole claim of this
-    // path: the already-running observer was never restarted.
     let runner = InspectingRunner {
         inner: FixtureRunner::new(vec![
             print(output(stdout_with_pid("43210"))),
-            enable(output([])),
+            disable(output([])),
             print(output(stdout_with_pid("43210"))),
+            kill(output([])),
+            print(quiescent()),
+            bootout(&fixture, output([])),
+            enable(output([])),
+            bootstrap(&fixture, output([])),
+            print(output(stdout_with_pid("98765"))),
         ]),
         inspect: Box::new(move |_| {
             assert_artifact(&artifact, &desired, inode, "unchanged running");
@@ -820,66 +827,10 @@ fn unchanged_running_job_is_enabled_and_rechecked_without_restart_or_rewrite() {
 
     fixture.controller(&runner).install_blocking();
 
-    runner.inner.assert_finished().expect("idempotent install");
-    let calls = runner.inner.calls();
-    assert_eq!(calls.len(), 3);
-    assert!(!calls.iter().any(|call| matches!(
-        call.operation,
-        CommandOperation::Service(
-            ServiceOperation::LaunchdDisable
-                | ServiceOperation::LaunchdKill
-                | ServiceOperation::LaunchdBootout
-                | ServiceOperation::LaunchdBootstrap
-        )
-    )));
-}
-
-#[test]
-fn unchanged_running_job_rejects_a_changed_pid_without_bootout_or_rewrite() {
-    let fixture = ServiceFixture::new("unchanged-running-pid-change", true);
-    write_desired_plist(&fixture);
-    let artifact = artifact_path(&fixture.home);
-    let bytes = fs::read(&artifact).expect("plist");
-    let inode = fs::metadata(&artifact).expect("plist").ino();
-    let previous_state = write_previous_state(&fixture);
-    // The job restarted underneath install-service between the two prints. Nothing in
-    // this path asked it to, so the install must fail loudly rather than report success
-    // for a process it never observed starting.
-    let runner = FixtureRunner::new(vec![
-        print(output(stdout_with_pid("43210"))),
-        enable(output([])),
-        print(output(stdout_with_pid("98765"))),
-    ]);
-
-    let error = runtime()
-        .block_on(fixture.controller(&runner).0.install())
-        .expect_err("changed pid");
-
-    assert!(matches!(&error, ServiceError::InvalidState(_)));
-    let message = error.to_string();
-    assert!(message.contains(LABEL), "{message}");
-    assert!(message.contains("43210"), "{message}");
-    assert!(message.contains("98765"), "{message}");
-    assert!(
-        message.contains("solstone-tmux install-service"),
-        "{message}"
-    );
-    runner.assert_finished().expect("changed pid calls");
-    let calls = runner.calls();
-    assert_eq!(calls.len(), 3);
-    assert!(
-        !calls.iter().any(|call| matches!(
-            call.operation,
-            CommandOperation::Service(
-                ServiceOperation::LaunchdDisable
-                    | ServiceOperation::LaunchdKill
-                    | ServiceOperation::LaunchdBootout
-                    | ServiceOperation::LaunchdBootstrap
-            )
-        )),
-        "a changed pid must not be escalated into a restart"
-    );
-    assert_preserved_after_failure(&fixture, &bytes, inode, &previous_state);
+    runner
+        .inner
+        .assert_finished()
+        .expect("restarting reinstall");
 }
 
 #[test]
@@ -1025,9 +976,9 @@ fn unchanged_absent_job_enables_and_bootstraps_without_rewrite() {
 
 #[test]
 fn unchanged_running_and_absent_enable_failures_restore_previous_state() {
-    for (label, first_print) in [
-        ("running-enable-failure", print(running())),
-        ("absent-enable-failure", print(absent())),
+    for (label, running_job) in [
+        ("running-enable-failure", true),
+        ("absent-enable-failure", false),
     ] {
         let fixture = ServiceFixture::new(label, true);
         write_desired_plist(&fixture);
@@ -1039,11 +990,22 @@ fn unchanged_running_and_absent_enable_failures_restore_previous_state() {
         let expected_tmux = fs::canonicalize(&fixture.tmux).expect("tmux");
         let inspected_artifact = artifact.clone();
         let inspected_bytes = bytes.clone();
+        // A running job is stopped gracefully first; the enable that follows fails.
+        let mut expectations = if running_job {
+            vec![
+                print(running()),
+                disable(output([])),
+                print(running()),
+                kill(output([])),
+                print(quiescent()),
+                bootout(&fixture, output([])),
+            ]
+        } else {
+            vec![print(absent())]
+        };
+        expectations.push(enable(command_output(&[], b"enable failed", 5)));
         let runner = InspectingRunner {
-            inner: FixtureRunner::new(vec![
-                first_print,
-                enable(command_output(&[], b"enable failed", 5)),
-            ]),
+            inner: FixtureRunner::new(expectations),
             inspect: Box::new(move |_| {
                 assert_artifact(
                     &inspected_artifact,
@@ -1258,26 +1220,24 @@ fn launchd_pid_classifier_rejects_zero_and_non_digit_pid_values() {
 fn launchd_pid_classifier_accepts_thirty_digit_nonzero_value() {
     let fixture = ServiceFixture::new("large-pid", true);
     write_desired_plist(&fixture);
-    // Held as a digit string end to end, so a value far past u64 classifies as running
-    // and still compares equal across the two prints without any parse.
+    // Checked as a digit string and never parsed, so a value far past u64 still
+    // classifies as running and is signalled like any other live job.
     const HUGE: &str = "123456789012345678901234567890";
     let runner = FixtureRunner::new(vec![
         print(output(stdout_with_pid(HUGE))),
+        disable(output([])),
+        print(output(stdout_with_pid(HUGE))),
+        kill(output([])),
+        print(quiescent()),
+        bootout(&fixture, output([])),
         enable(output([])),
+        bootstrap(&fixture, output([])),
         print(output(stdout_with_pid(HUGE))),
     ]);
 
     fixture.controller(&runner).install_blocking();
 
     runner.assert_finished().expect("large pid");
-    assert!(!runner.calls().iter().any(|call| matches!(
-        call.operation,
-        CommandOperation::Service(
-            ServiceOperation::LaunchdBootout
-                | ServiceOperation::LaunchdBootstrap
-                | ServiceOperation::LaunchdKill
-        )
-    )));
 }
 
 #[test]

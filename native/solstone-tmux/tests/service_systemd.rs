@@ -65,8 +65,13 @@ fn systemd_install_and_uninstall_argv_are_exact() {
             output([]),
         ),
         expected(
-            ServiceOperation::SystemdEnableNow,
-            &["--user", "enable", "--now", UNIT_NAME],
+            ServiceOperation::SystemdEnable,
+            &["--user", "enable", UNIT_NAME],
+            output([]),
+        ),
+        expected(
+            ServiceOperation::SystemdRestart,
+            &["--user", "restart", UNIT_NAME],
             output([]),
         ),
         expected(
@@ -201,8 +206,8 @@ fn failed_install_leaves_no_new_persisted_state() {
             output([]),
         ),
         expected(
-            ServiceOperation::SystemdEnableNow,
-            &["--user", "enable", "--now", UNIT_NAME],
+            ServiceOperation::SystemdEnable,
+            &["--user", "enable", UNIT_NAME],
             command_output(&[], b"enable failed", 1),
         ),
     ]);
@@ -278,7 +283,7 @@ fn systemd_replacement_stops_before_atomic_write() {
 }
 
 #[test]
-fn install_is_idempotent() {
+fn reinstall_with_a_current_unit_restarts_it() {
     let fixture = ServiceFixture::new("systemd-idempotent");
     let first = FixtureRunner::new(systemd_install_expectations());
     fixture.controller(&first).install_blocking();
@@ -286,8 +291,13 @@ fn install_is_idempotent() {
 
     let second = FixtureRunner::new([
         expected(
-            ServiceOperation::SystemdEnableNow,
-            &["--user", "enable", "--now", UNIT_NAME],
+            ServiceOperation::SystemdEnable,
+            &["--user", "enable", UNIT_NAME],
+            output([]),
+        ),
+        expected(
+            ServiceOperation::SystemdRestart,
+            &["--user", "restart", UNIT_NAME],
             output([]),
         ),
         expected(
@@ -300,7 +310,7 @@ fn install_is_idempotent() {
     second.assert_finished().expect("idempotent install");
 }
 
-fn systemd_install_expectations() -> [ExpectedInvocation; 4] {
+fn systemd_install_expectations() -> [ExpectedInvocation; 5] {
     [
         expected(
             ServiceOperation::SystemdStop,
@@ -313,8 +323,13 @@ fn systemd_install_expectations() -> [ExpectedInvocation; 4] {
             output([]),
         ),
         expected(
-            ServiceOperation::SystemdEnableNow,
-            &["--user", "enable", "--now", UNIT_NAME],
+            ServiceOperation::SystemdEnable,
+            &["--user", "enable", UNIT_NAME],
+            output([]),
+        ),
+        expected(
+            ServiceOperation::SystemdRestart,
+            &["--user", "restart", UNIT_NAME],
             output([]),
         ),
         expected(

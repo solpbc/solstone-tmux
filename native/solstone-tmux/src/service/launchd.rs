@@ -20,7 +20,7 @@ const QUIESCENCE_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum JobState {
-    Running(String),
+    Running,
     Quiescent,
     Absent,
 }
@@ -133,33 +133,24 @@ pub async fn activate(
     user_id: u32,
     prepared: PreparedInstall,
 ) -> Result<(), ServiceError> {
-    let mut running_pid = None;
-    if prepared.bootstrap {
-        bootstrap(runner, user_id, &prepared.path).await?;
-    } else {
+    if !prepared.bootstrap {
+        // The plist is already current, but a running job may still be the executable an
+        // update has since replaced in place. Stop whatever is loaded and start it again,
+        // so the service always runs the binary on disk when install-service returns.
         let output = print(runner, user_id).await?;
         match classify_print(&output, user_id, "launchd loaded check")? {
-            // The plist on disk is already current and the job is already running, so
-            // nothing here may restart it: `enable` only clears a lingering disabled
-            // flag. Carrying the pid forward turns that into a checked claim — the final
-            // print must observe the very same process.
-            JobState::Running(pid) => {
-                enable(runner, user_id).await?;
-                running_pid = Some(pid);
+            JobState::Running => {
+                graceful_stop(runner, user_id, &prepared.path, "install-service").await?;
             }
             state @ JobState::Quiescent => {
                 unload(runner, user_id, &prepared.path, state, "install-service").await?;
-                enable(runner, user_id).await?;
-                bootstrap(runner, user_id, &prepared.path).await?;
             }
-            JobState::Absent => {
-                enable(runner, user_id).await?;
-                bootstrap(runner, user_id, &prepared.path).await?;
-            }
+            JobState::Absent => {}
         }
+        enable(runner, user_id).await?;
     }
-
-    verify_loaded(runner, user_id, running_pid.as_deref()).await
+    bootstrap(runner, user_id, &prepared.path).await?;
+    verify_loaded(runner, user_id).await
 }
 
 pub async fn uninstall(
@@ -230,7 +221,7 @@ async fn unload(
     mut state: JobState,
     retry_command: &'static str,
 ) -> Result<(), ServiceError> {
-    if matches!(state, JobState::Running(_)) {
+    if state == JobState::Running {
         let output = kill(runner, user_id).await?;
         if output.status != 0 && !reports_missing_service(&output, user_id) {
             return Err(manager_error("launchd kill", &output));
@@ -244,7 +235,7 @@ async fn unload(
             next_poll += QUIESCENCE_POLL_INTERVAL;
             let output = print(runner, user_id).await?;
             state = classify_print(&output, user_id, "launchd quiescence check")?;
-            if !matches!(state, JobState::Running(_)) {
+            if state != JobState::Running {
                 break;
             }
             if tokio::time::Instant::now() >= deadline {
@@ -274,9 +265,10 @@ fn classify_print(
     action: &'static str,
 ) -> Result<JobState, ServiceError> {
     if output.status == 0 {
-        Ok(match top_level_pid(&output.stdout) {
-            Some(pid) => JobState::Running(pid),
-            None => JobState::Quiescent,
+        Ok(if has_top_level_pid(&output.stdout) {
+            JobState::Running
+        } else {
+            JobState::Quiescent
         })
     } else if reports_missing_service(output, user_id) {
         Ok(JobState::Absent)
@@ -285,7 +277,7 @@ fn classify_print(
     }
 }
 
-/// Extracts the job's own pid from `launchctl print` stdout.
+/// Reports whether `launchctl print` stdout carries the job's own live pid.
 ///
 /// `launchctl print` renders one root block for the service target, so every field the
 /// job itself owns sits at exactly one tab of indentation. Nested blocks such as
@@ -294,23 +286,22 @@ fn classify_print(
 /// this an extractor rather than a scan: a deeper `pid = 777` is another dictionary's
 /// field, not this job's.
 ///
-/// The pid stays a digit string. It is only ever compared for equality, never used as a
-/// number, so there is no parse and therefore no overflow case for an absurdly long
-/// digit run.
-fn top_level_pid(stdout: &[u8]) -> Option<String> {
-    String::from_utf8_lossy(stdout).lines().find_map(|line| {
-        let field = line.strip_prefix('\t')?;
+/// The pid is checked as a digit string and never parsed, so there is no overflow case
+/// for an absurdly long digit run.
+fn has_top_level_pid(stdout: &[u8]) -> bool {
+    String::from_utf8_lossy(stdout).lines().any(|line| {
+        let Some(field) = line.strip_prefix('\t') else {
+            return false;
+        };
         if field.starts_with(char::is_whitespace) {
-            return None;
+            return false;
         }
-        let (key, value) = field.split_once(" = ")?;
-        if key != "pid" || !value.bytes().all(|byte| byte.is_ascii_digit()) {
-            return None;
-        }
-        value
-            .bytes()
-            .any(|byte| byte != b'0')
-            .then(|| value.to_owned())
+        let Some((key, value)) = field.split_once(" = ") else {
+            return false;
+        };
+        key == "pid"
+            && value.bytes().all(|byte| byte.is_ascii_digit())
+            && value.bytes().any(|byte| byte != b'0')
     })
 }
 
@@ -325,32 +316,19 @@ fn reports_missing_service(output: &CommandOutput, user_id: u32) -> bool {
         .any(|line| line == expected.as_bytes())
 }
 
-/// Confirms the job is loaded with a live pid, and — when the install left an already
-/// running job untouched — that it is still the same pid `expected_pid` carries.
-async fn verify_loaded(
-    runner: &dyn CommandRunner,
-    user_id: u32,
-    expected_pid: Option<&str>,
-) -> Result<(), ServiceError> {
+/// Confirms the job is loaded with a live pid.
+async fn verify_loaded(runner: &dyn CommandRunner, user_id: u32) -> Result<(), ServiceError> {
     let output = print(runner, user_id).await?;
     if output.status != 0 {
         return Err(manager_error("launchd loaded check", &output));
     }
-    let Some(pid) = top_level_pid(&output.stdout) else {
+    if !has_top_level_pid(&output.stdout) {
         return Err(ServiceError::InvalidState(format!(
             "{LABEL} is loaded but does not report a live pid; rerun \
 solstone-tmux install-service"
         )));
-    };
-    match expected_pid {
-        Some(expected) if pid != expected => Err(ServiceError::InvalidState(format!(
-            "{LABEL} was running as pid {expected} and its plist was already current, so \
-install-service left it alone, but it now reports pid {pid}; the job restarted on its own \
-and this install did not observe what it started. Rerun solstone-tmux \
-install-service"
-        ))),
-        _ => Ok(()),
     }
+    Ok(())
 }
 
 async fn bootout(

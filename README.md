@@ -38,6 +38,8 @@ solstone-tmux status
 not complete until you confirm your journal's mark, either interactively or
 with `--mark "word word"`. If needed, `confirm` can verify the mark later.
 `install-service` activates the current user's systemd or launchd service.
+After installing an update, run `install-service` again so the service restarts
+on the new version.
 
 ## Commands
 
@@ -48,7 +50,7 @@ with `--mark "word word"`. If needed, `confirm` can verify the mark later.
 | `solstone-tmux confirm` | Confirm a paired journal's mark, or pass `--mark "word word"` when there is no terminal |
 | `solstone-tmux status` | Report service and sync health |
 | `solstone-tmux about` | Print your app and journal versions, with the operating system and architecture of each when known |
-| `solstone-tmux install-service` | Install and activate the user service |
+| `solstone-tmux install-service` | Install and activate the user service, restarting it if it is running |
 | `solstone-tmux uninstall-service` | Remove the owned user service |
 | `solstone-tmux --help` | Show command usage |
 | `solstone-tmux --version` | Show version and source identity |

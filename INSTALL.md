@@ -170,6 +170,20 @@ To run without activating a service:
 solstone-tmux run
 ```
 
+## Update
+
+Install the new release the same way as the first one, then run
+`install-service` again:
+
+```sh
+solstone-tmux install-service
+solstone-tmux status
+```
+
+Installing a new release replaces the program on disk but leaves the running
+service on the old version. `install-service` restarts the service, so it runs
+the new version.
+
 ## Status indicator
 
 By default, solstone-tmux owns a small tmux status indicator while it runs:
