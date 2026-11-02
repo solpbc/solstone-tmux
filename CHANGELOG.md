@@ -6,6 +6,8 @@ Format adapted from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [2.0.24] - 2026-11-02
+
 ### Added
 
 - you can now have solstone-tmux take in a tmux session while nobody is using it, such as one where an agent works on its own, so it goes into your journal too. list the session's name in `config.json`, for example `"output_sessions": ["agent-*"]`, and restart the service. a listed session is then taken in whenever output changes in its current window. anything that appears while nobody is using it is saved without the cursor, so your journal doesn't read it as something you typed. sessions you don't list work as before. thanks @dvanduzer for the idea.
