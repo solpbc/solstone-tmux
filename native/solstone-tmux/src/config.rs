@@ -30,6 +30,7 @@ pub struct RuntimeConfig {
     pub working_directory: bool,
     pub executable: bool,
     pub source: String,
+    pub output_sessions: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -45,6 +46,8 @@ pub(crate) struct ConfigFile {
     executable: bool,
     #[serde(default, skip_serializing_if = "OptionalJson::is_absent")]
     source: OptionalJson,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    output_sessions: Vec<String>,
 }
 
 #[derive(Debug, Default)]
@@ -93,6 +96,7 @@ impl Default for ConfigFile {
             working_directory: true,
             executable: true,
             source: OptionalJson::Absent,
+            output_sessions: Vec::new(),
         }
     }
 }
@@ -159,6 +163,9 @@ impl RuntimeConfig {
                 })
             })?;
         let source = configured_source(&file.source)?;
+        if file.output_sessions.iter().any(String::is_empty) {
+            return Err(ConfigError::InvalidOutputSessions);
+        }
 
         Ok(Self {
             stream,
@@ -170,6 +177,7 @@ impl RuntimeConfig {
             working_directory: file.working_directory,
             executable: file.executable,
             source,
+            output_sessions: file.output_sessions.clone(),
         })
     }
 }
@@ -269,6 +277,7 @@ pub enum ConfigError {
         field: &'static str,
     },
     InvalidSource,
+    InvalidOutputSessions,
     InvalidHostname(String),
     Io {
         operation: &'static str,
@@ -301,6 +310,10 @@ impl fmt::Display for ConfigError {
             Self::InvalidSource => write!(
                 formatter,
                 "native config source must be a nonempty string matching [a-z0-9][a-z0-9_-]* and at most 64 bytes; update source in config.json"
+            ),
+            Self::InvalidOutputSessions => write!(
+                formatter,
+                "native config output_sessions must list nonempty session names or patterns; update output_sessions in config.json"
             ),
             Self::InvalidHostname(detail) => write!(
                 formatter,

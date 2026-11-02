@@ -268,7 +268,8 @@ fn run_native(
             config.executable,
             Arc::new(SystemLookup),
         )
-        .map_err(|error| error.to_string())?,
+        .map_err(|error| error.to_string())?
+        .with_output_sessions(config.output_sessions.clone()),
     );
 
     for record in recover_capture_streams(&instance_lock, &data_root, config.segment_interval)

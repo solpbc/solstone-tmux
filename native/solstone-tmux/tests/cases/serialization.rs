@@ -89,3 +89,20 @@ fn activity_availability_row_has_only_its_closed_key_set() {
     assert!(bytes.ends_with(b"\n"));
     assert!(!bytes[..bytes.len() - 1].contains(&b'\n'));
 }
+
+#[test]
+fn output_only_frames_leave_the_cursor_out() {
+    let mut capture = golden_capture("agent");
+    capture.output_only = true;
+    let frame = serialize_frame(&capture, 1, 0.25).expect("serialize frame");
+    let frame: serde_json::Value = serde_json::from_slice(&frame).expect("frame json");
+    let panes = frame["content"]["tmux"]["panes"].as_array().expect("panes");
+    assert!(!panes.is_empty());
+    for pane in panes {
+        for key in ["cursor_x", "cursor_y", "cursor_visible"] {
+            assert!(pane.get(key).is_none(), "{key} must be left out");
+        }
+        assert!(pane.get("alternate_on").is_some());
+        assert!(pane.get("pane_in_mode").is_some());
+    }
+}

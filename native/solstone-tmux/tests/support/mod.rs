@@ -368,6 +368,7 @@ pub fn golden_capture(session: &str) -> CaptureResult {
                 content: "right pane\n".to_owned(),
             },
         ],
+        output_only: false,
     }
 }
 

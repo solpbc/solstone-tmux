@@ -8,7 +8,7 @@ solstone.
 solstone-tmux adds the owner's tmux terminal to their journal. Each poll
 interval (five seconds by default), it reads the current window of each tmux
 session that had keyboard or mouse input within that interval; pane output alone
-does not count. It accumulates what it reads into local segments and syncs
+does not count, except for sessions the owner lists in `output_sessions`. It accumulates what it reads into local segments and syncs
 completed segments to the paired journal. Local observation continues while
 pairing or sync is unavailable, and incomplete segments recover after a restart.
 
@@ -285,9 +285,17 @@ Native `config.json` accepts:
   "pane_title": true,
   "working_directory": true,
   "executable": true,
-  "source": "tmux"
+  "source": "tmux",
+  "output_sessions": ["agent-*"]
 }
 ```
+
+`output_sessions` defaults to empty. Each entry is a nonempty session name in
+which `*` matches any run of characters. A listed session whose current window's
+`window_activity` falls within the poll interval is read even with no client
+input; such a frame leaves out `cursor_x`, `cursor_y` and `cursor_visible`, so
+the journal reads no typed input from it. A listed session that also had input
+is read as usual.
 
 `executable`, `pane_title` and `working_directory` default to true; an explicit
 false remains false. Each setting queries only its own

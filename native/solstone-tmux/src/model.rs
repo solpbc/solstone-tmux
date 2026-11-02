@@ -38,6 +38,9 @@ pub struct CaptureResult {
     pub window: WindowInfo,
     pub windows: Vec<WindowInfo>,
     pub panes: Vec<PaneInfo>,
+    /// Taken in because the session's output changed while nobody used it.
+    /// Its frames carry no cursor, so nothing on screen reads as typed.
+    pub output_only: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

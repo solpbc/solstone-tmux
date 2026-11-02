@@ -64,6 +64,13 @@ on the new version.
   mode is on. Output on its own doesn't count, so a command that keeps running
   while nobody types, or a quiet stretch away from the keyboard, isn't taken in.
   Five minutes with nothing taken in leaves no segment.
+- To also take in a session while nobody is using it, such as one where an
+  agent works on its own, list its name in `config.json`:
+  `"output_sessions": ["agent-*"]`. A `*` matches any run of characters. A
+  listed session is then taken in whenever output changes in its current
+  window. Anything that appears while nobody is using it is saved without the
+  cursor, so your journal doesn't read it as something you typed. Restart the
+  service after changing this setting.
 - Segments wait under `~/.local/share/solstone-tmux/captures/`, and incomplete
   work is recovered after a restart.
 - Syncs one segment at a time, and local data is released only after the journal

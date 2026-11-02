@@ -18,6 +18,7 @@ pub enum CommandOperation {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TmuxOperation {
     ListClients,
+    ListSessions,
     ListWindows(String),
     ListPanes(String),
     CapturePane(String),

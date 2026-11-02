@@ -17,7 +17,9 @@ use solstone_tmux::command::{
     CommandInvocation, CommandOperation, CommandRunner, DisplayField, TmuxOperation,
 };
 use solstone_tmux::foreground::{ExeFailure, ForegroundLookup};
-use solstone_tmux::tmux::{TMUX_TIMEOUT, TmuxAdapter, TmuxError, reports_no_server};
+use solstone_tmux::tmux::{
+    TMUX_TIMEOUT, TmuxAdapter, TmuxError, matches_session_pattern, reports_no_server,
+};
 use support::{
     ExpectedInvocation, FixtureOutcome, FixtureRunner, RecordingWarnings, command_output, nonzero,
     output,
@@ -1016,4 +1018,84 @@ async fn malformed_capture_columns_fail_the_session_instead_of_inventing_values(
         ));
         runner.assert_finished().unwrap();
     }
+}
+
+fn sessions_invocation() -> CommandInvocation {
+    invocation(
+        TmuxOperation::ListSessions,
+        &["list-sessions", "-F", "#{session_name} #{window_activity}"],
+    )
+}
+
+#[tokio::test]
+async fn opted_in_session_with_new_output_is_taken_in_without_input() {
+    let runner = FixtureRunner::new(
+        [
+            ExpectedInvocation {
+                invocation: clients_invocation(),
+                outcome: output(Vec::new()),
+            },
+            ExpectedInvocation {
+                invocation: sessions_invocation(),
+                outcome: output(b"agent-1 98\nagent-2 50\nmain 99\n".to_vec()),
+            },
+        ]
+        .into_iter()
+        .chain(successful_session("agent-1", b"working\n".to_vec())),
+    );
+    let adapter = TmuxAdapter::new(PathBuf::from(TMUX), runner.clone())
+        .expect("adapter")
+        .with_output_sessions(vec!["agent-*".to_owned()]);
+
+    let poll = adapter
+        .poll_context(wall_now(100), Duration::from_secs(5))
+        .await
+        .expect("poll");
+
+    assert_eq!(poll.captures.len(), 1);
+    assert_eq!(poll.captures[0].session, "agent-1");
+    assert!(poll.captures[0].output_only);
+    runner.assert_finished().expect("all fixture calls used");
+}
+
+#[tokio::test]
+async fn an_opted_in_session_in_use_is_read_as_typed() {
+    let runner = FixtureRunner::new(
+        [
+            ExpectedInvocation {
+                invocation: clients_invocation(),
+                outcome: output(b"agent-1 99\n".to_vec()),
+            },
+            ExpectedInvocation {
+                invocation: sessions_invocation(),
+                outcome: output(b"agent-1 99\n".to_vec()),
+            },
+        ]
+        .into_iter()
+        .chain(successful_session("agent-1", b"working\n".to_vec())),
+    );
+    let adapter = TmuxAdapter::new(PathBuf::from(TMUX), runner.clone())
+        .expect("adapter")
+        .with_output_sessions(vec!["agent-*".to_owned()]);
+
+    let poll = adapter
+        .poll_context(wall_now(100), Duration::from_secs(5))
+        .await
+        .expect("poll");
+
+    assert_eq!(poll.captures.len(), 1);
+    assert!(!poll.captures[0].output_only);
+    runner.assert_finished().expect("all fixture calls used");
+}
+
+#[test]
+fn session_patterns_match_names_and_stars() {
+    assert!(matches_session_pattern("build", "build"));
+    assert!(!matches_session_pattern("build", "build-2"));
+    assert!(matches_session_pattern("agent-*", "agent-"));
+    assert!(matches_session_pattern("agent-*", "agent-claude"));
+    assert!(!matches_session_pattern("agent-*", "my-agent-1"));
+    assert!(matches_session_pattern("*", "anything"));
+    assert!(matches_session_pattern("*-bot-*", "a-bot-b"));
+    assert!(!matches_session_pattern("a*a", "a"));
 }

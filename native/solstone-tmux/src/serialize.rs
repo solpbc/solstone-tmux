@@ -145,16 +145,21 @@ struct Pane<'a> {
     width: u32,
     height: u32,
     active: bool,
-    cursor_x: u32,
-    cursor_y: u32,
-    cursor_visible: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cursor_x: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cursor_y: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cursor_visible: Option<bool>,
     alternate_on: bool,
     pane_in_mode: bool,
     content: &'a str,
 }
 
-impl<'a> From<&'a PaneInfo> for Pane<'a> {
-    fn from(pane: &'a PaneInfo) -> Self {
+impl<'a> Pane<'a> {
+    // An output-only frame leaves the cursor out: the journal reads typed
+    // input from the cursor, and nobody typed.
+    fn new(pane: &'a PaneInfo, with_cursor: bool) -> Self {
         Self {
             id: &pane.id,
             index: pane.index,
@@ -163,9 +168,9 @@ impl<'a> From<&'a PaneInfo> for Pane<'a> {
             width: pane.width,
             height: pane.height,
             active: pane.active,
-            cursor_x: pane.cursor_x,
-            cursor_y: pane.cursor_y,
-            cursor_visible: pane.cursor_visible,
+            cursor_x: with_cursor.then_some(pane.cursor_x),
+            cursor_y: with_cursor.then_some(pane.cursor_y),
+            cursor_visible: with_cursor.then_some(pane.cursor_visible),
             alternate_on: pane.alternate_on,
             pane_in_mode: pane.pane_in_mode,
             content: &pane.content,
@@ -209,7 +214,11 @@ pub fn serialize_frame(
                     name: &result.window.name,
                 },
                 windows: result.windows.iter().map(Window::from).collect(),
-                panes: result.panes.iter().map(Pane::from).collect(),
+                panes: result
+                    .panes
+                    .iter()
+                    .map(|pane| Pane::new(pane, !result.output_only))
+                    .collect(),
             },
         },
     };

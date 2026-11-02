@@ -25,6 +25,7 @@ fn missing_config_uses_hostname_defaults() {
     assert!(config.working_directory);
     assert!(config.executable);
     assert_eq!(config.source, DEFAULT_SOURCE);
+    assert!(config.output_sessions.is_empty());
 }
 
 #[test]
@@ -252,4 +253,22 @@ fn config_pane_context_switches_preserve_explicit_false_and_enable_independently
             "{enabled} is independent"
         );
     }
+}
+
+#[test]
+fn output_sessions_are_read_and_empty_names_are_rejected() {
+    let temporary = TestDirectory::new("config-output-sessions");
+    let path = temporary.path().join(CONFIG_FILENAME);
+    fs::write(&path, br#"{"output_sessions":["agent-*","build"]}"#).expect("write output sessions");
+    let config = RuntimeConfig::load(temporary.path(), "ignored").expect("load output sessions");
+    assert_eq!(config.output_sessions, ["agent-*", "build"]);
+
+    fs::write(&path, br#"{"output_sessions":["agent-*",""]}"#).expect("write empty name");
+    let error = RuntimeConfig::load(temporary.path(), "ignored").expect_err("empty name");
+    assert!(matches!(error, ConfigError::InvalidOutputSessions));
+    assert!(
+        error
+            .to_string()
+            .contains("update output_sessions in config.json")
+    );
 }

@@ -108,6 +108,7 @@ pub struct TmuxAdapter<R, W = StderrWarnings> {
     working_directory: bool,
     executable_enabled: bool,
     lookup: Arc<dyn ForegroundLookup>,
+    output_sessions: Vec<String>,
 }
 
 impl<R> TmuxAdapter<R, StderrWarnings>
@@ -136,6 +137,7 @@ where
             working_directory: false,
             executable_enabled: false,
             lookup: Arc::new(SystemLookup),
+            output_sessions: Vec::new(),
         })
     }
 
@@ -159,7 +161,16 @@ where
             working_directory,
             executable_enabled,
             lookup,
+            output_sessions: Vec::new(),
         })
+    }
+
+    /// Sessions whose names match one of these patterns are also taken in
+    /// when their output changes and nobody is using them. `*` matches any run
+    /// of characters; everything else matches itself.
+    pub fn with_output_sessions(mut self, patterns: Vec<String>) -> Self {
+        self.output_sessions = patterns;
+        self
     }
 
     pub async fn poll_context(
@@ -170,30 +181,40 @@ where
         let clients = self
             .list_active_clients(wall_now.unix_timestamp(), capture_interval)
             .await?;
+        let mut sessions = clients
+            .into_iter()
+            .map(|client| (client.session, false))
+            .collect::<Vec<_>>();
+        for session in self
+            .list_output_sessions(wall_now.unix_timestamp(), capture_interval)
+            .await?
+        {
+            if !sessions.iter().any(|(listed, _)| *listed == session) {
+                sessions.push((session, true));
+            }
+        }
         let mut captures = Vec::new();
         let mut activity_jsonl = Vec::new();
         let mut any_failure = false;
         let mut any_unavailable = false;
         let ts = (wall_now.unix_timestamp_nanos() / 1_000_000) as i64;
 
-        for client in clients {
-            if let Err(error) = derive_component(&client.session) {
+        for (session, output_only) in sessions {
+            if let Err(error) = derive_component(&session) {
                 self.warnings.warn(&format!(
-                    "session {:?} was skipped before observation: {error}",
-                    client.session
+                    "session {session:?} was skipped before observation: {error}"
                 ));
                 continue;
             }
-            let capture = match self.capture_session(&client.session).await {
+            let mut capture = match self.capture_session(&session).await {
                 Ok(capture) => capture,
                 Err(error) => {
-                    self.warnings.warn(&format!(
-                        "session {:?} observation failed: {error}",
-                        client.session
-                    ));
+                    self.warnings
+                        .warn(&format!("session {session:?} observation failed: {error}"));
                     continue;
                 }
             };
+            capture.output_only = output_only;
             if self.pane_title || self.working_directory || self.executable_enabled {
                 for pane in &capture.panes {
                     let mut pane_title = None;
@@ -378,6 +399,59 @@ where
             .collect())
     }
 
+    /// Opted-in sessions whose current window wrote output within the poll
+    /// interval. tmux moves `window_activity` on output, not on input.
+    pub async fn list_output_sessions(
+        &self,
+        now_unix_seconds: i64,
+        poll_interval: Duration,
+    ) -> Result<Vec<String>, TmuxError> {
+        if self.output_sessions.is_empty() {
+            return Ok(Vec::new());
+        }
+        let operation = TmuxOperation::ListSessions;
+        let output = match self
+            .run(
+                operation.clone(),
+                [
+                    OsString::from("list-sessions"),
+                    OsString::from("-F"),
+                    OsString::from("#{session_name} #{window_activity}"),
+                ],
+            )
+            .await
+        {
+            Ok(output) => output,
+            Err(TmuxError::NoServer { .. }) => return Ok(Vec::new()),
+            Err(error) => return Err(error),
+        };
+        let stdout = String::from_utf8(output.stdout)
+            .map_err(|source| TmuxError::InvalidUtf8 { operation, source })?;
+        let maximum_age = i128::from(poll_interval.as_secs());
+        let mut sessions = Vec::new();
+        for row in stdout.lines() {
+            let Some((session, activity)) = row.rsplit_once(' ') else {
+                self.warn_session_row(row, "missing activity separator");
+                continue;
+            };
+            let Ok(activity) = activity.parse::<i64>() else {
+                self.warn_session_row(row, "activity is not an integer");
+                continue;
+            };
+            if session.is_empty()
+                || i128::from(now_unix_seconds) - i128::from(activity) > maximum_age
+                || !self
+                    .output_sessions
+                    .iter()
+                    .any(|pattern| matches_session_pattern(pattern, session))
+            {
+                continue;
+            }
+            sessions.push(session.to_owned());
+        }
+        Ok(sessions)
+    }
+
     pub async fn capture_session(&self, session: &str) -> Result<CaptureResult, TmuxError> {
         let windows = self.list_windows(session).await?;
         let active_window = windows
@@ -394,6 +468,7 @@ where
             window: active_window,
             windows,
             panes,
+            output_only: false,
         })
     }
 
@@ -513,6 +588,33 @@ where
             "dropping malformed list-clients row {row:?}: {reason}"
         ));
     }
+
+    fn warn_session_row(&self, row: &str, reason: &str) {
+        self.warnings.warn(&format!(
+            "dropping malformed list-sessions row {row:?}: {reason}"
+        ));
+    }
+}
+
+/// Whether a session name matches an `output_sessions` pattern, where `*`
+/// matches any run of characters, including none.
+pub fn matches_session_pattern(pattern: &str, session: &str) -> bool {
+    let mut parts = pattern.split('*');
+    let first = parts.next().unwrap_or_default();
+    let Some(mut rest) = session.strip_prefix(first) else {
+        return false;
+    };
+    let parts = parts.collect::<Vec<_>>();
+    let Some((last, middle)) = parts.split_last() else {
+        return rest.is_empty();
+    };
+    for part in middle {
+        match rest.find(part) {
+            Some(index) => rest = &rest[index + part.len()..],
+            None => return false,
+        }
+    }
+    rest.len() >= last.len() && rest.ends_with(last)
 }
 
 /// Whether a failed tmux command reports that no server is listening on its
