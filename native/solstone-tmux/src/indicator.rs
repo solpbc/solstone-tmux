@@ -14,10 +14,15 @@ use crate::command::{
 use crate::tmux::{TMUX_TIMEOUT, reports_no_server};
 
 pub const STATUS_LEFT: &str = "status-left";
+pub const STATUS_LEFT_LENGTH: &str = "status-left-length";
 pub const SOLSTONE_OPTION: &str = "@solstone";
 pub const OBSERVING_VALUE: &str = "observing";
 pub const SYNCING_VALUE: &str = "syncing";
 const INDICATOR_PREFIX: &str = "#{?@solstone,#{?#{==:#{@solstone},syncing},#[fg=yellow]☼#[default],#[fg=colour245]☼#[default]},}";
+/// Columns the indicator takes on screen. `status-left-length` grows by this
+/// much while the indicator is installed, so it takes no room from the
+/// owner's own `status-left`.
+const INDICATOR_WIDTH: u32 = 1;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum OptionValue {
@@ -195,11 +200,45 @@ pub struct IndicatorOwnership<I> {
     written_status_left: String,
     written_solstone: String,
     solstone_owned: bool,
+    length: Option<LengthOwnership>,
+}
+
+/// The `status-left-length` before the indicator widened it, and the value
+/// written. Absent when tmux reported a length that is not a number.
+#[derive(Clone, Debug)]
+struct LengthOwnership {
+    original: String,
+    written: String,
+}
+
+impl LengthOwnership {
+    /// `already_widened` is set when `status-left` still carried an indicator
+    /// left by a run that did not exit cleanly, whose widening is still in
+    /// place.
+    fn from_current(current: &OptionValue, already_widened: bool) -> Option<Self> {
+        let OptionValue::Present(value) = current else {
+            return None;
+        };
+        let current: u32 = value.trim().parse().ok()?;
+        let original = if already_widened {
+            current.saturating_sub(INDICATOR_WIDTH)
+        } else {
+            current
+        };
+        Some(Self {
+            original: original.to_string(),
+            written: original.saturating_add(INDICATOR_WIDTH).to_string(),
+        })
+    }
 }
 
 impl<I: IndicatorIo> IndicatorOwnership<I> {
     pub async fn install_default(io: I) -> Result<Self, IndicatorError> {
-        let original_status_left = normalize_status_left(io.read(STATUS_LEFT).await?);
+        let current_status_left = io.read(STATUS_LEFT).await?;
+        let original_status_left = normalize_status_left(current_status_left.clone());
+        let already_widened = original_status_left != current_status_left;
+        let length =
+            LengthOwnership::from_current(&io.read(STATUS_LEFT_LENGTH).await?, already_widened);
         let original_solstone = normalize_solstone(io.read(SOLSTONE_OPTION).await?);
         let status_left = match &original_status_left {
             OptionValue::Absent => INDICATOR_PREFIX.to_owned(),
@@ -211,6 +250,7 @@ impl<I: IndicatorIo> IndicatorOwnership<I> {
             original_solstone,
             status_left,
             OBSERVING_VALUE.to_owned(),
+            length,
         )
         .await
     }
@@ -228,6 +268,7 @@ impl<I: IndicatorIo> IndicatorOwnership<I> {
             original_solstone,
             written_status_left,
             written_solstone,
+            None,
         )
         .await
     }
@@ -238,16 +279,33 @@ impl<I: IndicatorIo> IndicatorOwnership<I> {
         original_solstone: OptionValue,
         written_status_left: String,
         written_solstone: String,
+        length: Option<LengthOwnership>,
     ) -> Result<Self, IndicatorError> {
         io.write(STATUS_LEFT, &written_status_left).await?;
-        if let Err(error) = io.write(SOLSTONE_OPTION, &written_solstone).await {
+        let mut written = vec![(STATUS_LEFT, original_status_left.clone())];
+        let mut result = Ok(());
+        if let Some(length) = &length {
+            result = io.write(STATUS_LEFT_LENGTH, &length.written).await;
+            if result.is_ok() {
+                written.push((
+                    STATUS_LEFT_LENGTH,
+                    OptionValue::Present(length.original.clone()),
+                ));
+            }
+        }
+        if result.is_ok() {
+            result = io.write(SOLSTONE_OPTION, &written_solstone).await;
+        }
+        if let Err(error) = result {
             if matches!(error, IndicatorError::NoServer) {
                 return Err(error);
             }
-            if let Err(rollback) = restore_value(&io, STATUS_LEFT, &original_status_left).await {
-                return Err(IndicatorError::Protocol(format!(
-                    "{error}; status-left rollback also failed: {rollback}"
-                )));
+            for (name, original) in written.iter().rev() {
+                if let Err(rollback) = restore_value(&io, name, original).await {
+                    return Err(IndicatorError::Protocol(format!(
+                        "{error}; {name} rollback also failed: {rollback}"
+                    )));
+                }
             }
             return Err(error);
         }
@@ -258,6 +316,7 @@ impl<I: IndicatorIo> IndicatorOwnership<I> {
             written_status_left,
             written_solstone,
             solstone_owned: true,
+            length,
         })
     }
 
@@ -293,6 +352,17 @@ impl<I: IndicatorIo> IndicatorOwnership<I> {
             }
             Ok(_) => {}
             Err(error) => failures.push(format!("{STATUS_LEFT} read: {error}")),
+        }
+        if let Some(length) = &self.length {
+            match self.io.read(STATUS_LEFT_LENGTH).await {
+                Ok(current) if current == OptionValue::Present(length.written.clone()) => {
+                    if let Err(error) = self.io.write(STATUS_LEFT_LENGTH, &length.original).await {
+                        failures.push(format!("{STATUS_LEFT_LENGTH}: {error}"));
+                    }
+                }
+                Ok(_) | Err(IndicatorError::NoServer) => {}
+                Err(error) => failures.push(format!("{STATUS_LEFT_LENGTH} read: {error}")),
+            }
         }
         if self.solstone_owned {
             match self.io.read(SOLSTONE_OPTION).await {

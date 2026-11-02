@@ -15,7 +15,7 @@ use std::time::Duration;
 use solstone_tmux::command::{CommandInvocation, CommandOperation, TmuxOperation};
 use solstone_tmux::indicator::{
     CommandIndicatorIo, IndicatorError, IndicatorIo, IndicatorOwnership, OBSERVING_VALUE,
-    OptionValue, SOLSTONE_OPTION, STATUS_LEFT, SYNCING_VALUE, ServerIndicator,
+    OptionValue, SOLSTONE_OPTION, STATUS_LEFT, STATUS_LEFT_LENGTH, SYNCING_VALUE, ServerIndicator,
 };
 use solstone_tmux::observer::{NoopShutdownIndicator, ShutdownIndicator};
 use solstone_tmux::sync::SyncActivity;
@@ -95,6 +95,86 @@ async fn repeated_unclean_production_starts_keep_one_indicator_and_restore_clean
         OptionValue::Present("owner status".to_owned())
     );
     assert_eq!(io.value(SOLSTONE_OPTION), OptionValue::Absent);
+}
+
+fn present(value: &str) -> OptionValue {
+    OptionValue::Present(value.to_owned())
+}
+
+#[tokio::test]
+async fn the_indicator_takes_no_room_from_the_owners_status_left() {
+    let io = MemoryIndicator::with([
+        (STATUS_LEFT, present("[#{session_name}] ")),
+        (STATUS_LEFT_LENGTH, present("10")),
+        (SOLSTONE_OPTION, OptionValue::Absent),
+    ]);
+
+    let mut ownership = IndicatorOwnership::install_default(io.clone())
+        .await
+        .expect("install production indicator");
+    assert_eq!(io.value(STATUS_LEFT_LENGTH), present("11"));
+
+    ownership.restore().await.expect("restore");
+    assert_eq!(io.value(STATUS_LEFT_LENGTH), present("10"));
+    assert_eq!(io.value(STATUS_LEFT), present("[#{session_name}] "));
+}
+
+#[tokio::test]
+async fn repeated_unclean_starts_widen_status_left_length_once() {
+    let io = MemoryIndicator::with([
+        (STATUS_LEFT, present("owner status")),
+        (STATUS_LEFT_LENGTH, present("10")),
+        (SOLSTONE_OPTION, OptionValue::Absent),
+    ]);
+
+    let _first = IndicatorOwnership::install_default(io.clone())
+        .await
+        .expect("first install");
+    let _second = IndicatorOwnership::install_default(io.clone())
+        .await
+        .expect("second install");
+    let mut third = IndicatorOwnership::install_default(io.clone())
+        .await
+        .expect("third install");
+    assert_eq!(io.value(STATUS_LEFT_LENGTH), present("11"));
+
+    third.restore().await.expect("restore third install");
+    assert_eq!(io.value(STATUS_LEFT_LENGTH), present("10"));
+}
+
+#[tokio::test]
+async fn a_status_left_length_the_owner_changed_is_kept() {
+    let io = MemoryIndicator::with([
+        (STATUS_LEFT, present("owner status")),
+        (STATUS_LEFT_LENGTH, present("10")),
+        (SOLSTONE_OPTION, OptionValue::Absent),
+    ]);
+    let mut ownership = IndicatorOwnership::install_default(io.clone())
+        .await
+        .expect("install");
+    io.set_external(STATUS_LEFT_LENGTH, present("40"));
+
+    ownership.restore().await.expect("restore");
+    assert_eq!(io.value(STATUS_LEFT_LENGTH), present("40"));
+}
+
+#[tokio::test]
+async fn an_unreadable_status_left_length_is_left_alone() {
+    let io = MemoryIndicator::with([
+        (STATUS_LEFT, present("owner status")),
+        (STATUS_LEFT_LENGTH, present("wide")),
+        (SOLSTONE_OPTION, OptionValue::Absent),
+    ]);
+    let mut ownership = IndicatorOwnership::install_default(io.clone())
+        .await
+        .expect("install");
+    assert_eq!(io.value(STATUS_LEFT_LENGTH), present("wide"));
+    ownership.restore().await.expect("restore");
+    assert!(
+        io.log()
+            .iter()
+            .all(|entry| entry != &format!("write:{STATUS_LEFT_LENGTH}"))
+    );
 }
 
 #[tokio::test]

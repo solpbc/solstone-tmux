@@ -6,6 +6,10 @@ Format adapted from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- the ☼ that solstone-tmux adds to your tmux status bar no longer cuts off the end of your session name. tmux gives the left side of the status bar 10 columns by default (`status-left-length`), and the ☼ took one of them, so a session name that fit before could lose its last letter. now solstone-tmux widens the left side by one column while it runs and puts it back when it stops. tmux's own limit still applies to long names: `tmux set -g status-left-length 20` raises it. thanks @dvanduzer for the report.
+
 ## [2.0.23] - 2026-11-01
 
 ### Fixed

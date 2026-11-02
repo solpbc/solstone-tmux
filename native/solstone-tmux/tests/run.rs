@@ -99,6 +99,10 @@ fn crash_restart_does_not_duplicate_the_status_indicator() {
         fs::read_to_string(fixture.status_left_path()).expect("read installed status-left");
     assert_eq!(status_left.matches("#{?@solstone").count(), 1);
     assert!(status_left.ends_with("owner status"));
+    assert_eq!(
+        fs::read(fixture.status_left_length_path()).expect("read widened status-left-length"),
+        b"11"
+    );
 
     let pid = rustix::process::Pid::from_raw(second.id() as i32).expect("positive child pid");
     rustix::process::kill_process(pid, rustix::process::Signal::TERM)
@@ -108,6 +112,10 @@ fn crash_restart_does_not_duplicate_the_status_indicator() {
     assert_eq!(
         fs::read(fixture.status_left_path()).expect("read restored status-left"),
         b"owner status"
+    );
+    assert_eq!(
+        fs::read(fixture.status_left_length_path()).expect("read restored status-left-length"),
+        b"10"
     );
     assert!(!fixture.solstone_path().exists());
 }
@@ -333,8 +341,10 @@ fi
 case "$1:$2:$3" in
   display-message:-p:*) printf '4242 1\n' ;;
   show-options:-gv:status-left) cat "$SOLSTONE_TMUX_STATUS_LEFT" ;;
+  show-options:-gv:status-left-length) cat "$SOLSTONE_TMUX_STATUS_LEFT_LENGTH" 2>/dev/null || printf '10\n' ;;
   show-options:-gv:@solstone) cat "$SOLSTONE_TMUX_SOLSTONE" ;;
   set-option:-g:status-left) printf '%s' "$4" > "$SOLSTONE_TMUX_STATUS_LEFT" ;;
+  set-option:-g:status-left-length) printf '%s' "$4" > "$SOLSTONE_TMUX_STATUS_LEFT_LENGTH" ;;
   set-option:-g:@solstone) printf '%s' "$4" > "$SOLSTONE_TMUX_SOLSTONE" ;;
   set-option:-gu:status-left) rm -f "$SOLSTONE_TMUX_STATUS_LEFT" ;;
   set-option:-gu:@solstone) rm -f "$SOLSTONE_TMUX_SOLSTONE" ;;
@@ -351,6 +361,13 @@ esac
             .parent()
             .expect("tmux stub parent")
             .join("status-left.bytes")
+    }
+
+    fn status_left_length_path(&self) -> PathBuf {
+        self.tmux
+            .parent()
+            .expect("tmux stub parent")
+            .join("status-left-length.bytes")
     }
 
     fn no_server_path(&self) -> PathBuf {
@@ -390,6 +407,10 @@ esac
             .envs(self.roots.entries().iter().cloned())
             .env("SOLSTONE_TMUX_TMUX_LOG", &self.tmux_log)
             .env("SOLSTONE_TMUX_STATUS_LEFT", self.status_left_path())
+            .env(
+                "SOLSTONE_TMUX_STATUS_LEFT_LENGTH",
+                self.status_left_length_path(),
+            )
             .env("SOLSTONE_TMUX_SOLSTONE", self.solstone_path())
             .env("SOLSTONE_TMUX_NO_SERVER", self.no_server_path());
         command
