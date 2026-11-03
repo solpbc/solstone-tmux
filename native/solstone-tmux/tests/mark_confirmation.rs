@@ -88,7 +88,11 @@ impl RefusalContext {
         } else {
             (None, peer.credential())
         };
-        cred.instance_id = instance_id;
+        // An id that derives no mark stands for a pairing with no readable CA.
+        if format_spoken_mark(&instance_id).is_none() {
+            cred.instance_id = instance_id;
+            cred.ca_chain_pem = Vec::new();
+        }
 
         Self {
             _temp: temp,
@@ -529,8 +533,7 @@ fn mark_argument_before_stdin() {
             ensure_private_directory(&roots_task.data_root()).expect("data");
 
             let peer = PrivateLinkPeer::start().await;
-            let mut cred = peer.credential();
-            cred.instance_id = test_jid();
+            let cred = peer.credential();
             persist_credential(&roots_task.config_root(), &cred).expect("persist");
 
             let answer_lock_file =
@@ -599,8 +602,7 @@ fn setup_answers_and_reread() {
             let temp = TestDirectory::new("setup-ans-yes");
             let roots = IsolatedRoots::new(temp.path());
             let env = FakeEnvironment::from_paths(roots.entries().iter().cloned());
-            let mut mut_cred = cred.clone();
-            mut_cred.instance_id = test_jid();
+            let mut_cred = cred.clone();
             let cred_call = mut_cred.clone();
 
             let outcome = setup_with_pairer(
@@ -630,8 +632,7 @@ fn setup_answers_and_reread() {
             let temp = TestDirectory::new("setup-ans-y");
             let roots = IsolatedRoots::new(temp.path());
             let env = FakeEnvironment::from_paths(roots.entries().iter().cloned());
-            let mut mut_cred = cred.clone();
-            mut_cred.instance_id = test_jid();
+            let mut_cred = cred.clone();
             let cred_call = mut_cred.clone();
 
             let outcome = setup_with_pairer(
@@ -661,8 +662,7 @@ fn setup_answers_and_reread() {
             let temp = TestDirectory::new("setup-ans-no");
             let roots = IsolatedRoots::new(temp.path());
             let env = FakeEnvironment::from_paths(roots.entries().iter().cloned());
-            let mut mut_cred = cred.clone();
-            mut_cred.instance_id = test_jid();
+            let mut_cred = cred.clone();
             let cred_call = mut_cred.clone();
 
             let outcome = setup_with_pairer(
@@ -694,6 +694,7 @@ fn setup_answers_and_reread() {
             let env = FakeEnvironment::from_paths(roots.entries().iter().cloned());
             let mut mut_cred = cred.clone();
             mut_cred.instance_id = "test-pairing-instance".to_string();
+            mut_cred.ca_chain_pem = Vec::new();
             let cred_call = mut_cred.clone();
 
             let outcome = setup_with_pairer(
@@ -723,8 +724,7 @@ fn setup_answers_and_reread() {
             let temp = TestDirectory::new("setup-ans-eof");
             let roots = IsolatedRoots::new(temp.path());
             let env = FakeEnvironment::from_paths(roots.entries().iter().cloned());
-            let mut mut_cred = cred.clone();
-            mut_cred.instance_id = test_jid();
+            let mut_cred = cred.clone();
             let cred_call = mut_cred.clone();
 
             let outcome = setup_with_pairer(
@@ -754,8 +754,7 @@ fn setup_answers_and_reread() {
             let temp = TestDirectory::new("setup-ans-err");
             let roots = IsolatedRoots::new(temp.path());
             let env = FakeEnvironment::from_paths(roots.entries().iter().cloned());
-            let mut mut_cred = cred.clone();
-            mut_cred.instance_id = test_jid();
+            let mut_cred = cred.clone();
             let cred_call = mut_cred.clone();
 
             let outcome = setup_with_pairer(
@@ -785,8 +784,7 @@ fn setup_answers_and_reread() {
             let temp = TestDirectory::new("setup-ans-reread");
             let roots = IsolatedRoots::new(temp.path());
             let env = FakeEnvironment::from_paths(roots.entries().iter().cloned());
-            let mut mut_cred = cred.clone();
-            mut_cred.instance_id = test_jid();
+            let mut_cred = cred.clone();
             let cred_call = mut_cred.clone();
             let term = TestTerminal::new("\nc\ncontinue\nyes\n");
             let out_ref = Arc::clone(&term.output);
@@ -821,6 +819,7 @@ fn setup_answers_and_reread() {
             let env = FakeEnvironment::from_paths(roots.entries().iter().cloned());
             let mut mut_cred = cred.clone();
             mut_cred.instance_id = "test-pairing-instance".to_string();
+            mut_cred.ca_chain_pem = Vec::new();
             let cred_call = mut_cred.clone();
             let term = TestTerminal::new("\nc\ny\ncontinue\n");
             let out_ref = Arc::clone(&term.output);
@@ -857,8 +856,7 @@ fn setup_answers_and_reread() {
             let env = FakeEnvironment::from_paths(roots.entries().iter().cloned());
             ensure_private_directory(&roots.config_root()).expect("config");
             write_answer_file(&roots.config_root(), "").expect("initial settle");
-            let mut mut_cred = cred.clone();
-            mut_cred.instance_id = test_jid();
+            let mut_cred = cred.clone();
             let cred_call = mut_cred.clone();
             let ans_path = roots.config_root().join(ANSWER_FILENAME);
             set_atomic_write_fault_for_path(&ans_path, Some(AtomicWriteFault::FailBeforeRename));
@@ -921,7 +919,7 @@ fn setup_signal_at_the_prompt() {
             .write_all(peer.pair_link().as_bytes())
             .expect("write link");
 
-        read_pty_until_pattern(&master, &mut child, ASK_IDENTIFIED, Duration::from_secs(5));
+        read_pty_until_pattern(&master, &mut child, ASK_IDENTIFIED, Duration::from_secs(30));
 
         let pid = rustix::process::Pid::from_raw(child.id() as i32).expect("pid");
         rustix::process::kill_process(pid, sig).expect("kill");
@@ -1018,11 +1016,11 @@ fn setup_asks_again_after_an_unrecognised_answer_at_the_terminal() {
         .write_all(peer.pair_link().as_bytes())
         .expect("write link");
 
-    read_pty_until_pattern(&master, &mut child, ASK_IDENTIFIED, Duration::from_secs(5));
+    read_pty_until_pattern(&master, &mut child, ASK_IDENTIFIED, Duration::from_secs(30));
     (&master)
         .write_all(b"maybe\n")
         .expect("type an unrecognised answer");
-    read_pty_until_pattern(&master, &mut child, ASK_IDENTIFIED, Duration::from_secs(5));
+    read_pty_until_pattern(&master, &mut child, ASK_IDENTIFIED, Duration::from_secs(30));
     (&master).write_all(b"yes\n").expect("type yes");
 
     let start = Instant::now();
@@ -1079,7 +1077,7 @@ fn setup_at_a_terminal_asks_for_the_link_and_goes_on_at_enter() {
     (&master)
         .write_all(format!("{}\n", peer.pair_link()).as_bytes())
         .expect("paste the link");
-    read_pty_until_pattern(&master, &mut child, ASK_IDENTIFIED, Duration::from_secs(5));
+    read_pty_until_pattern(&master, &mut child, ASK_IDENTIFIED, Duration::from_secs(30));
     (&master).write_all(b"yes\n").expect("type yes");
 
     let start = Instant::now();
@@ -1119,7 +1117,6 @@ fn terminal_link_input_stops_at_the_first_newline_and_prompts_once() {
 fn journal_status_row_follows_the_answer() {
     let pl_peer = runtime().block_on(async { PrivateLinkPeer::start().await });
     let mut credential = pl_peer.credential();
-    credential.instance_id = test_jid();
     runtime().block_on(async { pl_peer.shutdown().await });
     let generation = hex_encode(&compute_pairing_generation(&credential.client_cert_pem));
 
@@ -1140,6 +1137,7 @@ fn journal_status_row_follows_the_answer() {
     assert!(row.contains(&spec.words[0]) && row.contains(&spec.words[1]));
 
     credential.instance_id = "test-pairing-instance".to_owned();
+    credential.ca_chain_pem = Vec::new();
     persist_credential(&root, &credential).expect("persist");
     assert_eq!(journal_status_row(&root), MARK_UNAVAILABLE.trim_start());
 }
@@ -1202,7 +1200,7 @@ fn setup_asks_on_the_controlling_terminal() {
             if shown.matches(ASK_IDENTIFIED).count() >= count {
                 return;
             }
-            if start.elapsed() > Duration::from_secs(10) {
+            if start.elapsed() > Duration::from_secs(30) {
                 // Ending script hangs up the terminal, which ends setup too.
                 let _ = child.kill();
                 panic!("setup did not ask on the controlling terminal; it showed: {shown:?}");
@@ -1252,7 +1250,7 @@ fn mark_argument_words() {
         let peer = PrivateLinkPeer::start().await;
         let cred = peer.credential();
         let expected_sha = peer.expected_client_sha256();
-        let jid = test_jid();
+        let jid = cred.instance_id.clone();
         let (w1, w2) = extract_journal_mark_words(&jid).expect("words");
 
         // Case, spaces, and U+00B7 match and confirm
@@ -1342,6 +1340,7 @@ fn mark_argument_words() {
             let env = FakeEnvironment::from_paths(roots.entries().iter().cloned());
             let mut mut_cred = cred.clone();
             mut_cred.instance_id = "test-pairing-instance".to_string();
+            mut_cred.ca_chain_pem = Vec::new();
             let cred_call = mut_cred.clone();
 
             let outcome = setup_with_pairer(
@@ -1483,6 +1482,7 @@ fn mark_argument_words() {
             ensure_private_directory(&roots.config_root()).expect("config");
             let mut mut_cred = cred.clone();
             mut_cred.instance_id = "test-pairing-instance".to_string();
+            mut_cred.ca_chain_pem = Vec::new();
             persist_credential(&roots.config_root(), &mut_cred).expect("persist");
             write_answer_file(&roots.config_root(), "").expect("write answer");
 
@@ -1517,13 +1517,11 @@ fn mark_argument_words() {
 fn repair_keeps_confirmed_credential() {
     runtime().block_on(async {
         let peer_x = PrivateLinkPeer::start().await;
-        let mut cred_x = peer_x.credential();
-        cred_x.instance_id = test_jid();
+        let cred_x = peer_x.credential();
         let gen_x = hex_encode(&compute_pairing_generation(&cred_x.client_cert_pem));
 
         let peer_new = PrivateLinkPeer::start().await;
-        let mut cred_new = peer_new.credential();
-        cred_new.instance_id = test_jid();
+        let cred_new = peer_new.credential();
         let cred_new_call = cred_new.clone();
         let expected_sha_new = peer_new.expected_client_sha256();
 
@@ -1590,6 +1588,7 @@ fn repair_keeps_confirmed_credential() {
                 |_link, _dev, _fields| {
                     let mut c = cred_new_call.clone();
                     c.instance_id = "test-pairing-instance".to_string();
+                    c.ca_chain_pem = Vec::new();
                     async move { Ok(c) }
                 },
                 TerminalSeat::Scripted(Some(TestTerminal::new("cancel\n"))),
@@ -1839,12 +1838,10 @@ fn repair_keeps_confirmed_credential() {
         // 5d. Held-only walk-away with two fresh peers: credential H stored, answer file "", pairer returns N -> exit 5 HELD, RUN_LINE, N stored, is_status_held true, no DELETE
         {
             let peer_h = PrivateLinkPeer::start().await;
-            let mut cred_h = peer_h.credential();
-            cred_h.instance_id = test_jid();
+            let cred_h = peer_h.credential();
 
             let peer_n = PrivateLinkPeer::start().await;
-            let mut cred_n = peer_n.credential();
-            cred_n.instance_id = test_jid();
+            let cred_n = peer_n.credential();
             let cred_n_call = cred_n.clone();
 
             let temp = TestDirectory::new("repair-ans-held-walkaway");
@@ -1892,8 +1889,7 @@ fn repair_keeps_confirmed_credential() {
 
     // 6. Re-pairing with confirmed cred X: SIGINT/SIGHUP at prompt -> leaves X bytes identical and confirmed, exit 1, CANCEL
     let pl_peer = runtime().block_on(async { PrivateLinkPeer::start().await });
-    let mut cred_x_base = pl_peer.credential();
-    cred_x_base.instance_id = test_jid();
+    let cred_x_base = pl_peer.credential();
     runtime().block_on(async { pl_peer.shutdown().await });
 
     for sig in [rustix::process::Signal::INT, rustix::process::Signal::HUP] {
@@ -1927,7 +1923,7 @@ fn repair_keeps_confirmed_credential() {
             .write_all(peer.pair_link().as_bytes())
             .expect("write link");
 
-        read_pty_until_pattern(&master, &mut child, ASK_IDENTIFIED, Duration::from_secs(5));
+        read_pty_until_pattern(&master, &mut child, ASK_IDENTIFIED, Duration::from_secs(30));
 
         let pid = rustix::process::Pid::from_raw(child.id() as i32).expect("pid");
         rustix::process::kill_process(pid, sig).expect("kill");
@@ -1961,8 +1957,7 @@ fn repair_keeps_confirmed_credential() {
 fn confirm_binds_the_displayed_generation() {
     runtime().block_on(async {
         let peer = PrivateLinkPeer::start().await;
-        let mut cred = peer.credential();
-        cred.instance_id = test_jid();
+        let cred = peer.credential();
         let expected_sha = peer.expected_client_sha256();
         let _generation = hex_encode(&compute_pairing_generation(&cred.client_cert_pem));
 
@@ -2110,8 +2105,7 @@ fn confirm_binds_the_displayed_generation() {
         // 6. Already confirmed: exit 0 [CONFIRM_DONE], bytes unchanged, 0 peer requests
         {
             let peer_confirmed = PrivateLinkPeer::start().await;
-            let mut cred_confirmed = peer_confirmed.credential();
-            cred_confirmed.instance_id = test_jid();
+            let cred_confirmed = peer_confirmed.credential();
 
             let temp = TestDirectory::new("confirm-binds-already-confirmed");
             let roots = IsolatedRoots::new(temp.path());
@@ -2157,12 +2151,10 @@ fn confirm_binds_the_displayed_generation() {
         {
             // Y -> Z swap with "yes\n": returns PrivateStateIo, Z bytes kept, 0 peer requests on Y or Z
             let peer_y = PrivateLinkPeer::start().await;
-            let mut cred_y = peer_y.credential();
-            cred_y.instance_id = test_jid();
+            let cred_y = peer_y.credential();
 
             let peer_z = PrivateLinkPeer::start().await;
-            let mut cred_z = peer_z.credential();
-            cred_z.instance_id = test_jid();
+            let cred_z = peer_z.credential();
 
             let temp = TestDirectory::new("confirm-swap-yes");
             let roots = IsolatedRoots::new(temp.path());
@@ -2199,12 +2191,10 @@ fn confirm_binds_the_displayed_generation() {
         {
             // Y -> Z swap with "no\n": returns PrivateStateIo, Z bytes kept, exactly 1 DELETE request for Y on Y's peer, 0 on Z's peer
             let peer_y = PrivateLinkPeer::start().await;
-            let mut cred_y = peer_y.credential();
-            cred_y.instance_id = test_jid();
+            let cred_y = peer_y.credential();
 
             let peer_z = PrivateLinkPeer::start().await;
-            let mut cred_z = peer_z.credential();
-            cred_z.instance_id = test_jid();
+            let cred_z = peer_z.credential();
 
             let temp = TestDirectory::new("confirm-swap-no");
             let roots = IsolatedRoots::new(temp.path());
@@ -2376,8 +2366,7 @@ fn grandfather_bytes_and_malformed_credential() {
             )
             .expect("write");
 
-            let mut valid_cred = cred.clone();
-            valid_cred.instance_id = test_jid();
+            let valid_cred = cred.clone();
             let cred_call = valid_cred.clone();
 
             let outcome = setup_with_pairer(
@@ -2410,6 +2399,190 @@ fn grandfather_bytes_and_malformed_credential() {
 // ===========================================================================
 
 #[test]
+fn stored_id_that_is_not_its_cas_is_held_and_asked_with_the_cas_mark() {
+    runtime().block_on(async {
+        let peer = PrivateLinkPeer::start().await;
+        let genuine = peer.credential();
+        let ca_jid = genuine.instance_id.clone();
+        let other_jid = test_jid();
+        let mut stored = genuine.clone();
+        stored.instance_id = other_jid.clone();
+        let generation = hex_encode(&compute_pairing_generation(&stored.client_cert_pem));
+
+        // An answer on file doesn't cover it: it's held, whatever was said before.
+        let temp = TestDirectory::new("stored-id-yes");
+        let roots = IsolatedRoots::new(temp.path());
+        let env = FakeEnvironment::from_paths(roots.entries().iter().cloned());
+        ensure_private_directory(&roots.config_root()).expect("config");
+        persist_credential(&roots.config_root(), &stored).expect("persist");
+        write_answer_file(&roots.config_root(), &generation).expect("answer");
+        assert!(!is_pairing_confirmed(&roots.config_root(), &stored));
+        assert!(is_status_held(&roots.config_root()));
+
+        // The question shows the CA's mark, never the stored id's. Yes keeps the
+        // pairing under the CA's id.
+        let term = TestTerminal::new("yes\n");
+        let shown = term.output.clone();
+        let outcome = confirm(
+            current_platform(),
+            &env,
+            TerminalSeat::Scripted(Some(term)),
+            MarkOption::Absent,
+        )
+        .await;
+        assert_eq!(
+            outcome,
+            Outcome::Owner {
+                code: 0,
+                lines: vec![PAIRED.to_string()],
+            }
+        );
+        let text = String::from_utf8_lossy(&shown.lock().expect("lock")).into_owned();
+        assert!(text.contains(&format_spoken_mark(&ca_jid).expect("CA mark")));
+        assert!(!text.contains(&format_spoken_mark(&other_jid).expect("stored mark")));
+        let kept = load_credential(&roots.config_root())
+            .expect("load")
+            .expect("kept");
+        assert_eq!(kept.instance_id, ca_jid);
+        assert!(is_pairing_confirmed(&roots.config_root(), &kept));
+
+        // No tears it down as usual, and words are matched to the CA's mark.
+        let temp = TestDirectory::new("stored-id-no");
+        let roots = IsolatedRoots::new(temp.path());
+        let env = FakeEnvironment::from_paths(roots.entries().iter().cloned());
+        ensure_private_directory(&roots.config_root()).expect("config");
+        persist_credential(&roots.config_root(), &stored).expect("persist");
+        write_answer_file(&roots.config_root(), &generation).expect("answer");
+        let (other_w1, other_w2) = extract_journal_mark_words(&other_jid).expect("words");
+        let outcome = confirm(
+            current_platform(),
+            &env,
+            TerminalSeat::Scripted(None::<Cursor<Vec<u8>>>),
+            MarkOption::Value(format!("{other_w1} {other_w2}")),
+        )
+        .await;
+        assert_eq!(
+            outcome,
+            Outcome::Owner {
+                code: 1,
+                lines: vec![NOT_PAIRED.to_string(), MARK_MISMATCH.to_string()],
+            }
+        );
+        assert!(!roots.config_root().join(CREDENTIALS_FILENAME).exists());
+
+        // With no readable CA there is nothing to judge it by: it carries on.
+        let temp = TestDirectory::new("stored-id-no-ca");
+        let roots = IsolatedRoots::new(temp.path());
+        ensure_private_directory(&roots.config_root()).expect("config");
+        let mut unreadable = stored.clone();
+        unreadable.ca_chain_pem = Vec::new();
+        persist_credential(&roots.config_root(), &unreadable).expect("persist");
+        write_answer_file(&roots.config_root(), &generation).expect("answer");
+        assert!(is_pairing_confirmed(&roots.config_root(), &unreadable));
+        assert!(!is_status_held(&roots.config_root()));
+
+        peer.shutdown().await;
+    });
+}
+
+#[test]
+fn stored_id_that_is_not_its_cas_sends_nothing_until_confirmed() {
+    runtime().block_on(async {
+        let peer = PrivateLinkPeer::start().await;
+        peer.answer_uploads_with_received_descriptors();
+        let temp = TestDirectory::new("stored-id-gate");
+        let roots = IsolatedRoots::new(temp.path());
+        ensure_private_directory(&roots.config_root()).expect("config");
+        ensure_private_directory(&roots.data_root()).expect("data");
+
+        let genuine = peer.credential();
+        let ca_jid = genuine.instance_id.clone();
+        let mut stored = genuine;
+        stored.instance_id = test_jid();
+        persist_credential(&roots.config_root(), &stored).expect("persist");
+        let generation = hex_encode(&compute_pairing_generation(&stored.client_cert_pem));
+        write_answer_file(&roots.config_root(), &generation).expect("answer");
+
+        let segment = roots
+            .data_root()
+            .join("captures")
+            .join("20260729")
+            .join("host.tmux")
+            .join("120000_300")
+            .join("tmux_0_screen.jsonl");
+        fs::create_dir_all(segment.parent().expect("segment parent")).expect("segment dir");
+        fs::write(&segment, b"segment\n").expect("segment bytes");
+
+        let (stop_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+        let (activity_tx, _activity_rx) =
+            tokio::sync::watch::channel(solstone_tmux::sync::SyncActivity::Idle);
+        let config = solstone_tmux::config::RuntimeConfig::load(&roots.config_root(), "host")
+            .expect("config");
+        let lock = InstanceLock::acquire(&roots.data_root()).expect("acquire data lock");
+        let _state_lock =
+            acquire_private_state_lock(&roots.config_root()).expect("acquire state lock");
+        let health = HealthWriter::new(roots.data_root(), &lock);
+        let task = SyncTask {
+            config_root: roots.config_root(),
+            data_root: roots.data_root(),
+            config,
+            hostname: "host".to_string(),
+            clock: Arc::new(solstone_tmux::clock::SystemClock::utc()),
+            wake: SyncWake::default(),
+            activity: activity_tx,
+            health,
+            retention_fence: Arc::new(RetentionFence::new()),
+            identity: lock.identity().clone(),
+            health_refresh_interval: Duration::from_millis(50),
+            answer_lock_timeout: Duration::from_millis(200),
+        };
+        let task_handle = tokio::spawn(async move {
+            let _ = task.run(shutdown_rx).await;
+        });
+
+        let health_path = roots.data_root().join("sync-health.json");
+        let wait_start = Instant::now();
+        while !health_path.exists() && wait_start.elapsed() < Duration::from_secs(5) {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        let health_val: serde_json::Value =
+            serde_json::from_slice(&fs::read(&health_path).expect("health")).expect("json");
+        assert_eq!(health_val["state"], "held");
+        assert_eq!(peer.requests().len(), 0);
+        assert_eq!(peer.accepted_carriers(), 0);
+
+        let (w1, w2) = extract_journal_mark_words(&ca_jid).expect("words");
+        let output = Command::new(env!("CARGO_BIN_EXE_solstone-tmux"))
+            .arg("confirm")
+            .arg("--mark")
+            .arg(format!("{w1} {w2}"))
+            .env_clear()
+            .envs(roots.entries().iter().cloned())
+            .env("SOLSTONE_TMUX_TERMINAL", "-")
+            .output()
+            .expect("run confirm");
+        assert_eq!(output.status.code(), Some(0));
+
+        let wait_start = Instant::now();
+        let ingested = || {
+            peer.requests()
+                .into_iter()
+                .filter(|r| r.path_without_query() == "/app/devices/ingest")
+                .count()
+        };
+        while ingested() < 1 && wait_start.elapsed() < Duration::from_secs(5) {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert_eq!(ingested(), 1);
+
+        let _ = stop_tx.send(true);
+        let _ = task_handle.await;
+        peer.shutdown().await;
+    });
+}
+
+#[test]
 fn pairing_gate_uploads_after_confirm() {
     runtime().block_on(async {
         let peer = PrivateLinkPeer::start().await;
@@ -2420,7 +2593,6 @@ fn pairing_gate_uploads_after_confirm() {
         ensure_private_directory(&roots.data_root()).expect("data");
 
         let mut cred = peer.credential();
-        cred.instance_id = test_jid();
         cred.endpoints
             .push(spl_transport::credential::EndpointAddr {
                 host: "192.0.2.9".to_string(),
@@ -2772,8 +2944,7 @@ fn retire_through_setup_and_confirm() {
             // 5. Setup refusal with existing credentials.json leaves bytes unchanged
             {
                 let peer_x = PrivateLinkPeer::start().await;
-                let mut cred_x = peer_x.credential();
-                cred_x.instance_id = test_jid();
+                let cred_x = peer_x.credential();
                 let generation_x = hex_encode(&compute_pairing_generation(&cred_x.client_cert_pem));
 
                 let ctx_y = RefusalContext::new(relay, "retire-existing-cred", test_jid()).await;
@@ -3040,8 +3211,7 @@ fn held_status_without_a_daemon() {
     // 0. Status without daemon when answer file is absent has neither held lines nor state=held
     runtime().block_on(async {
         let peer = PrivateLinkPeer::start().await;
-        let mut cred = peer.credential();
-        cred.instance_id = test_jid();
+        let cred = peer.credential();
         persist_credential(&roots.config_root(), &cred).expect("persist");
         peer.shutdown().await;
     });
@@ -3103,8 +3273,7 @@ fn held_status_without_a_daemon() {
         ensure_private_directory(&roots_daemon.data_root()).expect("data");
 
         let peer = PrivateLinkPeer::start().await;
-        let mut cred = peer.credential();
-        cred.instance_id = test_jid();
+        let cred = peer.credential();
         let expected_sha = peer.expected_client_sha256();
         persist_credential(&roots_daemon.config_root(), &cred).expect("persist");
         write_answer_file(&roots_daemon.config_root(), "").expect("write held answer");

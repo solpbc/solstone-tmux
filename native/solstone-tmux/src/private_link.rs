@@ -633,6 +633,21 @@ where
     }
 }
 
+/// The owner said this mark is their journal's, so the stored id becomes the id
+/// that mark came from before the answer that lets the pairing send.
+fn record_confirmation(
+    config_root: &Path,
+    mut credential: Credential,
+    generation: &str,
+    shown_jid: &str,
+) -> Result<(), DiagnosticCode> {
+    if credential.instance_id != shown_jid {
+        credential.instance_id = shown_jid.to_owned();
+        persist_credential(config_root, &credential)?;
+    }
+    crate::pairing_answer::write_answer_file(config_root, generation)
+}
+
 pub async fn confirm<T>(
     platform: PlatformKind,
     environment: &dyn Environment,
@@ -723,11 +738,12 @@ where
     };
 
     let displayed_gen = hex_encode(&compute_pairing_generation(&saved_cred.client_cert_pem));
-    let is_identified = format_spoken_mark(&saved_cred.instance_id).is_some();
+    let shown_jid = mark_jid(&saved_cred);
+    let is_identified = format_spoken_mark(&shown_jid).is_some();
 
     match mark {
         MarkOption::Value(val) => {
-            let eval = evaluate_mark_words(&val, &saved_cred.instance_id);
+            let eval = evaluate_mark_words(&val, &shown_jid);
             match eval {
                 MarkMatch::Usage => Outcome::Usage(MARK_USAGE),
                 MarkMatch::Match => {
@@ -748,7 +764,8 @@ where
                         drop(answer_lock);
                         return Outcome::Diagnostic(DiagnosticCode::PrivateStateIo);
                     }
-                    let write_ans = write_answer_file(&config_root, &displayed_gen);
+                    let write_ans =
+                        record_confirmation(&config_root, current_cred, &displayed_gen, &shown_jid);
                     drop(answer_lock);
                     if let Err(code) = write_ans {
                         Outcome::Diagnostic(code)
@@ -801,10 +818,10 @@ where
         MarkOption::Absent => {
             let decision = match terminal_reader.take().unwrap() {
                 TerminalQuestionReader::Production(file) => {
-                    ask_terminal_question_production(file, &saved_cred.instance_id).await
+                    ask_terminal_question_production(file, &shown_jid).await
                 }
                 TerminalQuestionReader::Scripted(mut term) => {
-                    ask_terminal_question_scripted(&mut term, &saved_cred.instance_id).await
+                    ask_terminal_question_scripted(&mut term, &shown_jid).await
                 }
             };
             match decision {
@@ -826,7 +843,8 @@ where
                         drop(answer_lock);
                         return Outcome::Diagnostic(DiagnosticCode::PrivateStateIo);
                     }
-                    let write_ans = write_answer_file(&config_root, &displayed_gen);
+                    let write_ans =
+                        record_confirmation(&config_root, current_cred, &displayed_gen, &shown_jid);
                     drop(answer_lock);
                     if let Err(code) = write_ans {
                         Outcome::Diagnostic(code)

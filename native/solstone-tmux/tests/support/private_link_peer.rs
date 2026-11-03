@@ -902,7 +902,10 @@ fn credential_and_acceptor(port: u16, refusal: Arc<AtomicU8>) -> (Credential, Tl
         client_cert_pem: client.pem(),
         ca_chain_pem: vec![ca.pem()],
         ca_fp_prefix: pin,
-        instance_id: "test-private-link-instance".to_owned(),
+        instance_id: spl_core::relay_window::jid_from_spki(
+            &spl_core::ca::extract_spki_der(ca_der.as_ref()).expect("peer CA SPKI"),
+        )
+        .expect("peer CA id"),
         home_label: "test home".to_owned(),
         endpoints: vec![EndpointAddr {
             host: "127.0.0.1".to_owned(),

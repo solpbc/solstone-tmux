@@ -439,8 +439,32 @@ pub fn grandfather_or_settle(config_root: &Path) -> Result<(), DiagnosticCode> {
     }
 }
 
+/// The journal id of the CA this pairing pinned, when its stored chain holds
+/// that CA in a form an id can be worked out from.
+pub fn pinned_ca_jid(credential: &Credential) -> Option<String> {
+    credential.ca_chain_pem.iter().find_map(|pem| {
+        let certs = spl_transport::tls::parse_certs(pem).ok()?;
+        let pinned = certs.iter().find(|cert| {
+            spl_core::ca::cert_matches_prefix(cert.as_ref(), &credential.ca_fp_prefix)
+        })?;
+        let spki = spl_core::ca::extract_spki_der(pinned.as_ref()).ok()?;
+        spl_core::relay_window::jid_from_spki(&spki).ok()
+    })
+}
+
+/// A stored pairing whose id isn't its own CA's is held and asked about again,
+/// whatever its answer file says. One with no readable CA can't be judged.
+pub fn stored_id_mismatched(credential: &Credential) -> bool {
+    pinned_ca_jid(credential).is_some_and(|jid| jid != credential.instance_id)
+}
+
+/// The id a stored pairing's mark comes from: its CA's, never a claim beside it.
+pub fn mark_jid(credential: &Credential) -> String {
+    pinned_ca_jid(credential).unwrap_or_else(|| credential.instance_id.clone())
+}
+
 pub fn is_pairing_confirmed(config_root: &Path, credential: &Credential) -> bool {
-    if credential.client_cert_pem.is_empty() {
+    if credential.client_cert_pem.is_empty() || stored_id_mismatched(credential) {
         return false;
     }
     let expected_generation = hex_encode(&compute_pairing_generation(&credential.client_cert_pem));
@@ -456,6 +480,9 @@ pub fn is_status_held(config_root: &Path) -> bool {
     };
     if credential.client_cert_pem.is_empty() {
         return false;
+    }
+    if stored_id_mismatched(&credential) {
+        return true;
     }
     let expected_generation = hex_encode(&compute_pairing_generation(&credential.client_cert_pem));
     match read_answer_file(config_root) {
