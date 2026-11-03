@@ -793,7 +793,10 @@ where
                         } else {
                             Outcome::Owner {
                                 code: 1,
-                                lines: vec![NOT_PAIRED.to_owned(), MARK_MISMATCH.to_owned()],
+                                lines: vec![
+                                    NOT_PAIRED.to_owned(),
+                                    CONFIRM_MARK_MISMATCH.to_owned(),
+                                ],
                             }
                         }
                     }
@@ -866,12 +869,12 @@ where
                     } else if is_identified {
                         Outcome::Owner {
                             code: 1,
-                            lines: vec![NOT_PAIRED.to_owned(), MISMATCH_BODY.to_owned()],
+                            lines: vec![NOT_PAIRED.to_owned(), CONFIRM_MISMATCH_BODY.to_owned()],
                         }
                     } else {
                         Outcome::Owner {
                             code: 1,
-                            lines: vec![CANCEL.to_owned()],
+                            lines: vec![CONFIRM_CANCEL.to_owned()],
                         }
                     }
                 }

@@ -2011,7 +2011,7 @@ fn confirm_binds_the_displayed_generation() {
                 outcome,
                 Outcome::Owner {
                     code: 1,
-                    lines: vec![NOT_PAIRED.to_string(), MISMATCH_BODY.to_string()],
+                    lines: vec![NOT_PAIRED.to_string(), CONFIRM_MISMATCH_BODY.to_string()],
                 }
             );
             assert!(!roots.config_root().join(CREDENTIALS_FILENAME).exists());
@@ -2467,7 +2467,7 @@ fn stored_id_that_is_not_its_cas_is_held_and_asked_with_the_cas_mark() {
             outcome,
             Outcome::Owner {
                 code: 1,
-                lines: vec![NOT_PAIRED.to_string(), MARK_MISMATCH.to_string()],
+                lines: vec![NOT_PAIRED.to_string(), CONFIRM_MARK_MISMATCH.to_string()],
             }
         );
         assert!(!roots.config_root().join(CREDENTIALS_FILENAME).exists());
@@ -3135,7 +3135,7 @@ fn retire_through_setup_and_confirm() {
                     outcome,
                     Outcome::Owner {
                         code: 1,
-                        lines: vec![NOT_PAIRED.to_string(), MISMATCH_BODY.to_string()],
+                        lines: vec![NOT_PAIRED.to_string(), CONFIRM_MISMATCH_BODY.to_string()],
                     }
                 );
                 assert!(!ctx.roots.config_root().join(CREDENTIALS_FILENAME).exists());
@@ -3170,7 +3170,7 @@ fn retire_through_setup_and_confirm() {
                     outcome,
                     Outcome::Owner {
                         code: 1,
-                        lines: vec![NOT_PAIRED.to_string(), MARK_MISMATCH.to_string()],
+                        lines: vec![NOT_PAIRED.to_string(), CONFIRM_MARK_MISMATCH.to_string()],
                     }
                 );
                 assert!(!ctx.roots.config_root().join(CREDENTIALS_FILENAME).exists());
@@ -3246,7 +3246,7 @@ fn retire_through_setup_and_confirm() {
                     outcome,
                     Outcome::Owner {
                         code: 1,
-                        lines: vec![NOT_PAIRED.to_string(), MISMATCH_BODY.to_string()],
+                        lines: vec![NOT_PAIRED.to_string(), CONFIRM_MISMATCH_BODY.to_string()],
                     }
                 );
                 assert!(!ctx.roots.config_root().join(CREDENTIALS_FILENAME).exists());
