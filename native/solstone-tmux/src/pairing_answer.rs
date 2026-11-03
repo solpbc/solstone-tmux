@@ -531,7 +531,11 @@ pub fn is_status_held(config_root: &Path) -> bool {
 pub fn journal_status_row(config_root: &Path) -> String {
     let unavailable = || MARK_UNAVAILABLE.trim_start().to_owned();
     if is_status_held(config_root) {
-        return JOURNAL_ROW_WAITING.to_owned();
+        // A held pairing with no readable CA has no mark to wait on.
+        return match load_credential(config_root) {
+            Ok(Some(credential)) if pinned_ca_jid(&credential).is_none() => unavailable(),
+            _ => JOURNAL_ROW_WAITING.to_owned(),
+        };
     }
     match load_credential(config_root) {
         Ok(None) => JOURNAL_ROW_NOT_PAIRED.to_owned(),

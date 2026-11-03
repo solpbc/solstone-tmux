@@ -1139,7 +1139,7 @@ fn journal_status_row_follows_the_answer() {
     credential.instance_id = "test-pairing-instance".to_owned();
     credential.ca_chain_pem = Vec::new();
     persist_credential(&root, &credential).expect("persist");
-    assert_eq!(journal_status_row(&root), JOURNAL_ROW_WAITING);
+    assert_eq!(journal_status_row(&root), MARK_UNAVAILABLE.trim_start());
     record_confirmation(&root, &credential, &generation).expect("go on");
     assert_eq!(journal_status_row(&root), MARK_UNAVAILABLE.trim_start());
 }
@@ -2536,6 +2536,11 @@ fn stored_pairing_with_no_readable_ca_is_held_and_shows_no_mark_from_its_id() {
             assert_ne!(
                 journal_status_row(&roots.config_root()),
                 owner_row,
+                "{name}"
+            );
+            assert_eq!(
+                journal_status_row(&roots.config_root()),
+                MARK_UNAVAILABLE.trim_start(),
                 "{name}"
             );
 
