@@ -33,9 +33,9 @@ pub const PAIRED: &str = "paired.";
 pub const NOT_PAIRED: &str = "not paired.";
 // `confirm` can end a pairing that was already sending, so these say nothing about
 // what reached that journal.
-pub const CONFIRM_MISMATCH_BODY: &str = "you said this mark doesn't match the one your journal shows, so this computer isn't paired. you may have pasted the wrong link, or something isn't right. get a fresh pairing link from your journal and run setup again, or email support@solstone.app and we'll help.";
-pub const CONFIRM_CANCEL: &str = "pairing cancelled. get a fresh pairing link from your journal and run setup again when you're ready.";
-pub const CONFIRM_MARK_MISMATCH: &str = "the mark words you gave don't match the journal's mark, so this computer isn't paired. check the words, get a fresh pairing link from your journal and run setup again.";
+pub const CONFIRM_MISMATCH_BODY: &str = "you said this mark doesn't match the one your journal shows, so this computer isn't paired. you may have pasted the wrong link, or something isn't right. get a fresh pairing link from your journal, run solstone-tmux uninstall-service, run setup, then run solstone-tmux install-service, or email support@solstone.app and we'll help.";
+pub const CONFIRM_CANCEL: &str = "pairing cancelled. when you're ready, get a fresh pairing link from your journal, run solstone-tmux uninstall-service, run setup, then run solstone-tmux install-service.";
+pub const CONFIRM_MARK_MISMATCH: &str = "the mark words you gave don't match the journal's mark, so this computer isn't paired. check the words, get a fresh pairing link from your journal, run solstone-tmux uninstall-service, run setup, then run solstone-tmux install-service.";
 pub const MISMATCH_BODY: &str = "you said this mark doesn't match the one your journal shows, so this computer isn't paired, and nothing it has kept went to that journal through this link. you may have pasted the wrong link, or something isn't right. get a fresh pairing link from your journal and run setup again, or email support@solstone.app and we'll help.";
 pub const CANCEL: &str = "pairing cancelled. nothing this computer has kept went to that journal through this link. get a fresh pairing link from your journal and run setup again when you're ready.";
 pub const HELD: &str = "waiting for you to confirm your journal's mark. nothing waiting goes into your journal until you do.";
