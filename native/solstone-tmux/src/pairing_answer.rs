@@ -45,6 +45,7 @@ pub const MARK_USAGE: &str =
 pub const MARK_MISMATCH: &str = "the mark words you gave don't match the journal's mark, so this computer isn't paired, and nothing it has kept went to that journal through this link. check the words, get a fresh pairing link from your journal and run setup again.";
 pub const MARK_UNVERIFIABLE_SETUP: &str = "this computer couldn't work out the journal's mark, so the words you gave can't be matched. this computer isn't paired, and nothing it has kept went to that journal through this link. get a fresh pairing link from your journal and run setup in a terminal to decide for yourself.";
 pub const MARK_UNVERIFIABLE_CONFIRM: &str = "this computer couldn't work out the journal's mark, so the words you gave can't be matched. waiting for you to confirm your journal's mark. nothing waiting goes into your journal until you do. run solstone-tmux confirm in a terminal to decide for yourself.";
+pub const MARK_WORDS_WRONG: &str = "the mark words you gave don't match the journal's mark.";
 pub const PAIRING_KEPT: &str = "not changed. your current pairing stays in use. nothing this computer has kept went to that journal through this link.";
 pub const PAIRING_KEPT_STOPPED: &str = "pairing cancelled. your current pairing stays in use.";
 pub const LINK_PROMPT: &str = "paste the pairing link from your journal, then press enter:\n";

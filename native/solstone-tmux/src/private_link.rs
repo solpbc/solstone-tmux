@@ -513,11 +513,12 @@ where
                     let replacing = existing_pairing_confirmed(&config_root).await;
                     retire_credential(&credential, &config_root).await;
                     if replacing {
-                        let mut lines = Vec::new();
-                        if !is_identified {
-                            lines.push(COULDNT_VERIFY.to_owned());
-                        }
-                        lines.push(PAIRING_KEPT.to_owned());
+                        let first = if is_identified {
+                            MARK_WORDS_WRONG
+                        } else {
+                            COULDNT_VERIFY
+                        };
+                        let lines = vec![first.to_owned(), PAIRING_KEPT.to_owned()];
                         Outcome::Owner { code: 1, lines }
                     } else if !is_identified {
                         Outcome::Owner {

@@ -11,9 +11,7 @@ use std::sync::Arc;
 use serde_json::Value;
 use solstone_tmux::cli::MarkOption;
 use solstone_tmux::config::system_hostname;
-use solstone_tmux::pairing_answer::{
-    ASK_UNAVAILABLE, BODY_UNAVAILABLE, COULDNT_VERIFY, MARK_UNAVAILABLE, PAIRED, STEP,
-};
+use solstone_tmux::pairing_answer::PAIRED;
 use solstone_tmux::paths::{PlatformKind, resolve_config_root, resolve_data_root};
 use solstone_tmux::private_link::{
     CREDENTIALS_FILENAME, format_spoken_mark, load_credential, pairing_ceremony_identity, setup,
@@ -120,7 +118,7 @@ fn grammar_invalid_hostname_omits_client_label_on_the_wire() {
             &environment,
             Cursor::new(peer.pair_link().to_owned()),
             oversize,
-            Some(TestTerminal::new("continue\n")),
+            Some(TestTerminal::new("yes\n")),
             MarkOption::Absent,
         )
         .await;
@@ -150,7 +148,7 @@ fn hostname_lookup_failure_omits_client_label_on_the_wire() {
             &environment,
             Cursor::new(peer.pair_link().to_owned()),
             Err("uname failed"),
-            Some(TestTerminal::new("continue\n")),
+            Some(TestTerminal::new("yes\n")),
             MarkOption::Absent,
         )
         .await;
@@ -186,7 +184,7 @@ fn pairing_rejection_preserves_existing_credential_and_allows_retry() {
             PlatformKind::Linux,
             &environment,
             Cursor::new(peer.pair_link().to_owned()),
-            Some(TestTerminal::new("continue\n")),
+            Some(TestTerminal::new("yes\n")),
             MarkOption::Absent,
         )
         .await;
@@ -203,7 +201,7 @@ fn pairing_rejection_preserves_existing_credential_and_allows_retry() {
             PlatformKind::Linux,
             &environment,
             Cursor::new(peer.pair_link().to_owned()),
-            Some(TestTerminal::new("continue\n")),
+            Some(TestTerminal::new("yes\n")),
             MarkOption::Absent,
         )
         .await;
@@ -237,7 +235,7 @@ async fn capture_direct(platform: PlatformKind) -> PairRequest {
         platform,
         &environment,
         Cursor::new(peer.pair_link().to_owned()),
-        Some(TestTerminal::new("continue\n")),
+        Some(TestTerminal::new("yes\n")),
         MarkOption::Absent,
     )
     .await;
@@ -334,17 +332,42 @@ fn relay_pairing_returns_the_paired_journals_spoken_mark() {
 }
 
 #[test]
-fn direct_pairing_without_a_well_formed_journal_id_still_succeeds_with_no_spoken_mark() {
+fn direct_pairing_refuses_a_peer_claiming_another_journals_id_and_pairs_a_genuine_one() {
     runtime().block_on(async {
-        let peer = DirectPairingPeer::start().await;
-        let temporary = TestDirectory::new("pairing-setup-direct-no-spoken-mark");
+        let genuine = DirectPairingPeer::start().await;
+        let forger = DirectPairingPeer::start().await;
+        forger.enqueue_claim_of(genuine.jid());
+        let temporary = TestDirectory::new("pairing-setup-direct-forged-id");
         let (environment, _, config_root) = platform_roots(temporary.path(), PlatformKind::Linux);
-        let term = TestTerminal::new("continue\n");
+
+        // The pin holds, since the link names the forger's own CA. The claimed
+        // id is what gives it away, before the owner is asked anything.
+        let term = TestTerminal::new("yes\n");
         let output_ref = term.output.clone();
         let outcome = setup(
             PlatformKind::Linux,
             &environment,
-            Cursor::new(peer.pair_link().to_owned()),
+            Cursor::new(forger.pair_link().to_owned()),
+            Some(term),
+            MarkOption::Absent,
+        )
+        .await;
+        assert_eq!(
+            outcome,
+            solstone_tmux::pairing_answer::Outcome::Diagnostic(
+                solstone_tmux::health::DiagnosticCode::PairingFailed
+            )
+        );
+        assert_eq!(forger.captured_bodies().len(), 1);
+        assert!(output_ref.lock().expect("lock").is_empty());
+        assert!(!config_root.join(CREDENTIALS_FILENAME).exists());
+
+        let term = TestTerminal::new("yes\n");
+        let output_ref = term.output.clone();
+        let outcome = setup(
+            PlatformKind::Linux,
+            &environment,
+            Cursor::new(genuine.pair_link().to_owned()),
             Some(term),
             MarkOption::Absent,
         )
@@ -356,18 +379,15 @@ fn direct_pairing_without_a_well_formed_journal_id_still_succeeds_with_no_spoken
             }
             other => panic!("expected Owner outcome 0, got {other:?}"),
         }
+        let persisted = load_credential(&config_root)
+            .expect("load credential")
+            .expect("credential exists");
+        assert_eq!(persisted.instance_id, genuine.jid());
+        let mark = format_spoken_mark(genuine.jid()).expect("spoken mark");
         let output_str = String::from_utf8_lossy(&output_ref.lock().expect("lock")).into_owned();
-        let step_pos = output_str.find(STEP).expect("step");
-        let mark_pos = output_str.find(MARK_UNAVAILABLE).expect("mark unavailable");
-        let verify_pos = output_str.find(COULDNT_VERIFY).expect("couldn't verify");
-        let body_pos = output_str.find(BODY_UNAVAILABLE).expect("body unavailable");
-        let ask_pos = output_str.find(ASK_UNAVAILABLE).expect("ask unavailable");
-        assert!(step_pos < mark_pos);
-        assert!(mark_pos < verify_pos);
-        assert!(verify_pos < body_pos);
-        assert!(body_pos < ask_pos);
-        assert!(config_root.join(CREDENTIALS_FILENAME).is_file());
-        peer.shutdown().await;
+        assert!(output_str.contains(&mark));
+        forger.shutdown().await;
+        genuine.shutdown().await;
     });
 }
 

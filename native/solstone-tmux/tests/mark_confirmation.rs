@@ -921,7 +921,7 @@ fn setup_signal_at_the_prompt() {
             .write_all(peer.pair_link().as_bytes())
             .expect("write link");
 
-        read_pty_until_pattern(&master, &mut child, ASK_UNAVAILABLE, Duration::from_secs(5));
+        read_pty_until_pattern(&master, &mut child, ASK_IDENTIFIED, Duration::from_secs(5));
 
         let pid = rustix::process::Pid::from_raw(child.id() as i32).expect("pid");
         rustix::process::kill_process(pid, sig).expect("kill");
@@ -1018,12 +1018,12 @@ fn setup_asks_again_after_an_unrecognised_answer_at_the_terminal() {
         .write_all(peer.pair_link().as_bytes())
         .expect("write link");
 
-    read_pty_until_pattern(&master, &mut child, ASK_UNAVAILABLE, Duration::from_secs(5));
+    read_pty_until_pattern(&master, &mut child, ASK_IDENTIFIED, Duration::from_secs(5));
     (&master)
         .write_all(b"maybe\n")
         .expect("type an unrecognised answer");
-    read_pty_until_pattern(&master, &mut child, ASK_UNAVAILABLE, Duration::from_secs(5));
-    (&master).write_all(b"continue\n").expect("type continue");
+    read_pty_until_pattern(&master, &mut child, ASK_IDENTIFIED, Duration::from_secs(5));
+    (&master).write_all(b"yes\n").expect("type yes");
 
     let start = Instant::now();
     let status = loop {
@@ -1036,7 +1036,7 @@ fn setup_asks_again_after_an_unrecognised_answer_at_the_terminal() {
         }
         std::thread::sleep(Duration::from_millis(20));
     };
-    assert_eq!(status.code(), Some(0), "continue after a re-ask pairs");
+    assert_eq!(status.code(), Some(0), "an answer after a re-ask pairs");
     let cred = load_credential(&roots.config_root())
         .expect("load cred")
         .expect("cred exists");
@@ -1079,8 +1079,8 @@ fn setup_at_a_terminal_asks_for_the_link_and_goes_on_at_enter() {
     (&master)
         .write_all(format!("{}\n", peer.pair_link()).as_bytes())
         .expect("paste the link");
-    read_pty_until_pattern(&master, &mut child, ASK_UNAVAILABLE, Duration::from_secs(5));
-    (&master).write_all(b"continue\n").expect("type continue");
+    read_pty_until_pattern(&master, &mut child, ASK_IDENTIFIED, Duration::from_secs(5));
+    (&master).write_all(b"yes\n").expect("type yes");
 
     let start = Instant::now();
     let status = loop {
@@ -1199,7 +1199,7 @@ fn setup_asks_on_the_controlling_terminal() {
         let start = Instant::now();
         loop {
             let shown = screen.lock().expect("screen").clone();
-            if shown.matches(ASK_UNAVAILABLE).count() >= count {
+            if shown.matches(ASK_IDENTIFIED).count() >= count {
                 return;
             }
             if start.elapsed() > Duration::from_secs(10) {
@@ -1215,7 +1215,7 @@ fn setup_asks_on_the_controlling_terminal() {
     keys.write_all(b"maybe\n")
         .expect("type an unrecognised answer");
     wait_for_asks(&mut child, 2);
-    keys.write_all(b"continue\n").expect("type continue");
+    keys.write_all(b"yes\n").expect("type yes");
 
     let start = Instant::now();
     let status = loop {
@@ -1646,7 +1646,7 @@ fn repair_keeps_confirmed_credential() {
                 outcome,
                 Outcome::Owner {
                     code: 1,
-                    lines: vec![PAIRING_KEPT.to_string()],
+                    lines: vec![MARK_WORDS_WRONG.to_string(), PAIRING_KEPT.to_string()],
                 }
             );
             assert_eq!(
@@ -1927,7 +1927,7 @@ fn repair_keeps_confirmed_credential() {
             .write_all(peer.pair_link().as_bytes())
             .expect("write link");
 
-        read_pty_until_pattern(&master, &mut child, ASK_UNAVAILABLE, Duration::from_secs(5));
+        read_pty_until_pattern(&master, &mut child, ASK_IDENTIFIED, Duration::from_secs(5));
 
         let pid = rustix::process::Pid::from_raw(child.id() as i32).expect("pid");
         rustix::process::kill_process(pid, sig).expect("kill");

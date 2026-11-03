@@ -30,6 +30,7 @@ const ENROLL_TOKEN: &str = "e30.eyJpYXQiOjEwMCwiZXhwIjo5OTk5OTk5OTk5fQ.sig";
 enum PairOutcome {
     Success,
     Reject { status: u16, body: Vec<u8> },
+    ClaimJournal { jid: String },
 }
 
 struct PairingCa {
@@ -128,11 +129,7 @@ fn sign_pair_response(ca: &PairingCa, request: &PairRequest, relay: bool) -> Pai
     PairResponse {
         client_cert: client_cert.pem(),
         ca_chain: vec![ca.cert.pem()],
-        instance_id: if relay {
-            ca.jid()
-        } else {
-            "test-pairing-instance".to_owned()
-        },
+        instance_id: ca.jid(),
         home_label: "Home".to_owned(),
         fingerprint: format!("sha256:{}", spl_core::ca::sha256_hex(client_cert.der())),
         home_attestation: relay.then(|| "attestation".to_owned()),
@@ -248,6 +245,20 @@ where
                                     .expect("serialize pairing response");
                             http_pair_response(200, &payload)
                         }
+                        PairOutcome::ClaimJournal { jid } => {
+                            let pair_request: PairRequest =
+                                serde_json::from_slice(body).expect("parse pairing request");
+                            let mut response = sign_pair_response(ca, &pair_request, relay);
+                            let spec = spl_core::mark::mark_from_jid(&jid)
+                                .expect("claimed journal's mark")
+                                .to_render_spec();
+                            response.home_label =
+                                format!("{}\u{b7}{}", spec.words[0], spec.words[1]);
+                            response.instance_id = jid;
+                            let payload =
+                                serde_json::to_vec(&response).expect("serialize pairing response");
+                            http_pair_response(200, &payload)
+                        }
                     };
                     write_frame(
                         &mut stream,
@@ -274,6 +285,7 @@ where
 }
 
 pub struct DirectPairingPeer {
+    jid: String,
     pair_link: String,
     state: Arc<CaptureState>,
     task: JoinHandle<()>,
@@ -286,6 +298,7 @@ impl DirectPairingPeer {
             .expect("bind direct pairing peer");
         let port = listener.local_addr().expect("direct pairing port").port();
         let ca = Arc::new(PairingCa::new());
+        let jid = ca.jid();
         let pair_link = direct_v05_link(port, &ca.cert_der_pin());
         let state = CaptureState::new();
         let acceptor = certless_acceptor(&ca);
@@ -302,6 +315,7 @@ impl DirectPairingPeer {
             }
         });
         Self {
+            jid,
             pair_link,
             state,
             task,
@@ -321,6 +335,19 @@ impl DirectPairingPeer {
 
     pub fn enqueue_success(&self) {
         self.state.push_outcome(PairOutcome::Success);
+    }
+
+    /// Answer the next pairing as another journal: this peer's own CA and pin,
+    /// that journal's id and mark words.
+    pub fn enqueue_claim_of(&self, jid: &str) {
+        self.state.push_outcome(PairOutcome::ClaimJournal {
+            jid: jid.to_owned(),
+        });
+    }
+
+    /// The id this peer's CA derives, which is what it answers with by default.
+    pub fn jid(&self) -> &str {
+        &self.jid
     }
 
     pub fn captured_body(&self) -> Vec<u8> {
