@@ -6,6 +6,10 @@ Format adapted from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- setup now asks for the pairing link at a terminal, and goes on when you press enter.
+
 ## [2.0.24] - 2026-11-02
 
 ### Added

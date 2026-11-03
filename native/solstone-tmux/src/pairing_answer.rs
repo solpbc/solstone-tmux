@@ -45,6 +45,11 @@ pub const MARK_USAGE: &str =
 pub const MARK_MISMATCH: &str = "the mark words you gave don't match the journal's mark, so this computer isn't paired, and nothing it has kept went to that journal through this link. check the words, get a fresh pairing link from your journal and run setup again.";
 pub const MARK_UNVERIFIABLE_SETUP: &str = "this computer couldn't work out the journal's mark, so the words you gave can't be matched. this computer isn't paired, and nothing it has kept went to that journal through this link. get a fresh pairing link from your journal and run setup in a terminal to decide for yourself.";
 pub const MARK_UNVERIFIABLE_CONFIRM: &str = "this computer couldn't work out the journal's mark, so the words you gave can't be matched. waiting for you to confirm your journal's mark. nothing waiting goes into your journal until you do. run solstone-tmux confirm in a terminal to decide for yourself.";
+pub const PAIRING_KEPT: &str = "not changed. your current pairing stays in use. nothing this computer has kept went to that journal through this link.";
+pub const PAIRING_KEPT_STOPPED: &str = "pairing cancelled. your current pairing stays in use.";
+pub const LINK_PROMPT: &str = "paste the pairing link from your journal, then press enter:\n";
+pub const JOURNAL_ROW_NOT_PAIRED: &str = "journal: not paired";
+pub const JOURNAL_ROW_WAITING: &str = "journal: your journal";
 pub const STATUS_HELD_PAIRING: &str = "pairing: waiting for you to confirm your journal's mark";
 pub const STATUS_HELD_CONFIRM: &str = "confirm with: solstone-tmux confirm";
 
@@ -456,6 +461,59 @@ pub fn is_status_held(config_root: &Path) -> bool {
         Ok(Some(record)) => record.confirmed != expected_generation,
         Ok(None) => false, // status exception: absent answer file is not held
         Err(_) => true,
+    }
+}
+
+/// The `journal:` row of `status`: the mark's two words once the owner has
+/// confirmed it, never before.
+pub fn journal_status_row(config_root: &Path) -> String {
+    let unavailable = || MARK_UNAVAILABLE.trim_start().to_owned();
+    if is_status_held(config_root) {
+        return JOURNAL_ROW_WAITING.to_owned();
+    }
+    match load_credential(config_root) {
+        Ok(None) => JOURNAL_ROW_NOT_PAIRED.to_owned(),
+        Ok(Some(credential)) => spl_core::mark::mark_from_jid(&credential.instance_id)
+            .map(|mark| {
+                let spec = mark.to_render_spec();
+                format!("journal: {}·{}", spec.words[0], spec.words[1])
+            })
+            .unwrap_or_else(|_| unavailable()),
+        Err(_) => unavailable(),
+    }
+}
+
+/// Stdin at a terminal never reaches end of input on its own, so the pairing
+/// link ends at the first newline, and the owner is asked for it just before
+/// the first read. Piped input keeps reading to end of input and skips this.
+pub struct TerminalLinkInput<R, W> {
+    input: R,
+    prompt_to: Option<W>,
+    finished: bool,
+}
+
+impl<R: std::io::Read, W: std::io::Write> TerminalLinkInput<R, W> {
+    pub fn new(input: R, prompt_to: Option<W>) -> Self {
+        Self {
+            input,
+            prompt_to,
+            finished: false,
+        }
+    }
+}
+
+impl<R: std::io::Read, W: std::io::Write> std::io::Read for TerminalLinkInput<R, W> {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        if self.finished || buffer.is_empty() {
+            return Ok(0);
+        }
+        if let Some(mut terminal) = self.prompt_to.take() {
+            let _ = terminal.write_all(LINK_PROMPT.as_bytes());
+            let _ = terminal.flush();
+        }
+        let read = self.input.read(&mut buffer[..1])?;
+        self.finished = read == 0 || buffer[0] == b'\n';
+        Ok(read)
     }
 }
 

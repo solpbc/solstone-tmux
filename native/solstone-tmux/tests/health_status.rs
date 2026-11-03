@@ -330,17 +330,21 @@ fn status_is_read_only_when_native_state_is_absent() {
     assert_eq!(output.status.code(), Some(4));
     let stdout = String::from_utf8(output.stdout).expect("status stdout");
     let lines = stdout.lines().collect::<Vec<_>>();
-    assert_eq!(lines.len(), 7);
+    assert_eq!(lines.len(), 8);
     assert_eq!(lines[0], "service: absent");
     assert_eq!(lines[1], "sync-health: unknown");
-    assert_eq!(lines[2], "journal-version: unknown");
-    assert!(lines[3].starts_with("tmux app "));
-    assert_eq!(lines[4], "journal unknown");
-    assert_eq!(lines[5], "get help: https://support.solstone.app");
-    assert!(lines[6].starts_with(
+    assert_eq!(
+        lines[2],
+        solstone_tmux::pairing_answer::JOURNAL_ROW_NOT_PAIRED
+    );
+    assert_eq!(lines[3], "journal-version: unknown");
+    assert!(lines[4].starts_with("tmux app "));
+    assert_eq!(lines[5], "journal unknown");
+    assert_eq!(lines[6], "get help: https://support.solstone.app");
+    assert!(lines[7].starts_with(
         "report a problem: https://support.solstone.app/#report=v1&app=solstone+for+tmux"
     ));
-    assert!(lines[6].contains("&state=unknown&about=tmux+app+"));
+    assert!(lines[7].contains("&state=unknown&about=tmux+app+"));
     assert!(!roots.data_root().exists());
     assert!(!roots.data_root().join(LOCK_FILENAME).exists());
     assert!(!roots.data_root().join(HEALTH_FILENAME).exists());

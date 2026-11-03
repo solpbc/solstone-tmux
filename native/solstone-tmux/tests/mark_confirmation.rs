@@ -1045,6 +1045,105 @@ fn setup_asks_again_after_an_unrecognised_answer_at_the_terminal() {
     rt.block_on(async { peer.shutdown().await });
 }
 
+// Stdin is the terminal and stays open, so nothing here ever sends end of input.
+#[test]
+fn setup_at_a_terminal_asks_for_the_link_and_goes_on_at_enter() {
+    let rt = runtime();
+    let peer = rt.block_on(async { DirectPairingPeer::start().await });
+    let (master, slave_path) = open_pty();
+    let temp = TestDirectory::new("setup-terminal-stdin");
+    let roots = IsolatedRoots::new(temp.path());
+    let slave = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&slave_path)
+        .expect("open terminal for stdin");
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_solstone-tmux"))
+        .arg("setup")
+        .env_clear()
+        .envs(roots.entries().iter().cloned())
+        .env("SOLSTONE_TMUX_TERMINAL", &slave_path)
+        .stdin(Stdio::from(slave))
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn setup");
+
+    read_pty_until_pattern(
+        &master,
+        &mut child,
+        LINK_PROMPT.trim_end(),
+        Duration::from_secs(5),
+    );
+    (&master)
+        .write_all(format!("{}\n", peer.pair_link()).as_bytes())
+        .expect("paste the link");
+    read_pty_until_pattern(&master, &mut child, ASK_UNAVAILABLE, Duration::from_secs(5));
+    (&master).write_all(b"continue\n").expect("type continue");
+
+    let start = Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("try wait") {
+            break status;
+        }
+        if start.elapsed() > Duration::from_secs(10) {
+            let _ = child.kill();
+            panic!("setup did not finish within 10s");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert_eq!(status.code(), Some(0));
+    let cred = load_credential(&roots.config_root())
+        .expect("load cred")
+        .expect("cred exists");
+    assert!(is_pairing_confirmed(&roots.config_root(), &cred));
+    drop(master);
+    rt.block_on(async { peer.shutdown().await });
+}
+
+#[test]
+fn terminal_link_input_stops_at_the_first_newline_and_prompts_once() {
+    let mut typed = Cursor::new(b"link-one\nstill-typing".to_vec());
+    let mut prompted = Vec::new();
+    let mut line = Vec::new();
+    TerminalLinkInput::new(&mut typed, Some(&mut prompted))
+        .read_to_end(&mut line)
+        .expect("read");
+    assert_eq!(line, b"link-one\n");
+    assert_eq!(typed.position(), 9, "reads nothing past the newline");
+    assert_eq!(prompted, LINK_PROMPT.as_bytes());
+}
+
+#[test]
+fn journal_status_row_follows_the_answer() {
+    let pl_peer = runtime().block_on(async { PrivateLinkPeer::start().await });
+    let mut credential = pl_peer.credential();
+    credential.instance_id = test_jid();
+    runtime().block_on(async { pl_peer.shutdown().await });
+    let generation = hex_encode(&compute_pairing_generation(&credential.client_cert_pem));
+
+    let temp = TestDirectory::new("status-journal-row");
+    let root = temp.path().join("config");
+    ensure_private_directory(&root).expect("config");
+    assert_eq!(journal_status_row(&root), JOURNAL_ROW_NOT_PAIRED);
+
+    persist_credential(&root, &credential).expect("persist");
+    write_answer_file(&root, "").expect("no answer yet");
+    assert_eq!(journal_status_row(&root), JOURNAL_ROW_WAITING);
+
+    write_answer_file(&root, &generation).expect("confirm");
+    let spec = spl_core::mark::mark_from_jid(&credential.instance_id)
+        .expect("mark")
+        .to_render_spec();
+    let row = journal_status_row(&root);
+    assert!(row.contains(&spec.words[0]) && row.contains(&spec.words[1]));
+
+    credential.instance_id = "test-pairing-instance".to_owned();
+    persist_credential(&root, &credential).expect("persist");
+    assert_eq!(journal_status_row(&root), MARK_UNAVAILABLE.trim_start());
+}
+
 /// Starts `shell_command` under `/bin/sh` with a new pseudo-terminal as its
 /// controlling terminal, the way an owner's shell runs it, using the system
 /// `script` tool. Its stdin is typed into that terminal and its stdout is what
@@ -1456,7 +1555,7 @@ fn repair_keeps_confirmed_credential() {
                 outcome,
                 Outcome::Owner {
                     code: 1,
-                    lines: vec![NOT_PAIRED.to_string(), MISMATCH_BODY.to_string()],
+                    lines: vec![PAIRING_KEPT.to_string()],
                 }
             );
             assert_eq!(
@@ -1502,7 +1601,7 @@ fn repair_keeps_confirmed_credential() {
                 outcome,
                 Outcome::Owner {
                     code: 1,
-                    lines: vec![CANCEL.to_string()],
+                    lines: vec![PAIRING_KEPT_STOPPED.to_string()],
                 }
             );
             assert_eq!(
@@ -1547,7 +1646,7 @@ fn repair_keeps_confirmed_credential() {
                 outcome,
                 Outcome::Owner {
                     code: 1,
-                    lines: vec![NOT_PAIRED.to_string(), MARK_MISMATCH.to_string()],
+                    lines: vec![PAIRING_KEPT.to_string()],
                 }
             );
             assert_eq!(
@@ -1592,7 +1691,7 @@ fn repair_keeps_confirmed_credential() {
                 outcome,
                 Outcome::Owner {
                     code: 1,
-                    lines: vec![CANCEL.to_string()],
+                    lines: vec![PAIRING_KEPT_STOPPED.to_string()],
                 }
             );
             assert_eq!(
@@ -1672,7 +1771,7 @@ fn repair_keeps_confirmed_credential() {
                 outcome,
                 Outcome::Owner {
                     code: 1,
-                    lines: vec![CANCEL.to_string()],
+                    lines: vec![PAIRING_KEPT_STOPPED.to_string()],
                 }
             );
             assert_eq!(
@@ -1718,7 +1817,7 @@ fn repair_keeps_confirmed_credential() {
                 outcome,
                 Outcome::Owner {
                     code: 1,
-                    lines: vec![NOT_PAIRED.to_string(), MISMATCH_BODY.to_string()],
+                    lines: vec![PAIRING_KEPT.to_string()],
                 }
             );
             assert_eq!(
@@ -2702,7 +2801,7 @@ fn retire_through_setup_and_confirm() {
                     outcome,
                     Outcome::Owner {
                         code: 1,
-                        lines: vec![NOT_PAIRED.to_string(), MISMATCH_BODY.to_string()],
+                        lines: vec![PAIRING_KEPT.to_string()],
                     }
                 );
                 assert_eq!(

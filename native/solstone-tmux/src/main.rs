@@ -81,10 +81,18 @@ fn run() -> Result<i32, String> {
         cli::CliCommand::Setup(mark) => {
             let runtime = runtime()?;
             let stdin = std::io::stdin();
+            let input: Box<dyn std::io::Read> = if std::io::IsTerminal::is_terminal(&stdin) {
+                Box::new(solstone_tmux::pairing_answer::TerminalLinkInput::new(
+                    stdin.lock(),
+                    solstone_tmux::pairing_answer::open_owner_terminal(),
+                ))
+            } else {
+                Box::new(stdin.lock())
+            };
             let outcome = runtime.block_on(private_link::setup(
                 platform,
                 &environment,
-                stdin.lock(),
+                input,
                 solstone_tmux::pairing_answer::TerminalSeat::Production::<std::io::Empty>,
                 mark,
             ));
@@ -163,6 +171,16 @@ fn run() -> Result<i32, String> {
                             text.push_str(solstone_tmux::pairing_answer::STATUS_HELD_CONFIRM);
                             text.push('\n');
                         }
+                        let journal_row = config_root_opt.as_ref().map_or_else(
+                            || {
+                                solstone_tmux::pairing_answer::MARK_UNAVAILABLE
+                                    .trim_start()
+                                    .to_owned()
+                            },
+                            |root| solstone_tmux::pairing_answer::journal_status_row(root),
+                        );
+                        text.push_str(&journal_row);
+                        text.push('\n');
                         text.push_str(&format!("journal-version: {}\n", journal_version.render()));
                         let data_root_opt = resolve_data_root(platform, &environment).ok();
                         let block = solstone_tmux::about::AboutBlock::snapshot(

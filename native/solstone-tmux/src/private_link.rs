@@ -367,6 +367,17 @@ where
     .await
 }
 
+async fn existing_pairing_confirmed(config_root: &Path) -> bool {
+    use crate::pairing_answer::{acquire_answer_lock, is_pairing_confirmed};
+    let Ok(_answer_lock) = acquire_answer_lock(config_root).await else {
+        return false;
+    };
+    match load_credential(config_root) {
+        Ok(Some(existing)) => is_pairing_confirmed(config_root, &existing),
+        _ => false,
+    }
+}
+
 pub async fn setup_with_pairer<R, T, E, F, Fut>(
     platform: PlatformKind,
     environment: &dyn Environment,
@@ -499,8 +510,16 @@ where
                     }
                 }
                 MarkMatch::Mismatch => {
+                    let replacing = existing_pairing_confirmed(&config_root).await;
                     retire_credential(&credential, &config_root).await;
-                    if !is_identified {
+                    if replacing {
+                        let mut lines = Vec::new();
+                        if !is_identified {
+                            lines.push(COULDNT_VERIFY.to_owned());
+                        }
+                        lines.push(PAIRING_KEPT.to_owned());
+                        Outcome::Owner { code: 1, lines }
+                    } else if !is_identified {
                         Outcome::Owner {
                             code: 1,
                             lines: vec![
@@ -552,8 +571,21 @@ where
                     }
                 }
                 TerminalDecision::No => {
+                    let replacing = existing_pairing_confirmed(&config_root).await;
                     retire_credential(&credential, &config_root).await;
-                    if is_identified {
+                    if replacing {
+                        Outcome::Owner {
+                            code: 1,
+                            lines: vec![
+                                if is_identified {
+                                    PAIRING_KEPT
+                                } else {
+                                    PAIRING_KEPT_STOPPED
+                                }
+                                .to_owned(),
+                            ],
+                        }
+                    } else if is_identified {
                         Outcome::Owner {
                             code: 1,
                             lines: vec![NOT_PAIRED.to_owned(), MISMATCH_BODY.to_owned()],
@@ -579,7 +611,7 @@ where
                         retire_credential(&credential, &config_root).await;
                         Outcome::Owner {
                             code: 1,
-                            lines: vec![CANCEL.to_owned()],
+                            lines: vec![PAIRING_KEPT_STOPPED.to_owned()],
                         }
                     } else {
                         let persist_res = persist_credential(&config_root, &credential);
