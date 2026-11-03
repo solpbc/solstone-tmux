@@ -473,13 +473,13 @@ where
         Err(code) => return Outcome::Diagnostic(code),
     };
 
-    let spoken_mark = format_spoken_mark(&credential.instance_id);
-    let is_identified = spoken_mark.is_some();
+    let shown_jid = mark_jid(&credential);
+    let is_identified = format_spoken_mark(&shown_jid).is_some();
     let generation_hex = hex_encode(&compute_pairing_generation(&credential.client_cert_pem));
 
     match mark {
         MarkOption::Value(val) => {
-            let eval = evaluate_mark_words(&val, &credential.instance_id);
+            let eval = evaluate_mark_words(&val, &shown_jid);
             match eval {
                 MarkMatch::Usage => {
                     retire_credential(&credential, &config_root).await;
@@ -495,7 +495,7 @@ where
                         return Outcome::Diagnostic(code);
                     }
                     crate::journal_version::clear_cached_version(&config_root);
-                    let write_ans = write_answer_file(&config_root, &generation_hex);
+                    let write_ans = record_confirmation(&config_root, &credential, &generation_hex);
                     drop(answer_lock);
                     if write_ans.is_err() {
                         Outcome::Owner {
@@ -540,10 +540,10 @@ where
         MarkOption::Absent => {
             let decision = match terminal_reader.take().unwrap() {
                 TerminalQuestionReader::Production(file) => {
-                    ask_terminal_question_production(file, &credential.instance_id).await
+                    ask_terminal_question_production(file, &shown_jid).await
                 }
                 TerminalQuestionReader::Scripted(mut term) => {
-                    ask_terminal_question_scripted(&mut term, &credential.instance_id).await
+                    ask_terminal_question_scripted(&mut term, &shown_jid).await
                 }
             };
             match decision {
@@ -557,7 +557,7 @@ where
                         return Outcome::Diagnostic(code);
                     }
                     crate::journal_version::clear_cached_version(&config_root);
-                    let write_ans = write_answer_file(&config_root, &generation_hex);
+                    let write_ans = record_confirmation(&config_root, &credential, &generation_hex);
                     drop(answer_lock);
                     if write_ans.is_err() {
                         Outcome::Owner {
@@ -631,21 +631,6 @@ where
         }
         _ => unreachable!(),
     }
-}
-
-/// The owner said this mark is their journal's, so the stored id becomes the id
-/// that mark came from before the answer that lets the pairing send.
-fn record_confirmation(
-    config_root: &Path,
-    mut credential: Credential,
-    generation: &str,
-    shown_jid: &str,
-) -> Result<(), DiagnosticCode> {
-    if credential.instance_id != shown_jid {
-        credential.instance_id = shown_jid.to_owned();
-        persist_credential(config_root, &credential)?;
-    }
-    crate::pairing_answer::write_answer_file(config_root, generation)
 }
 
 pub async fn confirm<T>(
@@ -765,7 +750,7 @@ where
                         return Outcome::Diagnostic(DiagnosticCode::PrivateStateIo);
                     }
                     let write_ans =
-                        record_confirmation(&config_root, current_cred, &displayed_gen, &shown_jid);
+                        record_confirmation(&config_root, &current_cred, &displayed_gen);
                     drop(answer_lock);
                     if let Err(code) = write_ans {
                         Outcome::Diagnostic(code)
@@ -844,7 +829,7 @@ where
                         return Outcome::Diagnostic(DiagnosticCode::PrivateStateIo);
                     }
                     let write_ans =
-                        record_confirmation(&config_root, current_cred, &displayed_gen, &shown_jid);
+                        record_confirmation(&config_root, &current_cred, &displayed_gen);
                     drop(answer_lock);
                     if let Err(code) = write_ans {
                         Outcome::Diagnostic(code)

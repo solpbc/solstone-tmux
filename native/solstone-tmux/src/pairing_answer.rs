@@ -55,6 +55,7 @@ pub const STATUS_HELD_PAIRING: &str = "pairing: waiting for you to confirm your 
 pub const STATUS_HELD_CONFIRM: &str = "confirm with: solstone-tmux confirm";
 
 pub const ANSWER_FILENAME: &str = "pairing-answer.json";
+pub const UNVERIFIED_FILENAME: &str = "pairing-unverified";
 pub const ANSWER_LOCK_FILENAME: &str = ".solstone-tmux.answer.lock";
 pub const ANSWER_LOCK_TIMEOUT: Duration = Duration::from_secs(5);
 pub const RETIRE_TIMEOUT: Duration = Duration::from_secs(8);
@@ -439,32 +440,65 @@ pub fn grandfather_or_settle(config_root: &Path) -> Result<(), DiagnosticCode> {
     }
 }
 
-/// The journal id of the CA this pairing pinned, when its stored chain holds
-/// that CA in a form an id can be worked out from.
+/// The journal id of the CA this pairing pins on every dial, when the stored
+/// chain can show it.
 pub fn pinned_ca_jid(credential: &Credential) -> Option<String> {
-    credential.ca_chain_pem.iter().find_map(|pem| {
-        let certs = spl_transport::tls::parse_certs(pem).ok()?;
-        let pinned = certs.iter().find(|cert| {
-            spl_core::ca::cert_matches_prefix(cert.as_ref(), &credential.ca_fp_prefix)
-        })?;
-        let spki = spl_core::ca::extract_spki_der(pinned.as_ref()).ok()?;
-        spl_core::relay_window::jid_from_spki(&spki).ok()
-    })
+    spl_transport::tls::pinned_ca_jid(&credential.ca_chain_pem, &credential.ca_fp_prefix)
 }
 
-/// A stored pairing whose id isn't its own CA's is held and asked about again,
-/// whatever its answer file says. One with no readable CA can't be judged.
-pub fn stored_id_mismatched(credential: &Credential) -> bool {
-    pinned_ca_jid(credential).is_some_and(|jid| jid != credential.instance_id)
-}
-
-/// The id a stored pairing's mark comes from: its CA's, never a claim beside it.
+/// The id a stored pairing's mark comes from: the CA it pins, never a claim beside
+/// it. Empty when no such CA can be read, which no mark derives from.
 pub fn mark_jid(credential: &Credential) -> String {
-    pinned_ca_jid(credential).unwrap_or_else(|| credential.instance_id.clone())
+    pinned_ca_jid(credential).unwrap_or_default()
+}
+
+/// Whether this pairing's id can't stand: it isn't its pinned CA's, or there's no
+/// readable CA to judge it by and the owner hasn't said to go on without one.
+pub fn stored_id_needs_asking(config_root: &Path, credential: &Credential) -> bool {
+    match pinned_ca_jid(credential) {
+        Some(jid) => jid != credential.instance_id,
+        None => !unverified_pairing_accepted(config_root, credential),
+    }
+}
+
+fn unverified_pairing_accepted(config_root: &Path, credential: &Credential) -> bool {
+    let generation = hex_encode(&compute_pairing_generation(&credential.client_cert_pem));
+    open_regular_readonly(&config_root.join(UNVERIFIED_FILENAME))
+        .ok()
+        .and_then(|mut file| {
+            let mut text = String::new();
+            file.read_to_string(&mut text).ok()?;
+            Some(text)
+        })
+        .is_some_and(|text| text == generation)
+}
+
+/// The owner answered about this pairing: keep the id its mark came from, or note
+/// that they went on without a CA to check, then record the answer.
+pub fn record_confirmation(
+    config_root: &Path,
+    credential: &Credential,
+    generation: &str,
+) -> Result<(), DiagnosticCode> {
+    match pinned_ca_jid(credential) {
+        Some(jid) if jid != credential.instance_id => {
+            let mut corrected = credential.clone();
+            corrected.instance_id = jid;
+            crate::private_link::persist_credential(config_root, &corrected)?;
+        }
+        Some(_) => {}
+        None => atomic_write_bytes(
+            &config_root.join(UNVERIFIED_FILENAME),
+            config_root,
+            generation.as_bytes(),
+        )
+        .map_err(|_| DiagnosticCode::PrivateStateIo)?,
+    }
+    write_answer_file(config_root, generation)
 }
 
 pub fn is_pairing_confirmed(config_root: &Path, credential: &Credential) -> bool {
-    if credential.client_cert_pem.is_empty() || stored_id_mismatched(credential) {
+    if credential.client_cert_pem.is_empty() || stored_id_needs_asking(config_root, credential) {
         return false;
     }
     let expected_generation = hex_encode(&compute_pairing_generation(&credential.client_cert_pem));
@@ -481,7 +515,7 @@ pub fn is_status_held(config_root: &Path) -> bool {
     if credential.client_cert_pem.is_empty() {
         return false;
     }
-    if stored_id_mismatched(&credential) {
+    if stored_id_needs_asking(config_root, &credential) {
         return true;
     }
     let expected_generation = hex_encode(&compute_pairing_generation(&credential.client_cert_pem));
@@ -501,7 +535,7 @@ pub fn journal_status_row(config_root: &Path) -> String {
     }
     match load_credential(config_root) {
         Ok(None) => JOURNAL_ROW_NOT_PAIRED.to_owned(),
-        Ok(Some(credential)) => spl_core::mark::mark_from_jid(&credential.instance_id)
+        Ok(Some(credential)) => spl_core::mark::mark_from_jid(&mark_jid(&credential))
             .map(|mark| {
                 let spec = mark.to_render_spec();
                 format!("journal: {}·{}", spec.words[0], spec.words[1])

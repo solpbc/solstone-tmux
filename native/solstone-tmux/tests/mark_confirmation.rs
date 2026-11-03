@@ -1139,6 +1139,8 @@ fn journal_status_row_follows_the_answer() {
     credential.instance_id = "test-pairing-instance".to_owned();
     credential.ca_chain_pem = Vec::new();
     persist_credential(&root, &credential).expect("persist");
+    assert_eq!(journal_status_row(&root), JOURNAL_ROW_WAITING);
+    record_confirmation(&root, &credential, &generation).expect("go on");
     assert_eq!(journal_status_row(&root), MARK_UNAVAILABLE.trim_start());
 }
 
@@ -2470,17 +2472,123 @@ fn stored_id_that_is_not_its_cas_is_held_and_asked_with_the_cas_mark() {
         );
         assert!(!roots.config_root().join(CREDENTIALS_FILENAME).exists());
 
-        // With no readable CA there is nothing to judge it by: it carries on.
-        let temp = TestDirectory::new("stored-id-no-ca");
-        let roots = IsolatedRoots::new(temp.path());
-        ensure_private_directory(&roots.config_root()).expect("config");
-        let mut unreadable = stored.clone();
-        unreadable.ca_chain_pem = Vec::new();
-        persist_credential(&roots.config_root(), &unreadable).expect("persist");
-        write_answer_file(&roots.config_root(), &generation).expect("answer");
-        assert!(is_pairing_confirmed(&roots.config_root(), &unreadable));
-        assert!(!is_status_held(&roots.config_root()));
+        peer.shutdown().await;
+    });
+}
 
+/// Stored chains that can't show what a dial pins: nothing kept, a chain leading
+/// with the owner's real public CA while the pin names the forger's, and a copy of
+/// the owner's key under someone else's signature.
+#[test]
+fn stored_pairing_with_no_readable_ca_is_held_and_shows_no_mark_from_its_id() {
+    runtime().block_on(async {
+        let peer = PrivateLinkPeer::start().await;
+        let forger = peer.credential();
+        let owner_jid = test_jid();
+        let owner_mark = format_spoken_mark(&owner_jid).expect("owner mark");
+        let (owner_w1, owner_w2) = extract_journal_mark_words(&owner_jid).expect("words");
+        let owner_row = format!("journal: {owner_w1}\u{b7}{owner_w2}");
+
+        let owner_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("owner key");
+        let owner_ca = CertificateParams::new(Vec::<String>::new())
+            .expect("params")
+            .self_signed(&owner_key)
+            .expect("owner CA");
+        let signer_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("signer key");
+        let signer = CertificateParams::new(Vec::<String>::new())
+            .expect("params")
+            .self_signed(&signer_key)
+            .expect("signer");
+        let copied = CertificateParams::new(Vec::<String>::new())
+            .expect("params")
+            .signed_by(&owner_key, &signer, &signer_key)
+            .expect("copied key");
+
+        let mut empty_chain = forger.clone();
+        empty_chain.ca_chain_pem = Vec::new();
+        let mut owners_ca_at_head = forger.clone();
+        let mut led_by_owner = vec![owner_ca.pem()];
+        led_by_owner.extend(forger.ca_chain_pem.iter().cloned());
+        owners_ca_at_head.ca_chain_pem = led_by_owner;
+        let mut copied_key = forger.clone();
+        copied_key.ca_chain_pem = vec![copied.pem()];
+        copied_key.ca_fp_prefix = spl_core::ca::sha256(copied.der())[..16].to_vec();
+
+        for (name, mut stored) in [
+            ("empty", empty_chain),
+            ("owner-at-head", owners_ca_at_head),
+            ("copied-key", copied_key),
+        ] {
+            stored.instance_id = owner_jid.clone();
+            let generation = hex_encode(&compute_pairing_generation(&stored.client_cert_pem));
+            let temp = TestDirectory::new(&format!("stored-no-ca-{name}"));
+            let roots = IsolatedRoots::new(temp.path());
+            let env = FakeEnvironment::from_paths(roots.entries().iter().cloned());
+            ensure_private_directory(&roots.config_root()).expect("config");
+            persist_credential(&roots.config_root(), &stored).expect("persist");
+            write_answer_file(&roots.config_root(), &generation).expect("answer");
+
+            assert!(
+                !is_pairing_confirmed(&roots.config_root(), &stored),
+                "{name}"
+            );
+            assert!(is_status_held(&roots.config_root()), "{name}");
+            assert_ne!(
+                journal_status_row(&roots.config_root()),
+                owner_row,
+                "{name}"
+            );
+
+            // Scripted words from the claimed id can't confirm it.
+            let outcome = confirm(
+                current_platform(),
+                &env,
+                TerminalSeat::Scripted(None::<Cursor<Vec<u8>>>),
+                MarkOption::Value(format!("{owner_w1} {owner_w2}")),
+            )
+            .await;
+            assert_eq!(
+                outcome,
+                Outcome::Owner {
+                    code: 5,
+                    lines: vec![MARK_UNVERIFIABLE_CONFIRM.to_string()],
+                },
+                "{name}"
+            );
+
+            // The terminal gets the couldn't-verify branch, never the claimed mark.
+            let term = TestTerminal::new("continue\n");
+            let shown = term.output.clone();
+            let outcome = confirm(
+                current_platform(),
+                &env,
+                TerminalSeat::Scripted(Some(term)),
+                MarkOption::Absent,
+            )
+            .await;
+            assert_eq!(
+                outcome,
+                Outcome::Owner {
+                    code: 0,
+                    lines: vec![PAIRED.to_string()],
+                },
+                "{name}"
+            );
+            let text = String::from_utf8_lossy(&shown.lock().expect("lock")).into_owned();
+            assert!(text.contains(MARK_UNAVAILABLE), "{name}");
+            assert!(!text.contains(&owner_mark), "{name}");
+
+            // Going on keeps it going, and still names no mark.
+            assert!(
+                is_pairing_confirmed(&roots.config_root(), &stored),
+                "{name}"
+            );
+            assert_eq!(
+                journal_status_row(&roots.config_root()),
+                MARK_UNAVAILABLE.trim_start(),
+                "{name}"
+            );
+        }
         peer.shutdown().await;
     });
 }
