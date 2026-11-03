@@ -8,7 +8,7 @@ Format adapted from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
-- setup now refuses a pairing link when what answers isn't the journal it says it is, before it asks you anything or saves anything. until now, a swapped link could just name your journal, show you its mark and pair this computer with something that isn't your journal.
+- this is a security fix. someone who got you to use a pairing link they had swapped could pair this computer with something that isn't your journal, while showing you your own journal's mark, so the check would have looked right. what solstone-tmux took in from your terminal would then have gone to them. setup now refuses a link when what answers claims to be a different journal from the one the link points to, before it asks you anything or saves anything.
 - on a computer that's already paired, setup with the wrong --mark words now says the words didn't match before it says your current pairing stays in use.
 - setup now asks for the pairing link at a terminal, and goes on when you press enter.
 
