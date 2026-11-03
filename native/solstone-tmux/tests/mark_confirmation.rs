@@ -233,6 +233,9 @@ fn open_pty() -> (File, PathBuf) {
     let master =
         rustix::pty::openpt(rustix::pty::OpenptFlags::RDWR | rustix::pty::OpenptFlags::NOCTTY)
             .expect("openpt failed");
+    // A child that inherits this end never sees its terminal close, and outlives
+    // the test.
+    rustix::io::fcntl_setfd(&master, rustix::io::FdFlags::CLOEXEC).expect("cloexec failed");
     rustix::pty::grantpt(&master).expect("grantpt failed");
     rustix::pty::unlockpt(&master).expect("unlockpt failed");
     let slave_path = rustix::pty::ptsname(&master, Vec::new()).expect("ptsname failed");
@@ -291,6 +294,8 @@ fn read_pty_until_pattern(
             }
         }
     }
+    let _ = child.kill();
+    let _ = child.wait();
     panic!("timed out after {timeout:?} waiting for pattern {pattern:?}; output: {accumulated:?}");
 }
 
