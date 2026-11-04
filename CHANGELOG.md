@@ -16,6 +16,7 @@ Format adapted from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `solstone-tmux status` no longer says connected long after your journal stopped answering. connected now means your journal answered within about the last minute. just after solstone-tmux starts or this computer wakes, it checks with your journal within a few seconds, and the status says connecting until your journal answers, and offline if that takes 30 seconds or more. a retry after a failed attempt no longer flips it to syncing and back, and one slow answer no longer reads as offline. the ☼ in your status line now stays yellow a moment longer each time it lights, so it no longer flickers.
 - if you run solstone-tmux in the foreground, the steps `solstone-tmux confirm` gives after a no, a cancel or wrong mark words no longer send you to the service commands. they now say to stop it, run setup again with a fresh pairing link from your journal, then start it again. for the service, `solstone-tmux uninstall-service` and `solstone-tmux install-service` still do the stopping and starting.
 
 ## [2.0.25] - 2026-11-03

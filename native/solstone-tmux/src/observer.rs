@@ -691,6 +691,7 @@ where
     let mut activity_open = true;
     let mut shutdown_request_open = true;
     let mut indicator_warning = FailureWarning::default();
+    let mut linger = ActivityLinger::default();
     let mut indicator_refresh = indicator.refresh_interval().map(|period| {
         let mut refresh = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
         refresh.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -716,7 +717,16 @@ where
                     activity_open = false;
                 } else {
                     let current_activity = *activity.borrow_and_update();
-                    indicator_warning.record(indicator.set_activity(current_activity).await);
+                    let now = tokio::time::Instant::now().into_std();
+                    if let Some(shown) = linger.observe(current_activity, now) {
+                        indicator_warning.record(indicator.set_activity(shown).await);
+                    }
+                }
+            }
+            () = sleep_until_linger_ends(linger.ends_at()) => {
+                let now = tokio::time::Instant::now().into_std();
+                if let Some(shown) = linger.expire(now) {
+                    indicator_warning.record(indicator.set_activity(shown).await);
                 }
             }
             _ = next_refresh(&mut indicator_refresh) => {
@@ -756,6 +766,68 @@ where
         exit.exit_code = 1;
     }
     finish_supervision(exit, indicator, instance_lock, retention_fence).await
+}
+
+/// Once the cell shows syncing, it stays this long after the work stops, so consecutive
+/// sends read as one.
+pub const SYNCING_LINGER: Duration = Duration::from_millis(1500);
+
+/// What the status cell shows for sync activity: working at once, idle only after the
+/// linger.
+#[derive(Debug, Default)]
+pub struct ActivityLinger {
+    shown: Option<SyncActivity>,
+    idle_at: Option<std::time::Instant>,
+}
+
+impl ActivityLinger {
+    /// Returns what the cell should show now, or nothing when it already shows it.
+    pub fn observe(
+        &mut self,
+        activity: SyncActivity,
+        now: std::time::Instant,
+    ) -> Option<SyncActivity> {
+        match activity {
+            SyncActivity::Working => {
+                self.idle_at = None;
+                self.show(SyncActivity::Working)
+            }
+            SyncActivity::Idle if self.shown == Some(SyncActivity::Working) => {
+                self.idle_at.get_or_insert(now + SYNCING_LINGER);
+                None
+            }
+            SyncActivity::Idle => self.show(SyncActivity::Idle),
+        }
+    }
+
+    pub fn ends_at(&self) -> Option<std::time::Instant> {
+        self.idle_at
+    }
+
+    /// Called at or after `ends_at`.
+    pub fn expire(&mut self, now: std::time::Instant) -> Option<SyncActivity> {
+        match self.idle_at {
+            Some(at) if now >= at => {
+                self.idle_at = None;
+                self.show(SyncActivity::Idle)
+            }
+            _ => None,
+        }
+    }
+
+    fn show(&mut self, activity: SyncActivity) -> Option<SyncActivity> {
+        (self.shown != Some(activity)).then(|| {
+            self.shown = Some(activity);
+            activity
+        })
+    }
+}
+
+async fn sleep_until_linger_ends(at: Option<std::time::Instant>) {
+    match at {
+        Some(at) => tokio::time::sleep_until(tokio::time::Instant::from_std(at)).await,
+        None => std::future::pending().await,
+    }
 }
 
 async fn next_refresh(refresh: &mut Option<tokio::time::Interval>) {

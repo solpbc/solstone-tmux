@@ -14,13 +14,13 @@ use solstone_tmux::health::DiagnosticCode;
 use solstone_tmux::model::PollOutcome;
 use solstone_tmux::name::derive_component;
 use solstone_tmux::observer::{
-    CaptureProvider, LifecycleLock, ObserverConfig, ObserverExit, ObserverOperationError,
-    SegmentManager, ShutdownEvent, ShutdownIndicator, SupervisionControl, run_observer,
-    shutdown_barrier, stream_directory, supervise_observer,
+    ActivityLinger, CaptureProvider, LifecycleLock, ObserverConfig, ObserverExit,
+    ObserverOperationError, SYNCING_LINGER, SegmentManager, ShutdownEvent, ShutdownIndicator,
+    SupervisionControl, run_observer, shutdown_barrier, stream_directory, supervise_observer,
 };
 use solstone_tmux::paths::ensure_private_directory;
 use solstone_tmux::segment::SegmentState;
-use solstone_tmux::sync::{RetentionFence, SyncActivity, SyncWake};
+use solstone_tmux::sync::{RetentionFence, SyncActivity, SyncWake, slept_between};
 use solstone_tmux::tmux::StderrWarnings;
 use support::{TestDirectory, child_stderr, golden_capture};
 use time::{Date, Month, PrimitiveDateTime, Time, UtcOffset};
@@ -686,4 +686,41 @@ fn runtime() -> tokio::runtime::Runtime {
         .enable_time()
         .build()
         .expect("test runtime")
+}
+
+// I5: the cell keeps showing syncing for the linger after the work stops, and consecutive
+// sends inside it never strobe.
+#[test]
+fn syncing_lingers_in_the_cell_after_the_work_stops() {
+    let start = std::time::Instant::now();
+    let at = |millis: u64| start + Duration::from_millis(millis);
+    let mut linger = ActivityLinger::default();
+    assert_eq!(
+        linger.observe(SyncActivity::Working, at(0)),
+        Some(SyncActivity::Working)
+    );
+    assert_eq!(linger.observe(SyncActivity::Idle, at(100)), None);
+    assert_eq!(linger.ends_at(), Some(at(100) + SYNCING_LINGER));
+    assert_eq!(linger.observe(SyncActivity::Working, at(900)), None);
+    assert_eq!(linger.ends_at(), None);
+    assert_eq!(linger.observe(SyncActivity::Idle, at(1_000)), None);
+    assert_eq!(linger.expire(at(2_499)), None);
+    assert_eq!(linger.expire(at(2_500)), Some(SyncActivity::Idle));
+    assert_eq!(linger.expire(at(3_000)), None);
+}
+
+#[test]
+fn a_sleep_shows_as_the_wall_clock_pulling_ahead() {
+    let wall = time::OffsetDateTime::UNIX_EPOCH;
+    let mono = Duration::from_secs(100);
+    let later = |wall_secs: i64, mono_secs: u64| {
+        (
+            wall + time::Duration::seconds(wall_secs),
+            mono + Duration::from_secs(mono_secs),
+        )
+    };
+    assert!(!slept_between((wall, mono), later(5, 5)));
+    assert!(!slept_between((wall, mono), later(9, 5)));
+    assert!(slept_between((wall, mono), later(3600, 5)));
+    assert!(!slept_between((wall, mono), later(-3600, 5)));
 }

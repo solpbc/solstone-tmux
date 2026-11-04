@@ -14,7 +14,9 @@ use std::time::Duration;
 
 use solstone_tmux::clock::{Clock, TestClock};
 use solstone_tmux::config::DEFAULT_SOURCE;
-use solstone_tmux::health::{DiagnosticCode, HEALTH_FILENAME, HealthWriter};
+use solstone_tmux::health::{
+    DiagnosticCode, HEALTH_FILENAME, HealthState, HealthWriter, StatusHealth, read_status_health,
+};
 use solstone_tmux::instance_lock::InstanceLock;
 use solstone_tmux::journal::{
     LocalFile, ParsedDescriptor, UploadResult, UploadStatus, decode_upload_response,
@@ -1217,6 +1219,81 @@ fn one_backoff_owner_advances_holds_resets_and_never_stops_capture() {
         observer_stop.send(()).expect("stop observer");
         sync.await.expect("join sync");
         assert_eq!(observer.await.expect("join observer").exit_code, 0);
+    });
+}
+
+// A drop the status reads holds until the first retry: nothing the scheduler does before
+// it can bring connected back, so no drop shows for under a second.
+#[test]
+fn a_failed_check_reads_as_a_drop_until_the_first_retry() {
+    paused(async {
+        let temporary = TestDirectory::new("sync-drop-dwell");
+        ensure_private_directory(temporary.path()).expect("prepare data root");
+        let lock = InstanceLock::acquire(temporary.path()).expect("instance lock");
+        let health = HealthWriter::new(temporary.path().to_path_buf(), &lock);
+        let clock = clock();
+        let wake = SyncWake::default();
+        let (status_probes, mut received) = mpsc::unbounded_channel();
+        let journal = BackoffJournal {
+            status_probes,
+            outcomes: VecDeque::from([
+                Ok(()),
+                Err(SyncOperationError::EndSweep(
+                    solstone_tmux::sync::SyncFailureClass::Direct,
+                )),
+                Ok(()),
+            ]),
+        };
+        let (activity, _activity_receiver) = watch::channel(SyncActivity::Idle);
+        let (stop, shutdown) = watch::channel(false);
+        let mut scheduler = scheduler_with_clock(&temporary, wake.clone(), Arc::clone(&clock))
+            .with_observability(activity, health);
+        let sync = tokio::spawn(async move {
+            let mut journal = journal;
+            scheduler.run_with_shutdown(&mut journal, shutdown).await;
+        });
+        let status = |clock: &TestClock| {
+            read_status_health(temporary.path(), clock.wall_now().unix_timestamp())
+        };
+        // The health write runs on the blocking pool; wait in real time for it to land.
+        let settled = |expected: HealthState| {
+            let clock = Arc::clone(&clock);
+            let root = temporary.path().to_path_buf();
+            async move {
+                let deadline = std::time::Instant::now() + HANG_GUARD;
+                loop {
+                    let now = clock.wall_now().unix_timestamp();
+                    if read_status_health(&root, now) == StatusHealth::Live(expected) {
+                        return;
+                    }
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "status never read {expected:?}"
+                    );
+                    tokio::task::yield_now().await;
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+            }
+        };
+
+        expect_status_probe(&mut received, "first check").await;
+        settled(HealthState::Connected).await;
+
+        wake.segment_closed(&SegmentClose::Finalized(PathBuf::from("drop")));
+        expect_status_probe(&mut received, "failing check").await;
+        settled(HealthState::Connecting).await;
+        for _ in 0..4 {
+            wake.segment_closed(&SegmentClose::Finalized(PathBuf::from("during")));
+            advance_both(&clock, Duration::from_secs(1)).await;
+            assert_no_status_probe(&mut received).await;
+            assert_eq!(status(&clock), StatusHealth::Live(HealthState::Connecting));
+        }
+        advance_both(&clock, Duration::from_secs(1) + Duration::from_millis(1)).await;
+        expect_status_probe(&mut received, "retry").await;
+        settled(HealthState::Connected).await;
+
+        stop.send_replace(true);
+        sync.await.expect("join sync");
     });
 }
 

@@ -10,8 +10,8 @@ use std::process::{Command, Stdio};
 
 use serde_json::Value;
 use solstone_tmux::health::{
-    DiagnosticCode, HEALTH_FILENAME, HealthState, HealthWriter, StatusHealth, SyncFacts,
-    read_status_health,
+    CONNECTED_LEASE_SECONDS, DiagnosticCode, HEALTH_FILENAME, HealthState, HealthWriter,
+    OFFLINE_AFTER_SECONDS, StatusHealth, SyncFacts, read_status_health,
 };
 use solstone_tmux::instance_lock::{InstanceLock, LOCK_FILENAME};
 use solstone_tmux::journal_version::{JournalVersionStatus, read_journal_version};
@@ -86,7 +86,7 @@ fn stale_and_prior_run_snapshots_never_read_connected() {
 }
 
 #[test]
-fn retry_work_with_an_existing_error_is_a_valid_syncing_snapshot() {
+fn a_retry_sweep_after_a_drop_keeps_reading_the_drop() {
     runtime().block_on(async {
         let temporary = TestDirectory::new("health-retry-work");
         let data_root = temporary.path().join("data");
@@ -95,16 +95,158 @@ fn retry_work_with_an_existing_error_is_a_valid_syncing_snapshot() {
         let writer = HealthWriter::new(data_root.clone(), &lock);
         let mut facts = SyncFacts {
             paired: true,
-            sync_in_progress: true,
             ..SyncFacts::default()
         };
-        facts.failed(DiagnosticCode::PrivateStateIo);
+        facts.successful_contact(NOW - 120);
+        facts.failed(DiagnosticCode::JournalUnavailable);
 
-        writer.write(&facts, NOW).await.expect("syncing snapshot");
+        for sending in [false, true, false] {
+            facts.sync_in_progress = sending;
+            writer.write(&facts, NOW).await.expect("retry snapshot");
+            assert_eq!(
+                read_status_health(&data_root, NOW),
+                StatusHealth::Live(HealthState::Offline),
+                "sending: {sending}"
+            );
+        }
+    });
+}
 
+fn heard_at(contact: i64) -> SyncFacts {
+    let mut facts = SyncFacts {
+        paired: true,
+        episode_started_unix_seconds: Some(contact - 600),
+        ..SyncFacts::default()
+    };
+    facts.successful_contact(contact);
+    facts
+}
+
+// I1
+#[test]
+fn a_failed_request_that_is_not_a_timeout_shows_at_once() {
+    let mut facts = heard_at(NOW);
+    assert_eq!(facts.state_at(NOW), HealthState::Connected);
+    facts.failed(DiagnosticCode::JournalUnavailable);
+    assert_eq!(facts.state_at(NOW), HealthState::Connecting);
+}
+
+// I2
+#[test]
+fn connected_never_outlives_the_lease() {
+    let facts = heard_at(NOW);
+    for age in 0..=2 * CONNECTED_LEASE_SECONDS {
         assert_eq!(
-            read_status_health(&data_root, NOW),
-            StatusHealth::Live(HealthState::Syncing)
+            facts.state_at(NOW + age) == HealthState::Connected,
+            age <= CONNECTED_LEASE_SECONDS,
+            "age {age}"
+        );
+    }
+}
+
+// I2, for a snapshot read later than it was written.
+#[test]
+fn a_connected_snapshot_reads_offline_once_its_lease_runs_out() {
+    runtime().block_on(async {
+        let temporary = TestDirectory::new("health-lease");
+        let data_root = temporary.path().join("data");
+        ensure_private_directory(&data_root).expect("data root");
+        let lock = InstanceLock::acquire(&data_root).expect("instance lock");
+        let writer = HealthWriter::new(data_root.clone(), &lock);
+        writer.write(&heard_at(NOW), NOW).await.expect("snapshot");
+        assert_eq!(
+            read_status_health(&data_root, NOW + CONNECTED_LEASE_SECONDS),
+            StatusHealth::Live(HealthState::Connected)
+        );
+        assert_eq!(
+            read_status_health(&data_root, NOW + CONNECTED_LEASE_SECONDS + 1),
+            StatusHealth::Live(HealthState::Offline)
+        );
+    });
+}
+
+// I4
+#[test]
+fn one_timed_out_check_inside_the_lease_changes_nothing() {
+    let mut facts = heard_at(NOW);
+    facts.failed(DiagnosticCode::JournalTimeout);
+    for age in 0..=CONNECTED_LEASE_SECONDS {
+        assert_eq!(
+            facts.state_at(NOW + age),
+            HealthState::Connected,
+            "age {age}"
+        );
+    }
+    facts.sync_in_progress = true;
+    assert_eq!(facts.state_at(NOW + 1), HealthState::Syncing);
+}
+
+// I6
+#[test]
+fn a_fresh_start_never_reads_connected_before_an_answer() {
+    let mut facts = SyncFacts {
+        paired: true,
+        episode_started_unix_seconds: Some(NOW),
+        ..SyncFacts::default()
+    };
+    for age in 0..OFFLINE_AFTER_SECONDS {
+        assert_eq!(
+            facts.state_at(NOW + age),
+            HealthState::Connecting,
+            "age {age}"
+        );
+    }
+    assert_eq!(
+        facts.state_at(NOW + OFFLINE_AFTER_SECONDS),
+        HealthState::Offline
+    );
+    facts.sync_in_progress = true;
+    assert_eq!(
+        facts.state_at(NOW + OFFLINE_AFTER_SECONDS),
+        HealthState::Offline
+    );
+    facts.successful_contact(NOW + 40);
+    facts.sync_in_progress = false;
+    assert_eq!(facts.state_at(NOW + 40), HealthState::Connected);
+}
+
+#[test]
+fn offline_waits_for_thirty_seconds_unreached_and_a_wake_restarts_it() {
+    let mut facts = heard_at(NOW);
+    facts.failed(DiagnosticCode::JournalUnavailable);
+    assert_eq!(
+        facts.state_at(NOW + OFFLINE_AFTER_SECONDS - 1),
+        HealthState::Connecting
+    );
+    assert_eq!(
+        facts.state_at(NOW + OFFLINE_AFTER_SECONDS),
+        HealthState::Offline
+    );
+    facts.episode_started_unix_seconds = Some(NOW + 3600);
+    assert_eq!(facts.state_at(NOW + 3600), HealthState::Connecting);
+}
+
+#[test]
+fn a_connecting_snapshot_reads_offline_once_it_has_lasted() {
+    runtime().block_on(async {
+        let temporary = TestDirectory::new("health-connecting-ages");
+        let data_root = temporary.path().join("data");
+        ensure_private_directory(&data_root).expect("data root");
+        let lock = InstanceLock::acquire(&data_root).expect("instance lock");
+        let writer = HealthWriter::new(data_root.clone(), &lock);
+        let facts = SyncFacts {
+            paired: true,
+            episode_started_unix_seconds: Some(NOW),
+            ..SyncFacts::default()
+        };
+        writer.write(&facts, NOW).await.expect("snapshot");
+        assert_eq!(
+            read_status_health(&data_root, NOW + OFFLINE_AFTER_SECONDS - 1),
+            StatusHealth::Live(HealthState::Connecting)
+        );
+        assert_eq!(
+            read_status_health(&data_root, NOW + OFFLINE_AFTER_SECONDS),
+            StatusHealth::Live(HealthState::Offline)
         );
     });
 }

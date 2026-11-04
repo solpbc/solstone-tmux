@@ -37,7 +37,7 @@ fn only_a_revocation_diagnostic_reads_revoked() {
             ..SyncFacts::default()
         };
         facts.failed(code);
-        assert_eq!(facts.state(), expected, "{code:?}");
+        assert_eq!(facts.state_at(0), expected, "{code:?}");
     }
     assert_eq!(DiagnosticCode::JournalRevoked.as_str(), "journal_revoked");
 }
@@ -299,7 +299,7 @@ fn state_after(code: DiagnosticCode) -> HealthState {
         ..SyncFacts::default()
     };
     facts.failed(code);
-    facts.state()
+    facts.state_at(0)
 }
 
 fn rejection(reason_code: &str) -> Vec<u8> {

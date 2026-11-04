@@ -539,7 +539,8 @@ fn journal_write_failed_ends_the_sweep() {
         });
 
         let health_json = wait_for_idle_snapshot(temporary.path()).await;
-        assert_eq!(health_json["state"], "offline");
+        // Unreached for under thirty seconds since the sweep began: still connecting.
+        assert_eq!(health_json["state"], "connecting");
         assert_eq!(
             fs::read(&cand1).expect("segment answered with a write failure"),
             LINKED_DEVICE_BYTES,
@@ -893,7 +894,8 @@ fn non_json_server_error_ends_the_sweep() {
         });
 
         let health_json = wait_for_idle_snapshot(temporary.path()).await;
-        assert_eq!(health_json["state"], "offline");
+        // Unreached for under thirty seconds since the sweep began: still connecting.
+        assert_eq!(health_json["state"], "connecting");
 
         stop.send_replace(true);
         task.await.expect("join task");
@@ -1045,7 +1047,8 @@ fn unavailable_bridge_at_start_stays_supervised_with_bounded_retry() {
         );
 
         let health = wait_for_diagnostic(&fixture.data_root, DiagnosticCode::BridgeUnavailable).await;
-        assert_eq!(health["state"], "offline");
+        // Unreached for under thirty seconds since startup: still connecting.
+        assert_eq!(health["state"], "connecting");
         assert_eq!(health["paired"], true);
         assert_eq!(health["recent_error_count"], 1);
         tokio::time::sleep(Duration::from_millis(100)).await;

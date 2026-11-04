@@ -50,7 +50,12 @@ const RETRY_DELAYS: [Duration; 4] = [
     Duration::from_secs(120),
     Duration::from_secs(300),
 ];
-const PERIODIC_SYNC_INTERVAL: Duration = Duration::from_secs(60);
+pub(crate) const PERIODIC_SYNC_INTERVAL: Duration = Duration::from_secs(60);
+/// How often the scheduler looks for a sleep it slept through.
+const WAKE_WATCH_INTERVAL: Duration = Duration::from_secs(5);
+/// The wall clock running ahead of the monotonic clock by more than this means the
+/// machine slept.
+const WAKE_GAP: Duration = Duration::from_secs(5);
 const CANDIDATES_PER_BATCH: usize = 8;
 pub const HEALTH_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 
@@ -1473,6 +1478,7 @@ impl SyncScheduler {
     ) -> Self {
         let captures_root = data_root.join("captures");
         let ledger_root = data_root.join("sync-ledger");
+        let episode_started = clock.wall_now().unix_timestamp();
         Self {
             captures_root,
             ledger_root,
@@ -1488,6 +1494,7 @@ impl SyncScheduler {
             health: None,
             facts: SyncFacts {
                 paired: true,
+                episode_started_unix_seconds: Some(episode_started),
                 ..Default::default()
             },
             retention_fence: Arc::new(RetentionFence::new()),
@@ -1581,6 +1588,10 @@ impl SyncScheduler {
                             () = tokio::time::sleep_until(deadline) => {
                                 self.backoff.deadline_reached();
                             }
+                            () = woke_from_sleep(self.clock.clone()) => {
+                                self.begin_episode();
+                                self.backoff.deadline_reached();
+                            }
                         }
                         continue;
                     }
@@ -1607,8 +1618,17 @@ impl SyncScheduler {
                 () = wait_for_shutdown(&mut shutdown) => return,
                 () = self.wake.wait() => requested = true,
                 _ = periodic.tick() => requested = true,
+                () = woke_from_sleep(self.clock.clone()) => {
+                    self.begin_episode();
+                    requested = true;
+                }
             }
         }
+    }
+
+    /// The machine woke: a new attempt to reach the journal starts now.
+    fn begin_episode(&mut self) {
+        self.facts.episode_started_unix_seconds = Some(self.clock.wall_now().unix_timestamp());
     }
 
     /// Finishes local removals for acknowledged and empty candidates. Returns
@@ -2024,6 +2044,10 @@ impl SyncScheduler {
                                 .await;
                                 self.floors.next_attempt.remove(&candidate);
                                 summary.custodied += 1;
+                                // A receipt is the journal answering: it keeps the lease
+                                // alive through a long sweep.
+                                self.facts
+                                    .successful_contact(self.clock.wall_now().unix_timestamp());
                                 self.facts.pending_segments =
                                     self.facts.pending_segments.saturating_sub(1);
 
@@ -2467,6 +2491,7 @@ impl SyncTask {
         let mut reconnect = Backoff::new();
         let mut reconnect_facts = SyncFacts {
             paired: true,
+            episode_started_unix_seconds: Some(clock.wall_now().unix_timestamp()),
             ..SyncFacts::default()
         };
         loop {
@@ -2518,6 +2543,29 @@ impl SyncTask {
             return Ok(());
         }
     }
+}
+
+/// Resolves once the machine has slept: the monotonic clock stops during suspend and the
+/// wall clock does not, so the wall clock pulls ahead.
+async fn woke_from_sleep(clock: Arc<dyn Clock>) {
+    let mut last = (clock.wall_now(), clock.monotonic_now());
+    loop {
+        tokio::time::sleep(WAKE_WATCH_INTERVAL).await;
+        let now = (clock.wall_now(), clock.monotonic_now());
+        if slept_between(last, now) {
+            return;
+        }
+        last = now;
+    }
+}
+
+pub fn slept_between(
+    before: (time::OffsetDateTime, Duration),
+    after: (time::OffsetDateTime, Duration),
+) -> bool {
+    let wall = after.0 - before.0;
+    let monotonic = after.1.saturating_sub(before.1);
+    wall > time::Duration::try_from(monotonic + WAKE_GAP).unwrap_or(time::Duration::MAX)
 }
 
 async fn wait_for_retry_or_shutdown(

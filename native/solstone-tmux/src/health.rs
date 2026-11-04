@@ -15,6 +15,14 @@ pub const HEALTH_FILENAME: &str = "sync-health.json";
 const HEALTH_SCHEMA_VERSION: u32 = 1;
 const HEALTH_STALE_SECONDS: i64 = 180;
 const HEALTH_FUTURE_TOLERANCE_SECONDS: i64 = 60;
+/// How long one answer from the journal keeps "connected": a periodic sweep, its status
+/// check's timeout, and a second of slack, so one slow or failed check never reads as a drop.
+pub const CONNECTED_LEASE_SECONDS: i64 = crate::sync::PERIODIC_SYNC_INTERVAL.as_secs() as i64
+    + crate::journal::SYSTEM_STATUS_TIMEOUT.as_secs() as i64
+    + 1;
+/// How long the device tries to reach the journal before it says offline instead of
+/// connecting.
+pub const OFFLINE_AFTER_SECONDS: i64 = 30;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -121,6 +129,7 @@ pub enum HealthState {
     Held,
     Connected,
     Syncing,
+    Connecting,
     Offline,
     UpdateNeeded,
     Revoked,
@@ -133,6 +142,7 @@ impl HealthState {
             Self::Held => "held",
             Self::Connected => "connected",
             Self::Syncing => "syncing",
+            Self::Connecting => "connecting",
             Self::Offline => "offline",
             Self::UpdateNeeded => "update_needed",
             Self::Revoked => "revoked",
@@ -150,6 +160,9 @@ pub struct SyncFacts {
     pub last_successful_sync_unix_seconds: Option<i64>,
     pub recent_error_count: u32,
     pub last_error_code: Option<DiagnosticCode>,
+    /// When the current attempt to reach the journal began: start, or a wake. Offline
+    /// counts from the later of this and the journal's last answer.
+    pub episode_started_unix_seconds: Option<i64>,
 }
 
 impl SyncFacts {
@@ -169,8 +182,20 @@ impl SyncFacts {
         self.last_error_code = Some(code);
     }
 
-    pub fn state(&self) -> HealthState {
-        if self.paired && self.sync_in_progress {
+    /// The one rule for what the sync health says. Connected and syncing need an answer
+    /// from the journal within the lease. Inside it, a timed-out request changes nothing;
+    /// any other failure shows at once.
+    pub fn state_at(&self, now_unix_seconds: i64) -> HealthState {
+        let heard = self
+            .last_successful_contact_unix_seconds
+            .is_some_and(|contact| within_lease(contact, now_unix_seconds));
+        let link_up = self.paired
+            && heard
+            && matches!(
+                self.last_error_code,
+                None | Some(DiagnosticCode::JournalTimeout)
+            );
+        if link_up && self.sync_in_progress {
             return HealthState::Syncing;
         }
         if matches!(
@@ -191,12 +216,46 @@ impl SyncFacts {
         if !self.paired {
             return HealthState::Unpaired;
         }
-        match self.last_error_code {
-            Some(DiagnosticCode::JournalRevoked) => HealthState::Revoked,
-            Some(_) => HealthState::Offline,
-            None if self.last_successful_contact_unix_seconds.is_some() => HealthState::Connected,
-            None => HealthState::Offline,
+        if self.last_error_code == Some(DiagnosticCode::JournalRevoked) {
+            return HealthState::Revoked;
         }
+        if link_up {
+            return HealthState::Connected;
+        }
+        let unreached_since = self
+            .last_successful_contact_unix_seconds
+            .max(self.episode_started_unix_seconds);
+        match unreached_since {
+            Some(since) if now_unix_seconds.saturating_sub(since) < OFFLINE_AFTER_SECONDS => {
+                HealthState::Connecting
+            }
+            _ => HealthState::Offline,
+        }
+    }
+}
+
+fn within_lease(contact: i64, now_unix_seconds: i64) -> bool {
+    now_unix_seconds.saturating_sub(contact) <= CONNECTED_LEASE_SECONDS
+}
+
+/// A snapshot is read after it was written. What it says still has to hold now: connected
+/// and syncing end with the lease, and connecting turns offline once it has lasted.
+fn state_now(snapshot: &HealthSnapshot, now_unix_seconds: i64) -> HealthState {
+    match snapshot.state {
+        HealthState::Connected | HealthState::Syncing
+            if !snapshot
+                .last_successful_contact_unix_seconds
+                .is_some_and(|contact| within_lease(contact, now_unix_seconds)) =>
+        {
+            HealthState::Offline
+        }
+        HealthState::Connecting
+            if now_unix_seconds.saturating_sub(snapshot.updated_at_unix_seconds)
+                >= OFFLINE_AFTER_SECONDS =>
+        {
+            HealthState::Offline
+        }
+        state => state,
     }
 }
 
@@ -241,7 +300,7 @@ impl HealthWriter {
             run_id: self.identity.run_id.clone(),
             lock_inode: self.identity.lock_inode,
             updated_at_unix_seconds: now_unix_seconds,
-            state: facts.state(),
+            state: facts.state_at(now_unix_seconds),
             paired: facts.paired,
             sync_in_progress: facts.sync_in_progress,
             pending_segments: facts.pending_segments,
@@ -301,7 +360,7 @@ pub fn read_status_health(data_root: &Path, now_unix_seconds: i64) -> StatusHeal
     {
         return StatusHealth::Stale;
     }
-    StatusHealth::Live(snapshot.state)
+    StatusHealth::Live(state_now(&snapshot, now_unix_seconds))
 }
 
 fn read_snapshot(data_root: &Path) -> Option<HealthSnapshot> {
@@ -321,20 +380,26 @@ fn valid_snapshot(snapshot: &HealthSnapshot) -> bool {
     {
         return false;
     }
+    // A retry sweep can be sending while the link reads down, so only the up states and
+    // the ones that never send pin the sending flag.
     match snapshot.state {
         HealthState::Unpaired => !snapshot.paired && !snapshot.sync_in_progress,
         HealthState::Held => snapshot.paired && !snapshot.sync_in_progress,
-        HealthState::Syncing => snapshot.paired && snapshot.sync_in_progress,
+        HealthState::Syncing => {
+            snapshot.paired
+                && snapshot.sync_in_progress
+                && snapshot.last_successful_contact_unix_seconds.is_some()
+        }
         HealthState::Connected => {
             snapshot.paired
                 && !snapshot.sync_in_progress
                 && snapshot.last_successful_contact_unix_seconds.is_some()
-                && snapshot.recent_error_count == 0
-                && snapshot.last_error_code.is_none()
+                && matches!(
+                    snapshot.last_error_code,
+                    None | Some(DiagnosticCode::JournalTimeout)
+                )
         }
-        HealthState::UpdateNeeded => !snapshot.sync_in_progress,
-        HealthState::Offline | HealthState::Revoked => {
-            snapshot.paired && !snapshot.sync_in_progress
-        }
+        HealthState::UpdateNeeded => true,
+        HealthState::Connecting | HealthState::Offline | HealthState::Revoked => snapshot.paired,
     }
 }
