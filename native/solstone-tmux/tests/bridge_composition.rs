@@ -185,12 +185,16 @@ fn loopback_capability_is_the_whole_admission_check() {
             .no_proxy()
             .build()
             .expect("raw client");
-        let bootstrap = authenticated
-            .get(bridge.bootstrap_url().expect("bootstrap url"))
+        cookie_jar.add_cookie_str(
+            &bridge.capability_cookie().expect("native cookie"),
+            &reqwest::Url::parse(&origin).unwrap(),
+        );
+        let bootstrap = anonymous
+            .get(format!("{origin}/_bridge/bootstrap?cap=old-static-link"))
             .send()
             .await
-            .expect("bootstrap");
-        assert_eq!(bootstrap.status(), StatusCode::FOUND);
+            .expect("bootstrap refusal");
+        assert_eq!(bootstrap.status(), StatusCode::FORBIDDEN);
 
         peer.enqueue_clients_self_response(200, br#"{}"#.to_vec());
         let admitted = authenticated

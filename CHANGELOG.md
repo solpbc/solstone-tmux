@@ -6,6 +6,10 @@ Format adapted from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- updated the private network connection used to reach your journal.
+
 ### Added
 
 - every download now includes solstone-tmux's license and `RUST_DEPENDENCY_NOTICES.txt`, which reproduces the licenses of the open source code it's built from. the tarballs carry both beside the program, the linux packages install them in `/usr/share/doc/solstone-tmux`, and the mac package in `/usr/local/share/doc/solstone-tmux`. to remove them on a mac when you uninstall, run `sudo rm -rf /usr/local/share/doc/solstone-tmux`.

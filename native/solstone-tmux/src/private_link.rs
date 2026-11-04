@@ -15,8 +15,9 @@ use spl_transport::TransportError;
 use spl_transport::client::{DialedCarrier, TokenPersistHook, TransportClient};
 use spl_transport::credential::Credential;
 use spl_transport::journal_bridge::{
-    BridgePolicy, CapabilityGate, CarrierOpener, JournalBridgeConfig, JournalBridgeHandle,
-    JournalBridgeStatus, JournalBridgeStatusSubscription, JournalBridgeTerminalReason,
+    BootstrapMode, BridgePolicy, CapabilityGate, CarrierOpener, JournalBridgeConfig,
+    JournalBridgeHandle, JournalBridgeStatus, JournalBridgeStatusSubscription,
+    JournalBridgeTerminalReason,
 };
 use spl_transport::pairing::pair_from_link;
 
@@ -240,6 +241,7 @@ impl PrivateLinkBridge {
         let policy = BridgePolicy {
             port: 0,
             capability_gate: CapabilityGate::Enabled,
+            bootstrap_mode: BootstrapMode::OneTimeToken,
             max_request_body_bytes: MAX_REQUEST_BODY_BYTES,
             ..BridgePolicy::default()
         };
@@ -254,9 +256,9 @@ impl PrivateLinkBridge {
         Ok(Self { opener, handle })
     }
 
-    pub fn bootstrap_url(&self) -> Result<String, DiagnosticCode> {
+    pub fn capability_cookie(&self) -> Result<String, DiagnosticCode> {
         self.handle
-            .bootstrap_url()
+            .capability_cookie()
             .ok_or(DiagnosticCode::BridgeUnavailable)
     }
 

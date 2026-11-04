@@ -416,24 +416,15 @@ impl JournalClient {
     pub async fn bootstrap(bridge: &PrivateLinkBridge) -> Result<Self, DiagnosticCode> {
         let origin =
             Url::parse(&bridge.loopback_origin()).map_err(|_| DiagnosticCode::BridgeUnavailable)?;
+        let cookies = Arc::new(reqwest::cookie::Jar::default());
+        cookies.add_cookie_str(&bridge.capability_cookie()?, &origin);
         let client = reqwest::Client::builder()
-            .cookie_store(true)
+            .cookie_provider(cookies)
             .redirect(reqwest::redirect::Policy::none())
             .no_proxy()
             .connect_timeout(LOOPBACK_CONNECT_TIMEOUT)
             .build()
             .map_err(|_| DiagnosticCode::BridgeUnavailable)?;
-        if let Ok(bootstrap_url) = bridge.bootstrap_url() {
-            let response = client
-                .get(bootstrap_url)
-                .timeout(REQUEST_TIMEOUT)
-                .send()
-                .await
-                .map_err(|error| request_diagnostic(&error, DiagnosticCode::JournalUnavailable))?;
-            if response.status() != StatusCode::FOUND {
-                return Err(DiagnosticCode::JournalContractInvalid);
-            }
-        }
         Ok(Self {
             client,
             origin,
