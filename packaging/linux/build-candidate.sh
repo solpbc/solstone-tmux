@@ -315,7 +315,7 @@ if [[ -n "${requested[deb]:-}" ]]; then
         echo "Architecture: $deb_arch"
         echo "Maintainer: sol pbc"
         echo "Depends: tmux"
-        echo "Description: solstone tmux observer"
+        echo "Description: solstone for tmux: adds your tmux terminal to your journal"
     } >"$deb_stage/DEBIAN/control"
     chmod 0644 "$deb_stage/DEBIAN/control"
     touch -d "@$SOURCE_DATE_EPOCH" -- \
@@ -360,7 +360,7 @@ if [[ -n "${requested[rpm]:-}" ]]; then
         echo "Name: solstone-tmux"
         echo "Version: $product_version"
         echo "Release: 1"
-        echo "Summary: solstone tmux observer"
+        echo "Summary: solstone for tmux: adds your tmux terminal to your journal"
         echo "License: AGPL-3.0-only"
         echo "BuildArch: $rpm_arch"
         echo "Requires: tmux"
@@ -370,7 +370,7 @@ if [[ -n "${requested[rpm]:-}" ]]; then
         echo "Source2: RUST_DEPENDENCY_NOTICES.txt"
         echo
         echo "%description"
-        echo "solstone-tmux experiences tmux sessions along with the owner."
+        echo "solstone for tmux takes in the tmux sessions you work in, and all of it goes into your journal."
         echo
         echo "%prep"
         echo

@@ -945,7 +945,7 @@ fn append_tar_entry<W: Write>(
 
 fn deb_fixture(lane: Lane, executable: Vec<u8>, declared_architecture: &str) -> Vec<u8> {
     let control = format!(
-        "Package: {PRODUCT}\nVersion: {PRODUCT_VERSION}\nArchitecture: {declared_architecture}\nMaintainer: sol pbc\nDepends: {DEB_DEPENDS}\nDescription: solstone tmux observer\n"
+        "Package: {PRODUCT}\nVersion: {PRODUCT_VERSION}\nArchitecture: {declared_architecture}\nMaintainer: sol pbc\nDepends: {DEB_DEPENDS}\nDescription: solstone for tmux: adds your tmux terminal to your journal\n"
     );
     let control_tar = inner_tar(&[("control", control.as_bytes(), 0o644)]);
     let binary_path = artifact(lane, ArtifactKind::Deb)

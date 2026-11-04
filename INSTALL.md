@@ -164,9 +164,16 @@ Run these through the format-specific absolute path during a Linux cutover if
 command lookup has not yet been refreshed. Service installation records the
 exact executable invoked; it does not assume an install prefix.
 
-To run without activating a service:
+To run in the foreground instead of as a service, record where tmux is, which
+`install-service` otherwise does for you, then start it. If you installed the
+service, run `solstone-tmux uninstall-service` first: only one solstone-tmux runs
+at a time, and uninstalling removes this record too.
 
 ```sh
+config="${XDG_CONFIG_HOME:-$HOME/.config}/solstone-tmux"
+if [ "$(uname)" = Darwin ]; then config="$HOME/Library/Application Support/solstone-tmux"; fi
+mkdir -p "$config"
+printf '{"tmux_path":"%s"}\n' "$(realpath "$(command -v tmux)")" >"$config/local-observer.json"
 solstone-tmux run
 ```
 
