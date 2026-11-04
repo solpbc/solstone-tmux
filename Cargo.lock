@@ -1646,7 +1646,7 @@ dependencies = [
 
 [[package]]
 name = "solstone-tmux"
-version = "2.0.24"
+version = "2.0.25"
 dependencies = [
  "ar",
  "flate2",
@@ -1684,7 +1684,7 @@ dependencies = [
 [[package]]
 name = "spl-core"
 version = "0.1.0"
-source = "git+https://github.com/solpbc/spl-rust?rev=df60337f81e2a85d488169944856e4a8a629509f#df60337f81e2a85d488169944856e4a8a629509f"
+source = "git+https://github.com/solpbc/spl-rust?rev=d8cbad9917364f2649808053b69e96b7fa625fd1#d8cbad9917364f2649808053b69e96b7fa625fd1"
 dependencies = [
  "argon2",
  "base64",
@@ -1701,7 +1701,7 @@ dependencies = [
 [[package]]
 name = "spl-home"
 version = "0.1.0"
-source = "git+https://github.com/solpbc/spl-rust?rev=df60337f81e2a85d488169944856e4a8a629509f#df60337f81e2a85d488169944856e4a8a629509f"
+source = "git+https://github.com/solpbc/spl-rust?rev=d8cbad9917364f2649808053b69e96b7fa625fd1#d8cbad9917364f2649808053b69e96b7fa625fd1"
 dependencies = [
  "rustls",
  "spl-core",
@@ -1713,7 +1713,7 @@ dependencies = [
 [[package]]
 name = "spl-transport"
 version = "0.1.0"
-source = "git+https://github.com/solpbc/spl-rust?rev=df60337f81e2a85d488169944856e4a8a629509f#df60337f81e2a85d488169944856e4a8a629509f"
+source = "git+https://github.com/solpbc/spl-rust?rev=d8cbad9917364f2649808053b69e96b7fa625fd1#d8cbad9917364f2649808053b69e96b7fa625fd1"
 dependencies = [
  "base64",
  "futures-util",
