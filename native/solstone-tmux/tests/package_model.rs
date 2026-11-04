@@ -110,6 +110,8 @@ fn package_members_fix_destinations_metadata_and_dependency_text() {
                     [
                         (EXECUTABLE_NAME, EXECUTABLE_MODE),
                         ("INSTALL.md", DOCUMENT_MODE),
+                        ("LICENSE", DOCUMENT_MODE),
+                        ("RUST_DEPENDENCY_NOTICES.txt", DOCUMENT_MODE),
                     ]
                 );
                 let instructions = install_instructions(artifact.lane);

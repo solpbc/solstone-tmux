@@ -16,8 +16,9 @@ use flate2::write::GzEncoder;
 use minisign_verify::PublicKey;
 use package_model::{
     ArtifactKind, ArtifactRecord, DEB_DEPENDS, EXECUTABLE_NAME, ExecutableArchitecture,
-    ExecutableRecord, Lane, PRODUCT, PRODUCT_VERSION, SHA256SUMS_NAME, SIGNATURE_NAME,
-    TargetRecord, artifacts_for_lane, checksummed_names, install_instructions, render_sha256sums,
+    ExecutableRecord, Lane, PRODUCT, PRODUCT_VERSION, SHA256SUMS_NAME, SHIPPED_DOCUMENTS,
+    SIGNATURE_NAME, TargetRecord, artifacts_for_lane, checksummed_names, install_instructions,
+    render_sha256sums,
 };
 use sha2::{Digest, Sha256};
 use validator::{
@@ -348,6 +349,14 @@ fn archive_mutations_have_specific_rejections() {
         (
             tar_fixture(Lane::LinuxX86_64, elf_fixture(62), TarMutation::PrivateKey),
             ValidationError::ForbiddenMember,
+        ),
+        (
+            tar_fixture(
+                Lane::LinuxX86_64,
+                elf_fixture(62),
+                TarMutation::StaleNotices,
+            ),
+            ValidationError::Document,
         ),
     ];
     for (replacement, expected) in cases {
@@ -800,6 +809,7 @@ enum TarMutation {
     Health,
     Captures,
     PrivateKey,
+    StaleNotices,
 }
 
 fn tar_fixture(lane: Lane, executable: Vec<u8>, mutation: TarMutation) -> Vec<u8> {
@@ -842,6 +852,24 @@ fn tar_fixture(lane: Lane, executable: Vec<u8>, mutation: TarMutation) -> Vec<u8
         0o644,
         tar::EntryType::Regular,
     );
+    for document in SHIPPED_DOCUMENTS {
+        let stale;
+        let bytes = if matches!(mutation, TarMutation::StaleNotices)
+            && document.name == "RUST_DEPENDENCY_NOTICES.txt"
+        {
+            stale = [document.bytes, b"\n"].concat();
+            stale.as_slice()
+        } else {
+            document.bytes
+        };
+        append_tar_entry(
+            &mut builder,
+            document.path(ArtifactKind::TarGz),
+            bytes,
+            0o644,
+            tar::EntryType::Regular,
+        );
+    }
     if matches!(mutation, TarMutation::Extra) {
         append_tar_entry(
             &mut builder,
@@ -872,6 +900,15 @@ fn tar_with_install(executable: Vec<u8>, instructions: &[u8]) -> Vec<u8> {
         0o644,
         tar::EntryType::Regular,
     );
+    for document in SHIPPED_DOCUMENTS {
+        append_tar_entry(
+            &mut builder,
+            document.path(ArtifactKind::TarGz),
+            document.bytes,
+            0o644,
+            tar::EntryType::Regular,
+        );
+    }
     let encoder = builder.into_inner().expect("finish tar");
     encoder.finish().expect("finish gzip")
 }
@@ -915,7 +952,13 @@ fn deb_fixture(lane: Lane, executable: Vec<u8>, declared_architecture: &str) -> 
         .binary_destination
         .trim_start_matches('/')
         .to_owned();
-    let data_tar = inner_tar(&[(binary_path.as_str(), &executable, 0o755)]);
+    let mut data_entries = vec![(binary_path.as_str(), executable.as_slice(), 0o755)];
+    data_entries.extend(
+        SHIPPED_DOCUMENTS
+            .iter()
+            .map(|document| (document.path(ArtifactKind::Deb), document.bytes, 0o644)),
+    );
+    let data_tar = inner_tar(&data_entries);
     let mut builder = ar::Builder::new(Vec::new());
     append_ar(&mut builder, "debian-binary", b"2.0\n");
     append_ar(&mut builder, "control.tar.gz", &control_tar);

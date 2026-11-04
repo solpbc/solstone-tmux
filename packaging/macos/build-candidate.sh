@@ -223,6 +223,9 @@ client_pid_file="$scratch_root/tmux-client.pid"
 client_pid=""
 service_installed=false
 package_installed=false
+# Every package carries the license and the dependency notices beside the executable.
+doc_directory="usr/local/share/doc/solstone-tmux"
+shipped_documents=(LICENSE RUST_DEPENDENCY_NOTICES.txt)
 
 cleanup() {
     set +e
@@ -244,6 +247,8 @@ cleanup() {
     if $package_installed; then
         SOLSTONE_TMUX_OPERATOR_CLEANUP=1 \
             operator_exec sudo rm -f /usr/local/bin/solstone-tmux >/dev/null 2>&1
+        SOLSTONE_TMUX_OPERATOR_CLEANUP=1 \
+            operator_exec sudo rm -rf "/$doc_directory" >/dev/null 2>&1
         SOLSTONE_TMUX_OPERATOR_CLEANUP=1 \
             operator_exec sudo pkgutil --forget com.solstone.tmux >/dev/null 2>&1
     fi
@@ -292,6 +297,7 @@ operator_exec cargo fmt --all --check
 operator_exec cargo clippy --locked --workspace --all-targets -- -D warnings
 operator_exec cargo test --locked --workspace
 operator_exec cargo deny --offline --locked check licenses sources bans
+operator_exec bash "$repo_root/scripts/dependency-notices.sh" check
 operator_exec cargo check --locked --workspace --all-targets
 
 # Exact derivation: git show -s --format=%ct "$source_commit"
@@ -366,8 +372,13 @@ operator_exec install -m 0755 "$signed_executable" "$tar_stage/solstone-tmux"
     printf '%s\n' "Install with: install -m 0755 solstone-tmux /usr/local/bin/solstone-tmux"
 } >"$tar_stage/INSTALL.md"
 operator_exec chmod 0644 "$tar_stage/INSTALL.md"
+for document in "${shipped_documents[@]}"; do
+    operator_exec install -m 0644 "$repo_root/$document" "$tar_stage/$document"
+done
 operator_exec env TZ=UTC touch -t "$normalized_timestamp" \
     "$tar_stage/INSTALL.md" \
+    "$tar_stage/LICENSE" \
+    "$tar_stage/RUST_DEPENDENCY_NOTICES.txt" \
     "$tar_stage/solstone-tmux"
 tar_name="solstone-tmux-$product_version-aarch64-macos.tar.gz"
 operator_exec tar \
@@ -379,7 +390,7 @@ operator_exec tar \
     --numeric-owner \
     -C "$tar_stage" \
     -cf "$scratch_root/macos.tar" \
-    INSTALL.md solstone-tmux
+    INSTALL.md LICENSE RUST_DEPENDENCY_NOTICES.txt solstone-tmux
 operator_exec gzip -n -9 <"$scratch_root/macos.tar" >"$candidate_root/$tar_name"
 operator_exec chmod 0644 "$candidate_root/$tar_name"
 
@@ -388,10 +399,18 @@ operator_exec mkdir -m 0755 \
     "$pkg_stage" \
     "$pkg_stage/usr" \
     "$pkg_stage/usr/local" \
-    "$pkg_stage/usr/local/bin"
+    "$pkg_stage/usr/local/bin" \
+    "$pkg_stage/usr/local/share" \
+    "$pkg_stage/usr/local/share/doc" \
+    "$pkg_stage/$doc_directory"
 operator_exec install -m 0755 "$signed_executable" "$pkg_stage/usr/local/bin/solstone-tmux"
+for document in "${shipped_documents[@]}"; do
+    operator_exec install -m 0644 "$repo_root/$document" "$pkg_stage/$doc_directory/$document"
+done
 operator_exec env TZ=UTC touch -t "$normalized_timestamp" \
-    "$pkg_stage/usr/local/bin/solstone-tmux"
+    "$pkg_stage/usr/local/bin/solstone-tmux" \
+    "$pkg_stage/$doc_directory/LICENSE" \
+    "$pkg_stage/$doc_directory/RUST_DEPENDENCY_NOTICES.txt"
 component_pkg="$scratch_root/solstone-tmux-component.pkg"
 operator_exec pkgbuild \
     --root "$pkg_stage" \
@@ -448,14 +467,31 @@ if ! payload_regular_output="$(
 fi
 payload_regular_files=()
 while IFS= read -r payload_regular_file; do
-    payload_regular_files+=("$payload_regular_file")
+    payload_regular_files+=("${payload_regular_file#*/Payload/}")
 done <<<"$payload_regular_output"
-if ((${#payload_regular_files[@]} != 1)) ||
-    [[ "${payload_regular_files[0]}" != */Payload/usr/local/bin/solstone-tmux ]]; then
+expected_regular_files=(
+    "usr/local/bin/solstone-tmux"
+    "$doc_directory/LICENSE"
+    "$doc_directory/RUST_DEPENDENCY_NOTICES.txt"
+)
+if ((${#payload_regular_files[@]} != ${#expected_regular_files[@]})); then
     echo "macOS package regular-file payload is not exact" >&2
     exit 1
 fi
-expanded_binary="${payload_regular_files[0]}"
+for expected_regular_file in "${expected_regular_files[@]}"; do
+    expected_found=false
+    for payload_regular_file in "${payload_regular_files[@]}"; do
+        if [[ "$payload_regular_file" == "$expected_regular_file" ]]; then
+            expected_found=true
+        fi
+    done
+    if ! $expected_found; then
+        echo "macOS package regular-file payload is not exact" >&2
+        exit 1
+    fi
+done
+expanded_payload="${payload_regular_output%%/Payload/*}/Payload"
+expanded_binary="$expanded_payload/usr/local/bin/solstone-tmux"
 if ! payload_link_output="$(
     operator_exec find "$expanded_pkg" -type l -path '*/Payload/*' -print -quit
 )"; then
@@ -467,12 +503,15 @@ if [[ -n "$payload_link_output" ]]; then
     exit 1
 fi
 operator_exec cmp "$expanded_binary" "$signed_executable"
+for document in "${shipped_documents[@]}"; do
+    operator_exec cmp "$expanded_payload/$doc_directory/$document" "$repo_root/$document"
+done
 if [[ "$(operator_exec stat -f '%Lp' "$expanded_binary")" != "755" ]]; then
     echo "macOS package executable mode is not 0755" >&2
     exit 1
 fi
 tar_list="$(operator_exec tar -tzf "$candidate_root/$tar_name")"
-if [[ "$tar_list" != $'INSTALL.md\nsolstone-tmux' ]]; then
+if [[ "$tar_list" != $'INSTALL.md\nLICENSE\nRUST_DEPENDENCY_NOTICES.txt\nsolstone-tmux' ]]; then
     echo "macOS tar payload list is not exact" >&2
     exit 1
 fi
@@ -480,6 +519,9 @@ tar_extract="$stage_root/tar-extract"
 operator_exec mkdir -m 0700 "$tar_extract"
 operator_exec tar -xzf "$candidate_root/$tar_name" -C "$tar_extract"
 operator_exec cmp "$tar_extract/solstone-tmux" "$signed_executable"
+for document in "${shipped_documents[@]}"; do
+    operator_exec cmp "$tar_extract/$document" "$repo_root/$document"
+done
 operator_exec codesign --verify --strict --verbose=2 "$tar_extract/solstone-tmux"
 if ! operator_exec grep -aFq "$source_commit" "$tar_extract/solstone-tmux"; then
     echo "source commit is absent from the packaged executable" >&2
@@ -574,6 +616,7 @@ client_pid=""
 # -S, always. See the DANGER block above.
 operator_exec tmux -S "$scratch_tmux_socket" kill-server
 operator_exec sudo rm -f /usr/local/bin/solstone-tmux
+operator_exec sudo rm -rf "/$doc_directory"
 operator_exec sudo pkgutil --forget com.solstone.tmux
 package_installed=false
 

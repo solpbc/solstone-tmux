@@ -3,7 +3,7 @@
 
 SHELL := /bin/bash
 
-.PHONY: all build agent-setup test test-only format ci clean install-service uninstall-service service-status service-logs package-linux release-linux validate-release sign-validate-release publish-origin publish-release
+.PHONY: all build agent-setup test test-only format notices ci clean install-service uninstall-service service-status service-logs package-linux release-linux validate-release sign-validate-release publish-origin publish-release
 
 APP := solstone-tmux
 CARGO := cargo
@@ -33,6 +33,9 @@ test-only:
 format:
 	$(CARGO) fmt --all
 
+notices:
+	@bash scripts/dependency-notices.sh generate
+
 ci:
 	@echo "Running CI checks..."
 	@echo "=== Running repository guards (host execution) ==="
@@ -55,6 +58,7 @@ ci:
 		exit 1; \
 	fi
 	@cargo deny --offline --locked check licenses sources bans
+	@bash scripts/dependency-notices.sh check
 	@targets="$$($(RUST_TARGETS))"; \
 	echo "Rust dependency graph evidence (cargo deny --offline --locked with deny.toml [graph].targets; resolution only; no compile, link, runnable, or native-artifact claim):"; \
 	while IFS= read -r target; do \

@@ -17,9 +17,9 @@ use sha2::{Digest, Sha256};
 use super::package_model::{
     ARTIFACTS, ArtifactKind, ArtifactSpec, DEB_DEPENDS, EXECUTABLE_MODE, EXECUTABLE_NAME,
     ExecutableArchitecture, FORBIDDEN_MEMBER_BASENAMES, Lane, MACOS_DEPLOYMENT_FLOOR, ModelError,
-    PRODUCT, PRODUCT_VERSION, SECRET_CANARIES, SHA256SUMS_NAME, SIGNATURE_NAME, TargetRecord,
-    artifacts_for_lane, checksummed_names, complete_candidate_names, install_instructions,
-    modeled_members, parse_sha256sums, render_sha256sums,
+    PRODUCT, PRODUCT_VERSION, SECRET_CANARIES, SHA256SUMS_NAME, SHIPPED_DOCUMENTS, SIGNATURE_NAME,
+    TargetRecord, artifacts_for_lane, checksummed_names, complete_candidate_names,
+    install_instructions, modeled_members, parse_sha256sums, render_sha256sums,
 };
 
 const MAX_CANDIDATE_BYTES: u64 = 512 * 1024 * 1024;
@@ -60,6 +60,7 @@ pub enum ValidationError {
     SourceCommit,
     VersionOutput,
     HostPlatform,
+    Document,
     Io,
 }
 
@@ -106,6 +107,7 @@ impl fmt::Display for ValidationError {
             Self::HostPlatform => {
                 "aggregate validation requires Linux x86_64, Linux aarch64, or macOS aarch64"
             }
+            Self::Document => "package license or dependency notices differ from the committed files",
             Self::Io => "candidate validation I/O failed",
         })
     }
@@ -572,6 +574,14 @@ fn inspect_tar(
     if instructions != install_instructions(spec.lane).as_bytes() {
         return Err(ValidationError::Dependency);
     }
+    for document in SHIPPED_DOCUMENTS {
+        let packaged = members
+            .get(document.path(spec.kind))
+            .ok_or(ValidationError::ArchiveMembers)?;
+        if packaged.4 != document.bytes {
+            return Err(ValidationError::Document);
+        }
+    }
     Ok(ArchiveInspection { binary: executable })
 }
 
@@ -630,13 +640,27 @@ fn inspect_deb(bytes: &[u8], spec: &ArtifactSpec, epoch: u64) -> Result<Vec<u8>,
     .map_err(|_| ValidationError::ArchiveDecode)?;
     validate_deb_control(control, spec)?;
     let binary_path = spec.binary_destination.trim_start_matches('/');
+    let mut data_paths = vec![binary_path];
+    data_paths.extend(
+        SHIPPED_DOCUMENTS
+            .iter()
+            .map(|document| document.path(spec.kind)),
+    );
     let data_members = inspect_inner_tar(
         members
             .get("data.tar.gz")
             .ok_or(ValidationError::ArchiveMembers)?,
         epoch,
-        &[binary_path],
+        &data_paths,
     )?;
+    for document in SHIPPED_DOCUMENTS {
+        let packaged = data_members
+            .get(document.path(spec.kind))
+            .ok_or(ValidationError::ArchiveMembers)?;
+        if packaged != document.bytes {
+            return Err(ValidationError::Document);
+        }
+    }
     let executable = data_members
         .get(binary_path)
         .ok_or(ValidationError::ArchiveMembers)?

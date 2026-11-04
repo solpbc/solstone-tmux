@@ -24,6 +24,41 @@ pub const DEB_DESTINATION: &str = "/usr/bin/solstone-tmux";
 pub const RPM_DESTINATION: &str = "/usr/bin/solstone-tmux";
 pub const MACOS_DESTINATION: &str = "/usr/local/bin/solstone-tmux";
 
+/// The license and the dependency notices ship in every package, byte for byte as
+/// committed at the release's source commit.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ShippedDocument {
+    pub name: &'static str,
+    pub bytes: &'static [u8],
+    linux_package_path: &'static str,
+    macos_package_path: &'static str,
+}
+
+pub const SHIPPED_DOCUMENTS: [ShippedDocument; 2] = [
+    ShippedDocument {
+        name: "LICENSE",
+        bytes: include_bytes!("../../../../LICENSE"),
+        linux_package_path: "usr/share/doc/solstone-tmux/LICENSE",
+        macos_package_path: "usr/local/share/doc/solstone-tmux/LICENSE",
+    },
+    ShippedDocument {
+        name: "RUST_DEPENDENCY_NOTICES.txt",
+        bytes: include_bytes!("../../../../RUST_DEPENDENCY_NOTICES.txt"),
+        linux_package_path: "usr/share/doc/solstone-tmux/RUST_DEPENDENCY_NOTICES.txt",
+        macos_package_path: "usr/local/share/doc/solstone-tmux/RUST_DEPENDENCY_NOTICES.txt",
+    },
+];
+
+impl ShippedDocument {
+    pub const fn path(&self, kind: ArtifactKind) -> &'static str {
+        match kind {
+            ArtifactKind::TarGz => self.name,
+            ArtifactKind::Deb | ArtifactKind::Rpm => self.linux_package_path,
+            ArtifactKind::Pkg => self.macos_package_path,
+        }
+    }
+}
+
 pub const SECRET_CANARIES: [&str; 2] = [
     "SOLSTONE_TMUX_SECRET_CANARY_DO_NOT_SHIP",
     "MINISIGN_SECRET_CANARY_DO_NOT_SHIP",
@@ -212,7 +247,15 @@ pub struct ModeledMember {
 
 pub fn modeled_members(spec: &ArtifactSpec, source_date_epoch: u64) -> Vec<ModeledMember> {
     let binary_path = spec.binary_destination.trim_start_matches('/');
-    match spec.kind {
+    let documents = SHIPPED_DOCUMENTS.iter().map(|document| ModeledMember {
+        path: document.path(spec.kind),
+        mode: DOCUMENT_MODE,
+        uid: ROOT_UID,
+        gid: ROOT_GID,
+        mtime: source_date_epoch,
+        kind: ModeledMemberKind::Regular,
+    });
+    let mut members = match spec.kind {
         ArtifactKind::TarGz => vec![
             ModeledMember {
                 path: EXECUTABLE_NAME,
@@ -239,7 +282,9 @@ pub fn modeled_members(spec: &ArtifactSpec, source_date_epoch: u64) -> Vec<Model
             mtime: source_date_epoch,
             kind: ModeledMemberKind::Regular,
         }],
-    }
+    };
+    members.extend(documents);
+    members
 }
 
 pub fn install_instructions(lane: Lane) -> String {

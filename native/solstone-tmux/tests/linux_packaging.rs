@@ -11,6 +11,8 @@ use std::path::Path;
 use std::process::Command;
 use support::TestDirectory;
 
+const MEMBERS: &str = "./usr/bin/solstone-tmux\n./usr/share/doc/solstone-tmux\n./usr/share/doc/solstone-tmux/LICENSE\n./usr/share/doc/solstone-tmux/RUST_DEPENDENCY_NOTICES.txt";
+
 fn executable(path: &Path, body: &str) {
     fs::write(path, body).expect("fixture script");
     fs::set_permissions(path, fs::Permissions::from_mode(0o700)).expect("fixture mode");
@@ -27,14 +29,14 @@ fn rpm_payload_gate_checks_bytes_members_and_subprocess_failures() {
     );
     executable(
         &tools.join("cpio"),
-        "#!/bin/sh\ncase \"$2\" in --list) [ \"$FAIL_LIST\" = 1 ] && exit 8; printf '%s\\n' \"$MEMBERS\" ;; --extract) [ \"$FAIL_EXTRACT\" = 1 ] && exit 9; cat ;; *) exit 10 ;; esac\n",
+        "#!/bin/sh\ncase \"$2\" in --list) [ \"$FAIL_LIST\" = 1 ] && exit 8; printf '%s\\n' \"$MEMBERS\" ;; --extract) [ \"$FAIL_EXTRACT\" = 1 ] && exit 9; case \"$4\" in ./usr/bin/solstone-tmux) cat ;; *) cat \"$REPO_ROOT/${4##*/}\" ;; esac ;; *) exit 10 ;; esac\n",
     );
     let source = temp.path().join("source");
     let package = temp.path().join("package");
     fs::write(&source, b"exact source executable").expect("source fixture");
     fs::write(&package, b"exact source executable").expect("package fixture");
-    let helper =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packaging/linux/verify-rpm-payload.sh");
+    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let helper = repo_root.join("packaging/linux/verify-rpm-payload.sh");
     let run = |members: &str, decompress: &str, list: &str, extract: &str| {
         Command::new("bash")
             .arg(&helper)
@@ -42,6 +44,7 @@ fn rpm_payload_gate_checks_bytes_members_and_subprocess_failures() {
             .arg(&source)
             .env("PATH", format!("{}:/usr/bin:/bin", tools.display()))
             .env("MEMBERS", members)
+            .env("REPO_ROOT", &repo_root)
             .env("FAIL_DECOMPRESS", decompress)
             .env("FAIL_LIST", list)
             .env("FAIL_EXTRACT", extract)
@@ -49,13 +52,23 @@ fn rpm_payload_gate_checks_bytes_members_and_subprocess_failures() {
             .expect("payload gate")
             .status
     };
-    assert!(run("./usr/bin/solstone-tmux", "0", "0", "0").success());
+    assert!(run(MEMBERS, "0", "0", "0").success());
     fs::write(&package, b"stripped source executable").expect("mutation fixture");
-    assert!(!run("./usr/bin/solstone-tmux", "0", "0", "0").success());
+    assert!(!run(MEMBERS, "0", "0", "0").success());
     fs::write(&package, b"exact source executable").expect("restore fixture");
     assert!(
         !run(
-            "./usr/bin/solstone-tmux\n./usr/bin/solstone-tmux",
+            &format!("{MEMBERS}\n./usr/bin/solstone-tmux"),
+            "0",
+            "0",
+            "0"
+        )
+        .success()
+    );
+    // A package without the dependency notices is refused.
+    assert!(
+        !run(
+            "./usr/bin/solstone-tmux\n./usr/share/doc/solstone-tmux\n./usr/share/doc/solstone-tmux/LICENSE",
             "0",
             "0",
             "0"
@@ -63,16 +76,7 @@ fn rpm_payload_gate_checks_bytes_members_and_subprocess_failures() {
         .success()
     );
     assert!(!run("./usr/bin/other", "0", "0", "0").success());
-    assert_eq!(
-        run("./usr/bin/solstone-tmux", "1", "0", "0").code(),
-        Some(7)
-    );
-    assert_eq!(
-        run("./usr/bin/solstone-tmux", "0", "1", "0").code(),
-        Some(8)
-    );
-    assert_eq!(
-        run("./usr/bin/solstone-tmux", "0", "0", "1").code(),
-        Some(9)
-    );
+    assert_eq!(run(MEMBERS, "1", "0", "0").code(), Some(7));
+    assert_eq!(run(MEMBERS, "0", "1", "0").code(), Some(8));
+    assert_eq!(run(MEMBERS, "0", "0", "1").code(), Some(9));
 }

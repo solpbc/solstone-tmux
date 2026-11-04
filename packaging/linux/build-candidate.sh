@@ -14,6 +14,10 @@ source_executable="$3"
 output_directory="$4"
 format_list="$5"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# Every package carries the license and the dependency notices beside the executable.
+license_source="$repo_root/LICENSE"
+notices_source="$repo_root/RUST_DEPENDENCY_NOTICES.txt"
+doc_directory="usr/share/doc/solstone-tmux"
 
 mapfile -t configured_targets < <("$repo_root/scripts/rust-targets.sh")
 target_found=false
@@ -270,9 +274,13 @@ if [[ -n "${requested[tar]:-}" ]]; then
         echo "Install with: install -m 0755 solstone-tmux /usr/local/bin/solstone-tmux"
     } >"$tar_stage/INSTALL.md"
     chmod 0644 "$tar_stage/INSTALL.md"
+    install -m 0644 -- "$license_source" "$tar_stage/LICENSE"
+    install -m 0644 -- "$notices_source" "$tar_stage/RUST_DEPENDENCY_NOTICES.txt"
     touch -d "@$SOURCE_DATE_EPOCH" -- \
         "$tar_stage/solstone-tmux" \
-        "$tar_stage/INSTALL.md"
+        "$tar_stage/INSTALL.md" \
+        "$tar_stage/LICENSE" \
+        "$tar_stage/RUST_DEPENDENCY_NOTICES.txt"
     tar --format=ustar \
         --owner=0 \
         --group=0 \
@@ -281,7 +289,7 @@ if [[ -n "${requested[tar]:-}" ]]; then
         --mode='u+rwX,go+rX,go-w' \
         -C "$tar_stage" \
         -cf "$work_root/linux.tar" \
-        INSTALL.md solstone-tmux
+        INSTALL.md LICENSE RUST_DEPENDENCY_NOTICES.txt solstone-tmux
     gzip -n -9 <"$work_root/linux.tar" >"$candidate_root/$tar_name"
     chmod 0644 "$candidate_root/$tar_name"
     add_artifact "$tar_name"
@@ -294,8 +302,13 @@ if [[ -n "${requested[deb]:-}" ]]; then
         "$deb_stage" \
         "$deb_stage/DEBIAN" \
         "$deb_stage/usr" \
-        "$deb_stage/usr/bin"
+        "$deb_stage/usr/bin" \
+        "$deb_stage/usr/share" \
+        "$deb_stage/usr/share/doc" \
+        "$deb_stage/$doc_directory"
     install -m 0755 -- "$source_executable" "$deb_stage/usr/bin/solstone-tmux"
+    install -m 0644 -- "$license_source" "$deb_stage/$doc_directory/LICENSE"
+    install -m 0644 -- "$notices_source" "$deb_stage/$doc_directory/RUST_DEPENDENCY_NOTICES.txt"
     {
         echo "Package: solstone-tmux"
         echo "Version: $product_version"
@@ -311,7 +324,12 @@ if [[ -n "${requested[deb]:-}" ]]; then
         "$deb_stage/DEBIAN/control" \
         "$deb_stage/usr" \
         "$deb_stage/usr/bin" \
-        "$deb_stage/usr/bin/solstone-tmux"
+        "$deb_stage/usr/bin/solstone-tmux" \
+        "$deb_stage/usr/share" \
+        "$deb_stage/usr/share/doc" \
+        "$deb_stage/$doc_directory" \
+        "$deb_stage/$doc_directory/LICENSE" \
+        "$deb_stage/$doc_directory/RUST_DEPENDENCY_NOTICES.txt"
     dpkg-deb --build --root-owner-group -Zgzip -z9 \
         "$deb_stage" \
         "$candidate_root/$deb_name"
@@ -331,7 +349,12 @@ if [[ -n "${requested[rpm]:-}" ]]; then
         "$rpm_root/SPECS" \
         "$rpm_root/SRPMS"
     install -m 0755 -- "$source_executable" "$rpm_root/SOURCES/solstone-tmux"
-    touch -d "@$SOURCE_DATE_EPOCH" -- "$rpm_root/SOURCES/solstone-tmux"
+    install -m 0644 -- "$license_source" "$rpm_root/SOURCES/LICENSE"
+    install -m 0644 -- "$notices_source" "$rpm_root/SOURCES/RUST_DEPENDENCY_NOTICES.txt"
+    touch -d "@$SOURCE_DATE_EPOCH" -- \
+        "$rpm_root/SOURCES/solstone-tmux" \
+        "$rpm_root/SOURCES/LICENSE" \
+        "$rpm_root/SOURCES/RUST_DEPENDENCY_NOTICES.txt"
     spec_file="$rpm_root/SPECS/solstone-tmux.spec"
     {
         echo "Name: solstone-tmux"
@@ -343,6 +366,8 @@ if [[ -n "${requested[rpm]:-}" ]]; then
         echo "Requires: tmux"
         echo "AutoReqProv: no"
         echo "Source0: solstone-tmux"
+        echo "Source1: LICENSE"
+        echo "Source2: RUST_DEPENDENCY_NOTICES.txt"
         echo
         echo "%description"
         echo "solstone-tmux experiences tmux sessions along with the owner."
@@ -353,9 +378,14 @@ if [[ -n "${requested[rpm]:-}" ]]; then
         echo
         echo "%install"
         echo 'install -D -m 0755 %{SOURCE0} %{buildroot}/usr/bin/solstone-tmux'
+        echo "install -D -m 0644 %{SOURCE1} %{buildroot}/$doc_directory/LICENSE"
+        echo "install -D -m 0644 %{SOURCE2} %{buildroot}/$doc_directory/RUST_DEPENDENCY_NOTICES.txt"
         echo
         echo "%files"
         echo "/usr/bin/solstone-tmux"
+        echo "%dir /$doc_directory"
+        echo "/$doc_directory/LICENSE"
+        echo "/$doc_directory/RUST_DEPENDENCY_NOTICES.txt"
     } >"$spec_file"
     chmod 0644 "$spec_file"
     touch -d "@$SOURCE_DATE_EPOCH" -- "$spec_file"

@@ -212,6 +212,7 @@ fn expected_command_names() -> Vec<&'static str> {
         "cargo",
         "cargo",
         "cargo",
+        "bash",
         "cargo",
         "git",
         "date",
@@ -231,11 +232,15 @@ fn expected_command_names() -> Vec<&'static str> {
         "mkdir",
         "install",
         "chmod",
+        "install",
+        "install",
         "env",
         "tar",
         "gzip",
         "chmod",
         "mkdir",
+        "install",
+        "install",
         "install",
         "env",
         "pkgbuild",
@@ -254,10 +259,14 @@ fn expected_command_names() -> Vec<&'static str> {
         "find",
         "find",
         "cmp",
+        "cmp",
+        "cmp",
         "stat",
         "tar",
         "mkdir",
         "tar",
+        "cmp",
+        "cmp",
         "cmp",
         "codesign",
         "grep",
@@ -279,6 +288,7 @@ fn expected_command_names() -> Vec<&'static str> {
         "find",
         "kill",
         "tmux",
+        "sudo",
         "sudo",
         "sudo",
         "rustc",
@@ -649,7 +659,7 @@ case "$command_name" in
                 previous="$argument"
             done
         elif [[ "${1:-}" == "-tzf" ]]; then
-            printf 'INSTALL.md\nsolstone-tmux\n'
+            printf 'INSTALL.md\nLICENSE\nRUST_DEPENDENCY_NOTICES.txt\nsolstone-tmux\n'
         elif [[ "${1:-}" == "-xzf" ]]; then
             destination=""
             previous=""
@@ -686,7 +696,10 @@ case "$command_name" in
         ;;
     find)
         if [[ "$*" == *"-type f"* && "$*" == *"-path"* ]]; then
-            printf '%s\n' "$1/Payload/usr/local/bin/solstone-tmux"
+            printf '%s\n' \
+                "$1/Payload/usr/local/bin/solstone-tmux" \
+                "$1/Payload/usr/local/share/doc/solstone-tmux/LICENSE" \
+                "$1/Payload/usr/local/share/doc/solstone-tmux/RUST_DEPENDENCY_NOTICES.txt"
         fi
         ;;
     stat)

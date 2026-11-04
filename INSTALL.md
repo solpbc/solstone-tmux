@@ -232,6 +232,7 @@ On macOS:
 ```sh
 /usr/local/bin/solstone-tmux uninstall-service
 sudo rm /usr/local/bin/solstone-tmux
+sudo rm -rf /usr/local/share/doc/solstone-tmux
 ```
 
 These commands leave settings, cached segments and the macOS log in place.

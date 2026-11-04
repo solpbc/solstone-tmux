@@ -24,6 +24,8 @@ Cargo.toml                         Rust workspace with one member
 Cargo.lock                         Locked dependency graph
 rust-toolchain.toml                Toolchain and authoritative target list
 deny.toml                          License, source, ban, and target policy
+RUST_DEPENDENCY_NOTICES.txt        Generated license texts of the shipped dependency graph
+licensing/overrides/               License texts a dependency's own source does not carry
 native/solstone-tmux/
     Cargo.toml                     Product crate and sole binary
     contracts/
@@ -83,6 +85,7 @@ packaging/
 scripts/
     check-rust-guards.sh           Repository policy guard
     extract_changelog.sh           Exact release-note extraction
+    dependency-notices.sh          Dependency notices generation and currency check
     rust-targets.sh                Target parser for rust-toolchain.toml
     spl-pin.sh                     SPL pin, inheritance, and lock guard
 ```
@@ -94,6 +97,7 @@ make build
 make test
 make test-only TEST=<filter>
 make format
+make notices
 make ci
 make clean
 
@@ -115,8 +119,10 @@ instead of defining a second list.
 4. Locked workspace tests.
 5. Exact cargo-deny version check.
 6. Offline license, source, and ban policy across configured graph targets.
-7. Dependency-graph evidence output.
-8. Locked host-only workspace check and host evidence output.
+7. `RUST_DEPENDENCY_NOTICES.txt` matches the locked graph for every configured
+   target.
+8. Dependency-graph evidence output.
+9. Locked host-only workspace check and host evidence output.
 
 The dependency evidence proves graph resolution only. The host evidence proves
 type checking only; neither is a linked or native-artifact claim.
@@ -132,6 +138,14 @@ shipped executable graph.
 `cargo-deny` must be exactly version `0.20.2`. Its offline gate covers licenses,
 sources, and bans. Advisories are excluded because that database requires
 network access.
+
+Every package ships `LICENSE` and `RUST_DEPENDENCY_NOTICES.txt`: at the archive
+root in the tarballs, under `/usr/share/doc/solstone-tmux/` in the Debian and RPM
+packages, and under `/usr/local/share/doc/solstone-tmux/` in the macOS package.
+The notices are generated from the normal and build dependency closure of every
+configured target. After any change to `Cargo.lock`, run `make notices` and
+commit the result; `make ci` and both release lanes fail until the committed
+file matches.
 
 ## Development principles
 
