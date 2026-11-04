@@ -185,12 +185,11 @@ fn loopback_capability_is_the_whole_admission_check() {
             .no_proxy()
             .build()
             .expect("raw client");
-        cookie_jar.add_cookie_str(
-            &bridge.capability_cookie().expect("native cookie"),
-            &reqwest::Url::parse(&origin).unwrap(),
-        );
+        let cookie = bridge.capability_cookie().expect("native cookie");
+        cookie_jar.add_cookie_str(&cookie, &reqwest::Url::parse(&origin).unwrap());
+        let capability = cookie.split_once('=').unwrap().1.split(';').next().unwrap();
         let bootstrap = anonymous
-            .get(format!("{origin}/_bridge/bootstrap?cap=old-static-link"))
+            .get(format!("{origin}/_bridge/bootstrap?cap={capability}"))
             .send()
             .await
             .expect("bootstrap refusal");
