@@ -26,6 +26,12 @@ esac
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 notices_path="$repo_root/RUST_DEPENDENCY_NOTICES.txt"
 overrides_root="$repo_root/licensing/overrides"
+rust_version="$(sed -n 's/^channel = "\([^"]*\)"/\1/p' "$repo_root/rust-toolchain.toml")"
+runtime_notices="$repo_root/licensing/runtime/$rust_version-NOTICES.txt"
+[[ -s "$runtime_notices" ]] || {
+    echo "missing runtime notices for Rust $rust_version: $runtime_notices" >&2
+    exit 1
+}
 root_package="solstone-tmux"
 export LC_ALL=C
 
@@ -157,6 +163,7 @@ rule="==========================================================================
                 printf '\n'
             fi
         done
+    cat -- "$runtime_notices"
 } >"$work_root/notices.txt"
 
 if [[ "$mode" == generate ]]; then
