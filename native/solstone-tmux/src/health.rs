@@ -16,7 +16,8 @@ const HEALTH_SCHEMA_VERSION: u32 = 1;
 const HEALTH_STALE_SECONDS: i64 = 180;
 const HEALTH_FUTURE_TOLERANCE_SECONDS: i64 = 60;
 /// How long one answer from the journal keeps "connected": a periodic sweep, its status
-/// check's timeout, and a second of slack, so one slow or failed check never reads as a drop.
+/// check's timeout, and a second of slack. A failed check alone does not drop
+/// connected, but the lease can expire before the next retry answers.
 pub const CONNECTED_LEASE_SECONDS: i64 = crate::sync::PERIODIC_SYNC_INTERVAL.as_secs() as i64
     + crate::journal::SYSTEM_STATUS_TIMEOUT.as_secs() as i64
     + 1;

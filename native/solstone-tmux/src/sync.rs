@@ -1568,6 +1568,7 @@ impl SyncScheduler {
         );
         periodic.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let mut requested = true;
+        let mut sleep_watch = SleepWatch::new(self.clock.as_ref());
 
         loop {
             if requested {
@@ -1588,7 +1589,7 @@ impl SyncScheduler {
                             () = tokio::time::sleep_until(deadline) => {
                                 self.backoff.deadline_reached();
                             }
-                            () = woke_from_sleep(self.clock.clone()) => {
+                            () = sleep_watch.wait(self.clock.as_ref()) => {
                                 self.begin_episode();
                                 self.backoff.deadline_reached();
                             }
@@ -1618,7 +1619,7 @@ impl SyncScheduler {
                 () = wait_for_shutdown(&mut shutdown) => return,
                 () = self.wake.wait() => requested = true,
                 _ = periodic.tick() => requested = true,
-                () = woke_from_sleep(self.clock.clone()) => {
+                () = sleep_watch.wait(self.clock.as_ref()) => {
                     self.begin_episode();
                     requested = true;
                 }
@@ -2545,17 +2546,29 @@ impl SyncTask {
     }
 }
 
-/// Resolves once the machine has slept: the monotonic clock stops during suspend and the
-/// wall clock does not, so the wall clock pulls ahead.
-async fn woke_from_sleep(clock: Arc<dyn Clock>) {
-    let mut last = (clock.wall_now(), clock.monotonic_now());
-    loop {
-        tokio::time::sleep(WAKE_WATCH_INTERVAL).await;
-        let now = (clock.wall_now(), clock.monotonic_now());
-        if slept_between(last, now) {
-            return;
+/// Keep the clock sample across cancelled waits and sweeps, so another ready
+/// scheduler event cannot consume the evidence that the machine slept.
+struct SleepWatch {
+    last: (time::OffsetDateTime, Duration),
+}
+
+impl SleepWatch {
+    fn new(clock: &dyn Clock) -> Self {
+        Self {
+            last: (clock.wall_now(), clock.monotonic_now()),
         }
-        last = now;
+    }
+
+    async fn wait(&mut self, clock: &dyn Clock) {
+        loop {
+            let now = (clock.wall_now(), clock.monotonic_now());
+            let slept = slept_between(self.last, now);
+            self.last = now;
+            if slept {
+                return;
+            }
+            tokio::time::sleep(WAKE_WATCH_INTERVAL).await;
+        }
     }
 }
 
@@ -3254,6 +3267,56 @@ mod tests {
     use crate::health::DiagnosticCode;
     use crate::post_connect::compute_pairing_generation;
     use crate::private_link::{CREDENTIALS_FILENAME, load_credential};
+
+    #[tokio::test(start_paused = true)]
+    async fn sleep_watch_survives_cancelled_wait() {
+        use crate::clock::TestClock;
+        use futures_util::FutureExt;
+        use std::time::Duration;
+        use time::{OffsetDateTime, UtcOffset};
+
+        let wall = OffsetDateTime::UNIX_EPOCH;
+        let clock = TestClock::new(wall, Duration::ZERO, UtcOffset::UTC);
+        let mut watch = super::SleepWatch::new(&clock);
+        // A periodic tick or a closed segment wins the scheduler's select.
+        assert!(watch.wait(&clock).now_or_never().is_none());
+        clock.set_wall(wall + time::Duration::hours(1));
+        assert!(watch.wait(&clock).now_or_never().is_some());
+        // The same wake must not trigger a second check.
+        assert!(watch.wait(&clock).now_or_never().is_none());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn sleep_watch_detects_sleep_during_sweep() {
+        use crate::clock::TestClock;
+        use futures_util::FutureExt;
+        use std::time::Duration;
+        use time::{OffsetDateTime, UtcOffset};
+
+        let wall = OffsetDateTime::UNIX_EPOCH;
+        let clock = TestClock::new(wall, Duration::ZERO, UtcOffset::UTC);
+        let mut watch = super::SleepWatch::new(&clock);
+        // The sweep runs before the first wait, and can itself span a sleep.
+        clock.set_wall(wall + time::Duration::hours(1));
+        assert!(watch.wait(&clock).now_or_never().is_some());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn sleep_watch_does_not_probe_more_while_awake() {
+        use crate::clock::TestClock;
+        use futures_util::FutureExt;
+        use std::time::Duration;
+        use time::{OffsetDateTime, UtcOffset};
+
+        let wall = OffsetDateTime::UNIX_EPOCH;
+        let clock = TestClock::new(wall, Duration::ZERO, UtcOffset::UTC);
+        let mut watch = super::SleepWatch::new(&clock);
+        for seconds in [5, 60, 300, 3600] {
+            clock.set_wall(wall + time::Duration::seconds(seconds));
+            clock.set_monotonic(Duration::from_secs(seconds as u64));
+            assert!(watch.wait(&clock).now_or_never().is_none());
+        }
+    }
 
     #[test]
     fn failed_token_persistence_is_reported_and_retried() {
