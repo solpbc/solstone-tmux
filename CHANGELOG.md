@@ -6,17 +6,16 @@ Format adapted from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-### Changed
-
-- updated the private network connection used to reach your journal.
+## [2.0.26] - 2026-11-04
 
 ### Added
 
-- every download now includes solstone-tmux's license and `RUST_DEPENDENCY_NOTICES.txt`, which reproduces the licenses of the open source code it's built from. the tarballs carry both beside the program, the linux packages install them in `/usr/share/doc/solstone-tmux`, and the mac package in `/usr/local/share/doc/solstone-tmux`. to remove them on a mac when you uninstall, run `sudo rm -rf /usr/local/share/doc/solstone-tmux`.
+- every download now includes solstone-tmux's license and `RUST_DEPENDENCY_NOTICES.txt`, which reproduces the licenses of the open source code it's built from.
 
 ### Fixed
 
-- `solstone-tmux status` no longer says connected long after your journal stopped answering. connected now means your journal answered within about the last minute. just after solstone-tmux starts or this computer wakes, it checks with your journal within a few seconds, and the status says connecting until your journal answers, and offline if that takes 30 seconds or more. a retry after a failed attempt no longer flips it to syncing and back, and one slow answer no longer reads as offline. the ☼ in your status line now stays yellow a moment longer each time it lights, so it no longer flickers.
+- after this computer wakes, `solstone-tmux status` no longer says connected from before it slept. connected now means your journal answered within about the last minute. just after solstone-tmux starts or this computer wakes, it checks with your journal within a few seconds. if your journal doesn't answer, the status says connecting, then offline once 30 seconds have passed. a retry after a failed attempt no longer flips the status to syncing and back.
+- the ☼ in your status line now stays yellow a moment longer each time it lights, so it no longer flickers.
 - if you run solstone-tmux in the foreground, the steps `solstone-tmux confirm` gives after a no, a cancel or wrong mark words no longer send you to the service commands. they now say to stop it, run setup again with a fresh pairing link from your journal, then start it again. for the service, `solstone-tmux uninstall-service` and `solstone-tmux install-service` still do the stopping and starting.
 
 ## [2.0.25] - 2026-11-03
