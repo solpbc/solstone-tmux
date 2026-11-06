@@ -6,9 +6,11 @@ Format adapted from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [2.0.27] - 2026-11-05
+
 ### Fixed
 
-- after this computer wakes during a retry wait, solstone-tmux no longer sometimes waits up to five minutes before checking your journal again.
+- if this computer slept while solstone-tmux was waiting to retry, it could take up to five minutes after waking to check your journal again. this release resolves that.
 
 ## [2.0.26] - 2026-11-04
 
