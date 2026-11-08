@@ -48,7 +48,7 @@ on the new version.
 | `solstone-tmux run` | Run in the foreground; this is the default command |
 | `solstone-tmux setup` | Pair through one private network link on standard input; pairing is not finished until the journal's mark is confirmed |
 | `solstone-tmux confirm` | Confirm a paired journal's mark, or pass `--mark "word word"` when there is no terminal |
-| `solstone-tmux status` | Report service and sync health |
+| `solstone-tmux status` | Report service and sync health, the version the service is running, and any segment your journal turned away |
 | `solstone-tmux about` | Print your app and journal versions, with the operating system and architecture of each when known |
 | `solstone-tmux install-service` | Install and activate the user service, restarting it if it is running |
 | `solstone-tmux uninstall-service` | Remove the owned user service |

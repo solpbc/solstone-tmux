@@ -6,6 +6,11 @@ Format adapted from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- `solstone-tmux status` now shows the version the service is running. if you installed an update and the service is still on the old version, it says so and tells you to run `solstone-tmux install-service`.
+- when your journal turns away a segment, solstone-tmux now says why. `status` shows how many segments your journal has turned away, with its reason for the newest one, and the log notes each one when it happens. a segment your journal turns away no longer makes `status` read offline, or stops older segments from syncing behind it. it stays on this computer and is tried again later.
+
 ## [2.0.27] - 2026-11-05
 
 ### Fixed

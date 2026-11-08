@@ -11,7 +11,9 @@ use solstone_tmux::clock::{Clock, SystemClock};
 use solstone_tmux::command::TokioCommandRunner;
 use solstone_tmux::config::{RuntimeConfig, system_hostname};
 use solstone_tmux::foreground::SystemLookup;
-use solstone_tmux::health::{HealthWriter, StatusHealth, emit_diagnostic, read_status_health};
+use solstone_tmux::health::{
+    HealthWriter, RunningReport, StatusHealth, emit_diagnostic, read_status_report,
+};
 use solstone_tmux::indicator::{CommandIndicatorIo, ServerIndicator};
 use solstone_tmux::instance_lock::InstanceLock;
 use solstone_tmux::journal_version::{JournalVersionStatus, read_journal_version};
@@ -146,12 +148,15 @@ fn run() -> Result<i32, String> {
                         let held = config_root_opt.as_ref().is_some_and(|root| {
                             solstone_tmux::pairing_answer::is_status_held(root)
                         });
+                        let report = resolve_data_root(platform, &environment)
+                            .map(|data_root| read_status_report(&data_root, now_unix_seconds))
+                            .ok();
                         let (sync_health_str, print_held_lines) = if held {
                             ("held", true)
                         } else {
-                            let sync_health = resolve_data_root(platform, &environment)
-                                .map(|data_root| read_status_health(&data_root, now_unix_seconds))
-                                .unwrap_or(StatusHealth::Unknown);
+                            let sync_health = report
+                                .as_ref()
+                                .map_or(StatusHealth::Unknown, |report| report.health);
                             (sync_health.as_str(), false)
                         };
                         let journal_version = match (
@@ -163,8 +168,15 @@ fn run() -> Result<i32, String> {
                             }
                             _ => JournalVersionStatus::Unknown,
                         };
-                        let mut text =
-                            format!("service: {service_line}\nsync-health: {sync_health_str}\n");
+                        let running = report.and_then(|report| report.running);
+                        let mut text = format!("service: {service_line}\n");
+                        if let Some(running) = &running {
+                            text.push_str(&service_version_line(running));
+                        }
+                        text.push_str(&format!("sync-health: {sync_health_str}\n"));
+                        if let Some(line) = running.as_ref().and_then(turned_away_line) {
+                            text.push_str(&line);
+                        }
                         if print_held_lines {
                             text.push_str(solstone_tmux::pairing_answer::STATUS_HELD_PAIRING);
                             text.push('\n');
@@ -419,4 +431,33 @@ fn runtime() -> Result<tokio::runtime::Runtime, String> {
         .enable_time()
         .build()
         .map_err(|error| format!("could not start the async runtime: {error}"))
+}
+
+/// The version the service is running, which can trail the one installed until the
+/// service restarts.
+fn service_version_line(running: &RunningReport) -> String {
+    let installed = env!("CARGO_PKG_VERSION");
+    match running.app_version.as_deref() {
+        Some(version) if version == installed => format!("service-version: {version}\n"),
+        Some(version) => format!(
+            "service-version: {version}, but {installed} is installed. run `solstone-tmux install-service` to restart it on {installed}\n"
+        ),
+        None => format!(
+            "service-version: older than {installed}, which is installed. run `solstone-tmux install-service` to restart it on {installed}\n"
+        ),
+    }
+}
+
+/// Segments the journal turned away, kept here and tried again later.
+fn turned_away_line(running: &RunningReport) -> Option<String> {
+    let newest = running.held_newest.as_deref()?;
+    match running.held_segments {
+        0 => None,
+        1 => Some(format!(
+            "turned-away: 1 segment, {newest}. it stays on this computer and is tried again later\n"
+        )),
+        count => Some(format!(
+            "turned-away: {count} segments, the newest {newest}. they stay on this computer and are tried again later\n"
+        )),
+    }
 }

@@ -260,6 +260,44 @@ fn any_bridge_stop_turns_its_502_into_a_revocation() {
     );
 }
 
+#[test]
+fn a_refusal_of_one_upload_holds_that_segment_and_keeps_the_journals_reason() {
+    let map = |status: u16, reason: &str| {
+        map_bridge_error(classify_error_response(status, &rejection(reason)), None)
+    };
+    for (status, reason) in [
+        (400, "malformed_evidence_row"),
+        (400, "envelope_invalid"),
+        (409, "foreign_stream_binding"),
+        (400, "a_reason_this_build_has_never_seen"),
+    ] {
+        assert_eq!(
+            map(status, reason),
+            SyncOperationError::RetainCandidate {
+                diagnostic: DiagnosticCode::JournalRejected,
+                answer: format!("{status}:{reason}"),
+            },
+            "{reason}"
+        );
+    }
+    // A refusal about the device, or the journal failing on its own side, still ends the
+    // sweep: holding each segment back would only delay them all.
+    for (status, reason) in [
+        (400, "protocol_version_required"),
+        (400, "legacy_stream_field"),
+        (409, "journal_write_failed"),
+    ] {
+        assert_eq!(
+            map(status, reason),
+            SyncOperationError::EndSweepDiagnostic(
+                SyncFailureClass::Contract,
+                DiagnosticCode::JournalRejected
+            ),
+            "{reason}"
+        );
+    }
+}
+
 async fn start_session(credential: Credential, temporary: &TestDirectory) -> JournalSession {
     ensure_private_directory(temporary.path()).expect("private root");
     let lock = InstanceLock::acquire(temporary.path()).expect("acquire lock");

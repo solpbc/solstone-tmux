@@ -16,6 +16,7 @@ use solstone_tmux::clock::{Clock, TestClock};
 use solstone_tmux::config::DEFAULT_SOURCE;
 use solstone_tmux::health::{
     DiagnosticCode, HEALTH_FILENAME, HealthState, HealthWriter, StatusHealth, read_status_health,
+    read_status_report,
 };
 use solstone_tmux::instance_lock::InstanceLock;
 use solstone_tmux::journal::{
@@ -2175,6 +2176,78 @@ fn a_back_off_from_the_previous_journal_does_not_delay_the_next() {
             .await;
         assert_eq!(delivered.custodied, 1);
         assert!(!segment_path(&temporary, "20260701", "120000_300").exists());
+    });
+}
+
+#[test]
+fn a_segment_the_journal_turns_away_is_held_and_counted_while_the_link_stays_connected() {
+    paused(async {
+        let temporary = TestDirectory::new("turned-away-held");
+        create_segment(&temporary, "20260701", "120000_300", b"refused\n");
+        create_segment(&temporary, "20260701", "120500_300", b"accepted\n");
+        let test_clock = clock();
+        let lock = InstanceLock::acquire(temporary.path()).expect("instance lock");
+        let health = HealthWriter::new(temporary.path().to_path_buf(), &lock);
+        let (activity, _activity_receiver) = watch::channel(SyncActivity::Idle);
+        let mut scheduler =
+            scheduler_with_clock(&temporary, SyncWake::default(), Arc::clone(&test_clock))
+                .with_observability(activity, health);
+        let mut journal = FakeJournal::default();
+        journal.upload_outcome(
+            "120000_300",
+            Err(SyncOperationError::RetainCandidate {
+                diagnostic: DiagnosticCode::JournalRejected,
+                answer: "400:malformed_evidence_row".to_owned(),
+            }),
+        );
+
+        let summary = scheduler.run_sweep(&mut journal, no_shutdown()).await;
+        assert_eq!(summary.attempted, 2);
+        assert_eq!(summary.custodied, 1);
+        assert_eq!(summary.failure, None);
+        assert_eq!(summary.diagnostic, None);
+        assert!(segment_path(&temporary, "20260701", "120000_300").exists());
+
+        // A bare sweep leaves its last write mid-sync; either way the link reads up.
+        let report = read_status_report(temporary.path(), test_clock.wall_now().unix_timestamp());
+        assert!(
+            matches!(
+                report.health,
+                StatusHealth::Live(HealthState::Connected | HealthState::Syncing)
+            ),
+            "{:?}",
+            report.health
+        );
+        let running = report.running.expect("running report");
+        assert_eq!(running.held_segments, 1);
+        assert_eq!(
+            running.held_newest.as_deref(),
+            Some("20260701/host.tmux/120000_300 (400 malformed_evidence_row)")
+        );
+        assert_eq!(
+            running.app_version.as_deref(),
+            Some(env!("CARGO_PKG_VERSION"))
+        );
+
+        // While it waits out its hour it is still counted.
+        journal.clear_calls();
+        let waiting = scheduler.run_sweep(&mut journal, no_shutdown()).await;
+        assert_eq!(waiting.attempted, 0);
+        let running = read_status_report(temporary.path(), test_clock.wall_now().unix_timestamp())
+            .running
+            .expect("running report");
+        assert_eq!(running.held_segments, 1);
+
+        // Once the journal takes it, nothing is held.
+        advance_both(&test_clock, Duration::from_secs(3601)).await;
+        let mut journal = FakeJournal::default();
+        let delivered = scheduler.run_sweep(&mut journal, no_shutdown()).await;
+        assert_eq!(delivered.custodied, 1);
+        let running = read_status_report(temporary.path(), test_clock.wall_now().unix_timestamp())
+            .running
+            .expect("running report");
+        assert_eq!(running.held_segments, 0);
+        assert_eq!(running.held_newest, None);
     });
 }
 

@@ -1762,6 +1762,8 @@ impl SyncScheduler {
 
         let mut upload_due = Vec::new();
         let mut non_acked_count = 0usize;
+        // Segments kept back by an answer from this journal, and that answer.
+        let mut held: HashMap<SegmentCandidate, String> = HashMap::new();
 
         for candidate in &remaining_candidates {
             if shutdown_requested(&mut shutdown) {
@@ -1843,6 +1845,9 @@ impl SyncScheduler {
                         ..StateRecord::default()
                     };
                 }
+                if let Some(answer) = &state.answer {
+                    held.insert(candidate.clone(), answer.clone());
+                }
 
                 let disk_next_attempt = state.next_attempt_unix.map(|stored| {
                     let interval = state.next_attempt_interval_seconds.unwrap_or(3600) as i64;
@@ -1865,6 +1870,7 @@ impl SyncScheduler {
         }
 
         self.facts.pending_segments = u64::try_from(non_acked_count).unwrap_or(u64::MAX);
+        self.publish_held(&held);
         let mut made_requests = false;
         let mut activity = None;
 
@@ -1883,6 +1889,7 @@ impl SyncScheduler {
                         activity = Some(ActivityGuard::new(self.activity.as_ref()));
                     }
                     made_requests = true;
+                    held.remove(&candidate);
                     let upload = match cancellable(
                         &mut shutdown,
                         journal.upload(&candidate, files.clone(), &self.source, meta),
@@ -1900,10 +1907,28 @@ impl SyncScheduler {
                         Ok(Err(SyncOperationError::RetainCandidate { diagnostic, answer })) => {
                             summary.contacted = true;
                             self.backoff.successful_operation();
-                            summary.diagnostic = Some(diagnostic);
+                            // A refusal the journal sent about this one segment is contact,
+                            // so the link stays as it was: the segment is kept here,
+                            // counted in status, and tried again later. A fault found on
+                            // this side still shows as the sync health's error.
+                            let journal_answered =
+                                answer.starts_with(|first: char| first.is_ascii_digit());
+                            if !journal_answered {
+                                summary.diagnostic = Some(diagnostic);
+                            }
                             let new_answer = answer;
                             if state.answer.as_deref() == Some(&new_answer) {
                                 state.answer_count = state.answer_count.saturating_add(1);
+                            } else if journal_answered {
+                                crate::stderr_log::warn(format_args!(
+                                    "your journal turned away segment {}/{}/{} ({}); it is kept here and tried again in an hour",
+                                    candidate.day(),
+                                    candidate.stream(),
+                                    candidate.segment(),
+                                    new_answer.replacen(':', " ", 1),
+                                ));
+                                state.answer = Some(new_answer);
+                                state.answer_count = 1;
                             } else {
                                 state.answer = Some(new_answer);
                                 state.answer_count = 1;
@@ -1915,6 +1940,9 @@ impl SyncScheduler {
                             let ledger_root = self.ledger_root.clone();
                             let target = candidate.clone();
                             let state_clone = state.clone();
+                            if let Some(answer) = &state.answer {
+                                held.insert(candidate.clone(), answer.clone());
+                            }
                             let write_ok = tokio::task::spawn_blocking(move || {
                                 write_state_record(&ledger_root, &target, &state_clone)
                             })
@@ -2111,6 +2139,9 @@ impl SyncScheduler {
                             let ledger_root = self.ledger_root.clone();
                             let target = candidate.clone();
                             let state_clone = state.clone();
+                            if let Some(answer) = &state.answer {
+                                held.insert(candidate.clone(), answer.clone());
+                            }
                             let write_ok = tokio::task::spawn_blocking(move || {
                                 write_state_record(&ledger_root, &target, &state_clone)
                             })
@@ -2139,6 +2170,9 @@ impl SyncScheduler {
                             let ledger_root = self.ledger_root.clone();
                             let target = candidate.clone();
                             let state_clone = state.clone();
+                            if let Some(answer) = &state.answer {
+                                held.insert(candidate.clone(), answer.clone());
+                            }
                             let write_ok = tokio::task::spawn_blocking(move || {
                                 write_state_record(&ledger_root, &target, &state_clone)
                             })
@@ -2151,6 +2185,7 @@ impl SyncScheduler {
                         }
                     }
                 }
+                self.publish_held(&held);
                 self.write_health().await;
                 if batch_index + 1 != upload_due.chunks(CANDIDATES_PER_BATCH).len() {
                     self.yield_between_batches().await;
@@ -2239,6 +2274,33 @@ impl SyncScheduler {
         self.facts.sync_in_progress = false;
         self.write_health().await;
         summary
+    }
+
+    /// Publishes the segments the journal itself turned away. An answer that starts with
+    /// its HTTP status came from the journal; the rest are receipts this side couldn't read.
+    fn publish_held(&mut self, held: &HashMap<SegmentCandidate, String>) {
+        let refused = || {
+            held.iter()
+                .filter(|(_, answer)| answer.starts_with(|first: char| first.is_ascii_digit()))
+        };
+        self.facts.held_segments = u64::try_from(refused().count()).unwrap_or(u64::MAX);
+        self.facts.held_newest = refused()
+            .max_by(|(left, _), (right, _)| {
+                (left.day(), left.segment(), left.stream()).cmp(&(
+                    right.day(),
+                    right.segment(),
+                    right.stream(),
+                ))
+            })
+            .map(|(candidate, answer)| {
+                format!(
+                    "{}/{}/{} ({})",
+                    candidate.day(),
+                    candidate.stream(),
+                    candidate.segment(),
+                    answer.replacen(':', " ", 1)
+                )
+            });
     }
 
     fn update_facts(&mut self, summary: &SyncSweepSummary) {
@@ -2636,6 +2698,29 @@ async fn refresh_waiting_health(
     }
 }
 
+/// Refusals about this device rather than one upload: every segment would get the same
+/// answer, so they end the sweep instead of holding each segment back.
+const DEVICE_WIDE_REFUSALS: &[&str] = &[
+    "protocol_version_required",
+    "protocol_version_malformed",
+    "legacy_observer_field",
+    "legacy_stream_field",
+    "pairing_identity_unavailable",
+];
+
+/// The journal failing to write or read on its own side. The upload itself was fine, so
+/// these keep ending the sweep, and the ordinary backoff tries again soon.
+const JOURNAL_SIDE_FAILURES: &[&str] = &[
+    "segment_allocation_failed",
+    "journal_write_failed",
+    "event_append_failed",
+    "stream_advance_failed",
+    "stream_marker_bump_failed",
+    "location_lock_unavailable",
+    "notify_failed",
+    "journal_read_failed",
+];
+
 fn map_journal_error(error: JournalError) -> SyncOperationError {
     let diagnostic = error.diagnostic();
     match diagnostic {
@@ -2713,10 +2798,21 @@ fn map_journal_error(error: JournalError) -> SyncOperationError {
                 SyncFailureClass::Direct,
                 DiagnosticCode::JournalRejected,
             ),
-            _ => SyncOperationError::EndSweepDiagnostic(
-                SyncFailureClass::Contract,
-                DiagnosticCode::JournalRejected,
-            ),
+            _ => match (error.http_status(), error.reason()) {
+                (Some(status @ 400..=499), Some(reason))
+                    if !DEVICE_WIDE_REFUSALS.contains(&reason)
+                        && !JOURNAL_SIDE_FAILURES.contains(&reason) =>
+                {
+                    SyncOperationError::RetainCandidate {
+                        diagnostic: DiagnosticCode::JournalRejected,
+                        answer: format!("{status}:{reason}"),
+                    }
+                }
+                _ => SyncOperationError::EndSweepDiagnostic(
+                    SyncFailureClass::Contract,
+                    DiagnosticCode::JournalRejected,
+                ),
+            },
         },
         DiagnosticCode::JournalContractInvalid
         | DiagnosticCode::JournalResponseTooLarge

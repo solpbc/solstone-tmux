@@ -9,6 +9,7 @@ use std::os::unix::fs::symlink;
 use std::process::{Command, Stdio};
 
 use serde_json::Value;
+use solstone_tmux::health::read_status_report;
 use solstone_tmux::health::{
     CONNECTED_LEASE_SECONDS, DiagnosticCode, HEALTH_FILENAME, HealthState, HealthWriter,
     OFFLINE_AFTER_SECONDS, StatusHealth, SyncFacts, read_status_health,
@@ -384,6 +385,9 @@ fn production_failure_paths_redact_secrets_and_owner_content() {
                 "last_successful_sync_unix_seconds",
                 "recent_error_count",
                 "last_error_code",
+                "app_version",
+                "held_segments",
+                "held_newest",
             ]
             .len()
         );
@@ -551,6 +555,88 @@ fn offline_and_stale_journal_version_snapshot_reads_last_known() {
             JournalVersionStatus::LastKnown("2026.8.0".to_owned())
         );
     });
+}
+
+#[test]
+fn status_names_the_running_version_and_the_segments_the_journal_turned_away() {
+    runtime().block_on(async {
+        let temporary = TestDirectory::new("status-running-version");
+        let roots = IsolatedRoots::new(temporary.path());
+        let data_root = roots.data_root();
+        fs::create_dir_all(data_root.parent().expect("data parent")).expect("data parent");
+        ensure_private_directory(&data_root).expect("data root");
+        let lock = InstanceLock::acquire(&data_root).expect("instance lock");
+        let writer = HealthWriter::new(data_root.clone(), &lock);
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        let mut facts = SyncFacts {
+            paired: true,
+            ..SyncFacts::default()
+        };
+        facts.successful_contact(now);
+        facts.held_segments = 1;
+        facts.held_newest = Some("20261107/boron.tmux/112400_300 (400 malformed_evidence_row)".to_owned());
+        writer.write(&facts, now).await.expect("write health");
+        let installed = env!("CARGO_PKG_VERSION");
+
+        // A refused segment is the journal answering, so the link still reads connected.
+        let report = read_status_report(&data_root, now);
+        assert_eq!(report.health, StatusHealth::Live(HealthState::Connected));
+        let status = run_status(&roots);
+        assert!(
+            status.contains(&format!("service-version: {installed}\n")),
+            "{status}"
+        );
+        assert!(status.contains("sync-health: connected\n"), "{status}");
+        assert!(
+            status.contains(
+                "turned-away: 1 segment, 20261107/boron.tmux/112400_300 (400 malformed_evidence_row)."
+            ),
+            "{status}"
+        );
+
+        let path = data_root.join(HEALTH_FILENAME);
+        let mut snapshot: Value =
+            serde_json::from_slice(&fs::read(&path).expect("snapshot")).expect("snapshot JSON");
+        snapshot["app_version"] = Value::from("2.0.24");
+        fs::write(&path, serde_json::to_vec(&snapshot).unwrap()).expect("older run");
+        let status = run_status(&roots);
+        assert!(
+            status.contains(&format!(
+                "service-version: 2.0.24, but {installed} is installed."
+            )),
+            "{status}"
+        );
+
+        // A release from before the running version was reported writes no field at all.
+        let object = snapshot.as_object_mut().expect("snapshot object");
+        object.remove("app_version");
+        object.remove("held_segments");
+        object.remove("held_newest");
+        fs::write(&path, serde_json::to_vec(&snapshot).unwrap()).expect("pre-version run");
+        let status = run_status(&roots);
+        assert!(
+            status.contains(&format!(
+                "service-version: older than {installed}, which is installed."
+            )),
+            "{status}"
+        );
+        assert!(status.contains("sync-health: connected\n"), "{status}");
+        assert!(!status.contains("turned-away"), "{status}");
+
+        drop(lock);
+        let status = run_status(&roots);
+        assert!(!status.contains("service-version"), "{status}");
+    });
+}
+
+fn run_status(roots: &IsolatedRoots) -> String {
+    let output = Command::new(env!("CARGO_BIN_EXE_solstone-tmux"))
+        .arg("status")
+        .env_clear()
+        .envs(roots.entries().iter().cloned())
+        .output()
+        .expect("run status");
+    String::from_utf8(output.stdout).expect("status stdout")
 }
 
 fn runtime() -> tokio::runtime::Runtime {

@@ -164,6 +164,11 @@ pub struct SyncFacts {
     /// When the current attempt to reach the journal began: start, or a wake. Offline
     /// counts from the later of this and the journal's last answer.
     pub episode_started_unix_seconds: Option<i64>,
+    /// Segments kept here because the journal turned each one away with an answer. A refusal is the
+    /// journal answering, so these never decide the connection state.
+    pub held_segments: u64,
+    /// The newest held segment and the journal's answer, as `day/segment status:reason`.
+    pub held_newest: Option<String>,
 }
 
 impl SyncFacts {
@@ -275,6 +280,14 @@ struct HealthSnapshot {
     last_successful_sync_unix_seconds: Option<i64>,
     recent_error_count: u32,
     last_error_code: Option<DiagnosticCode>,
+    /// The version of the running process. A snapshot without it was written by a
+    /// release older than the one that added it.
+    #[serde(default)]
+    app_version: Option<String>,
+    #[serde(default)]
+    held_segments: u64,
+    #[serde(default)]
+    held_newest: Option<String>,
 }
 
 #[derive(Clone)]
@@ -309,6 +322,9 @@ impl HealthWriter {
             last_successful_sync_unix_seconds: facts.last_successful_sync_unix_seconds,
             recent_error_count: facts.recent_error_count,
             last_error_code: facts.last_error_code,
+            app_version: Some(env!("CARGO_PKG_VERSION").to_owned()),
+            held_segments: facts.held_segments,
+            held_newest: facts.held_newest.clone(),
         };
         let bytes = serde_json::to_vec(&snapshot).map_err(|_| DiagnosticCode::HealthSnapshotIo)?;
         let parent = self.data_root.clone();
@@ -338,30 +354,62 @@ impl StatusHealth {
 }
 
 pub fn read_status_health(data_root: &Path, now_unix_seconds: i64) -> StatusHealth {
+    read_status_report(data_root, now_unix_seconds).health
+}
+
+/// What the running process says about itself, beyond its health state.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RunningReport {
+    /// The running version, or `None` when it predates reporting one.
+    pub app_version: Option<String>,
+    pub held_segments: u64,
+    pub held_newest: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StatusReport {
+    pub health: StatusHealth,
+    /// Present only when the health is live: a stale snapshot says nothing about
+    /// what is running now.
+    pub running: Option<RunningReport>,
+}
+
+pub fn read_status_report(data_root: &Path, now_unix_seconds: i64) -> StatusReport {
+    let only = |health| StatusReport {
+        health,
+        running: None,
+    };
     match fs::symlink_metadata(data_root) {
         Ok(metadata) if !metadata.file_type().is_symlink() && metadata.is_dir() => {}
-        _ => return StatusHealth::Unknown,
+        _ => return only(StatusHealth::Unknown),
     }
     let snapshot = match read_snapshot(data_root) {
         Some(snapshot) => snapshot,
-        None => return StatusHealth::Unknown,
+        None => return only(StatusHealth::Unknown),
     };
     if !valid_snapshot(&snapshot) {
-        return StatusHealth::Unknown;
+        return only(StatusHealth::Unknown);
     }
     let identity = match inspect_existing(data_root) {
         ExistingLock::Locked(identity) => identity,
-        ExistingLock::Unlocked(_) => return StatusHealth::Stale,
-        ExistingLock::MissingOrInvalid => return StatusHealth::Unknown,
+        ExistingLock::Unlocked(_) => return only(StatusHealth::Stale),
+        ExistingLock::MissingOrInvalid => return only(StatusHealth::Unknown),
     };
     if snapshot.run_id != identity.run_id
         || snapshot.lock_inode != identity.lock_inode
         || snapshot.updated_at_unix_seconds > now_unix_seconds + HEALTH_FUTURE_TOLERANCE_SECONDS
         || now_unix_seconds.saturating_sub(snapshot.updated_at_unix_seconds) > HEALTH_STALE_SECONDS
     {
-        return StatusHealth::Stale;
+        return only(StatusHealth::Stale);
     }
-    StatusHealth::Live(state_now(&snapshot, now_unix_seconds))
+    StatusReport {
+        health: StatusHealth::Live(state_now(&snapshot, now_unix_seconds)),
+        running: Some(RunningReport {
+            app_version: snapshot.app_version,
+            held_segments: snapshot.held_segments,
+            held_newest: snapshot.held_newest,
+        }),
+    }
 }
 
 fn read_snapshot(data_root: &Path) -> Option<HealthSnapshot> {
@@ -372,6 +420,18 @@ fn read_snapshot(data_root: &Path) -> Option<HealthSnapshot> {
 }
 
 fn valid_snapshot(snapshot: &HealthSnapshot) -> bool {
+    let short_text = |text: &Option<String>| {
+        text.as_ref().is_none_or(|text| {
+            !text.is_empty()
+                && text.len() <= 160
+                && text
+                    .bytes()
+                    .all(|byte| byte.is_ascii_graphic() || byte == b' ')
+        })
+    };
+    if !short_text(&snapshot.app_version) || !short_text(&snapshot.held_newest) {
+        return false;
+    }
     if snapshot.schema_version != HEALTH_SCHEMA_VERSION
         || snapshot.run_id.len() != 32
         || !snapshot

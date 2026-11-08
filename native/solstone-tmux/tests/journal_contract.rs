@@ -114,6 +114,7 @@ fn unrecognized_source_reason_code_is_a_generic_journal_rejection() {
             .expect_err("source rejection accepted");
         assert_eq!(error.diagnostic(), DiagnosticCode::JournalRejected);
         assert_eq!(error.reason_code(), None);
+        assert_eq!(error.reason(), Some("source_too_long"));
         session.shutdown().await.expect("shutdown session");
         peer.shutdown().await;
     });

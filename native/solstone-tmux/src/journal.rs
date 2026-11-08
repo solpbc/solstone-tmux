@@ -120,11 +120,46 @@ impl JournalReasonCode {
     }
 }
 
+/// The journal's own word for why it refused a request, kept as sent so it can be shown
+/// even when this build doesn't know it. Only a short `[a-z0-9_]` token is kept.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ReasonText {
+    bytes: [u8; REASON_TEXT_MAX],
+    len: u8,
+}
+
+const REASON_TEXT_MAX: usize = 64;
+
+impl ReasonText {
+    pub fn parse(value: &str) -> Option<Self> {
+        let raw = value.as_bytes();
+        if raw.is_empty()
+            || raw.len() > REASON_TEXT_MAX
+            || !raw
+                .iter()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'_')
+        {
+            return None;
+        }
+        let mut bytes = [0; REASON_TEXT_MAX];
+        bytes[..raw.len()].copy_from_slice(raw);
+        Some(Self {
+            bytes,
+            len: raw.len() as u8,
+        })
+    }
+
+    pub fn as_str(&self) -> &str {
+        std::str::from_utf8(&self.bytes[..usize::from(self.len)]).unwrap_or_default()
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct JournalError {
     diagnostic: DiagnosticCode,
     status_class: Option<JournalStatusClass>,
     reason_code: Option<JournalReasonCode>,
+    reason: Option<ReasonText>,
     http_status: Option<u16>,
 }
 
@@ -145,11 +180,17 @@ impl JournalError {
         self.http_status
     }
 
+    /// The reason the journal gave, recognized or not.
+    pub fn reason(&self) -> Option<&str> {
+        self.reason.as_ref().map(ReasonText::as_str)
+    }
+
     fn local(diagnostic: DiagnosticCode) -> Self {
         Self {
             diagnostic,
             status_class: None,
             reason_code: None,
+            reason: None,
             http_status: None,
         }
     }
@@ -909,9 +950,12 @@ pub fn classify_error_response(status: u16, body: &[u8]) -> JournalError {
         500..=599 => JournalStatusClass::Server,
         _ => JournalStatusClass::Unexpected,
     };
-    let reason_code = serde_json::from_slice::<ErrorResponse>(body)
+    let reason = serde_json::from_slice::<ErrorResponse>(body)
         .ok()
-        .and_then(|response| JournalReasonCode::parse(&response.reason_code));
+        .and_then(|response| ReasonText::parse(&response.reason_code));
+    let reason_code = reason
+        .as_ref()
+        .and_then(|reason| JournalReasonCode::parse(reason.as_str()));
     // A server error with no recognized reason is the journal or the bridge failing to answer
     // (including the bridge's own 502), not the journal refusing this device.
     let diagnostic = if reason_code.is_none() && status_class == JournalStatusClass::Server {
@@ -923,6 +967,7 @@ pub fn classify_error_response(status: u16, body: &[u8]) -> JournalError {
         diagnostic,
         status_class: Some(status_class),
         reason_code,
+        reason,
         http_status: Some(status),
     }
 }

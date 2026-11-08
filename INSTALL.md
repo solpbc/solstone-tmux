@@ -190,6 +190,8 @@ solstone-tmux status
 Installing a new release replaces the program on disk but leaves the running
 service on the old version. `install-service` restarts the service, so it runs
 the new version.
+`status` shows the version the service is running on its `service-version`
+line, and says when that differs from the version installed.
 
 ## Status indicator
 
