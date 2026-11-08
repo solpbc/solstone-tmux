@@ -6,6 +6,8 @@ Format adapted from [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [2.0.28] - 2026-11-07
+
 ### Fixed
 
 - `solstone-tmux status` now shows the version the service is running. if you installed an update and the service is still on the old version, it says so and tells you to run `solstone-tmux install-service`.
