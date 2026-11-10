@@ -27,6 +27,7 @@ pub mod relay_access;
 pub mod segment;
 pub mod serialize;
 pub mod service;
+pub mod source_intake;
 pub mod stderr_log;
 pub mod storage;
 pub mod support;

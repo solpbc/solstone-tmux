@@ -314,6 +314,7 @@ impl SegmentLifecycle for SegmentManager {
                 .segment
                 .finalize(monotonic_now)
                 .map_err(operation_error)?;
+            crate::source_intake::record_close(&self.data_root, &close);
             self.sync_wake.segment_closed(&close);
             self.segment = open_segment(
                 &self.data_root,
@@ -366,6 +367,7 @@ impl SegmentLifecycle for SegmentManager {
             .segment
             .finalize(monotonic_now)
             .map_err(operation_error)?;
+        crate::source_intake::record_close(&self.data_root, &close);
         Ok(close)
     }
 }

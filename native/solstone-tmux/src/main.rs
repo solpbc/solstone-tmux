@@ -302,9 +302,11 @@ fn run_native(
         .with_output_sessions(config.output_sessions.clone()),
     );
 
+    solstone_tmux::source_intake::ensure(&data_root);
     for record in recover_capture_streams(&instance_lock, &data_root, config.segment_interval)
         .map_err(|error| error.to_string())?
     {
+        solstone_tmux::source_intake::record_recovery(&data_root, record.action, &record.candidate);
         if matches!(
             record.action,
             RecoveryAction::Retain | RecoveryAction::Quarantine | RecoveryAction::Failed
