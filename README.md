@@ -1,5 +1,13 @@
 # solstone-tmux
 
+> **solstone-tmux is archived.** Terminal is now part of the solstone app for
+> mac and for linux, and it updates with the app. To move over, add or update
+> the solstone app and turn on terminal: it asks first, then moves solstone for
+> tmux in. [solstone.app/install](https://solstone.app/install) has the steps
+> for each computer. Published releases stay available. New issues and requests
+> go to [solstone-macos](https://github.com/solpbc/solstone-macos) or
+> [solstone-linux](https://github.com/solpbc/solstone-linux).
+
 solstone-tmux adds your terminal to [solstone](https://solpbc.org). It takes in
 what you share from your tmux sessions, and all of it goes into your journal.
 While your journal is unavailable, what it takes in waits on this device and
